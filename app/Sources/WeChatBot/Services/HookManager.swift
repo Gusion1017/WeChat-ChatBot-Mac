@@ -114,11 +114,11 @@ struct WeChatInstallation: Sendable {
 
 /// 支持 R3 原生发送（App 运行期配置）的微信版本。
 ///
-/// 4.1.15.55 (270135) 与 4.2.0.x（4.2.0.5 / 270341、4.2.0.9 / 270345）共用同一 R3 发送链路；
+/// 4.1.15.55 (270135) 与 4.2.0.x（4.2.0.5 / 270341、4.2.0.9 / 270345、4.2.0.12 / 270348）共用同一 R3 发送链路；
 /// 4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
 enum NativeSendVersionSupport {
-    static let versions: Set<String> = ["4.1.15.55", "4.2.0.5", "4.2.0.9"]
-    static let builds: Set<String> = ["270135", "270341", "270345"]
+    static let versions: Set<String> = ["4.1.15.55", "4.2.0.5", "4.2.0.9", "4.2.0.12"]
+    static let builds: Set<String> = ["270135", "270341", "270345", "270348"]
 
     static func supports(version: String, build: String) -> Bool {
         versions.contains(version) || builds.contains(build)

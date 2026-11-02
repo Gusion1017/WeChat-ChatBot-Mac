@@ -6,6 +6,25 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-11-03
+
+### 新增
+
+- **微信 4.2.0.12 (270348) 适配（2026-11-02）**：新增 `hook/versions/4_2_0_12_mac.json`；
+  版本门禁、安装/管理脚本默认目标与已知版本对、R3 版本列表、`scripts/run_bridge.sh`
+  默认版本文件同步更新；历史 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) /
+  4.1.12.53 (269365) 继续可安装。arm64 偏移按 4.2.0.9 → 4.2.0.12 的差异重新定位（目标函数与
+  4.2.0.9 字节级同构，虚表/全局/服务 scope 按 chained fixups 与代码交叉引用定位），
+  R3 task/voice 布局、消息结构与发送模式沿用 `v4_1_15`。静态校验：Go 模板渲染通过、
+  渲染后 JS 通过 `node --check`、版本 JSON 通过 `scripts/check.sh --docs`，
+  Swift 525 项与 Go bridge 测试通过。
+  **真机验证（2026-11-02，4.2.0.12 / 270348）**：`manage_wechat.sh install` 创建 4.2.0.12 官方备份
+  （673MB）后注入 Gadget + ad-hoc 重签（保留 sandbox entitlements），微信正常启动且 gadget 27042 监听；
+  hook 基址解析（wechat.dylib）、Message finalizer、classA/service vptr、slot13 hook 均按新版地址表命中；
+  通讯录解密读取 29 联系人 / 1 群；入站私聊/群聊文本、图片、语音、appmsg 与拍一拍事件正常；
+  手动发送捕获 R3 文本句柄后，`/send_private_msg` 发送到文件传输助手 slot13 返回 0、worker result=1。
+  语音发送（voice seed 未捕获）与图片获取下载未复测；群聊 @ 未单独复测。
+
 ## [2.0.2] — 2026-10-30
 
 ### 移除
@@ -849,7 +868,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v2.1.0...HEAD
 [1.3.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.3.0
 [1.4.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.4.0
 [1.5.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.0
@@ -863,6 +882,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 [2.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.0
 [2.0.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.1
 [2.0.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.2
+[2.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.0
 [1.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.0.0
 [1.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.1.0
 [1.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.0

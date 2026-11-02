@@ -700,7 +700,7 @@ struct SettingsView: View {
                     SettingsDivider()
                     SettingsRow(
                         title: "R3 原生发送",
-                        subtitle: "微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 专用原生文本发送。首次使用前需在本机微信手动发一条消息以捕获发送句柄；排队消息会在拿到句柄后自动重发。",
+                        subtitle: "微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 专用原生文本发送。首次使用前需在本机微信手动发一条消息以捕获发送句柄；排队消息会在拿到句柄后自动重发。",
                         symbol: "paperplane",
                         tint: .secondary
                     ) {

@@ -61,7 +61,7 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
   > 4.2.0.5 已真机打通语音**下载/转写与发送**；出站使用官方 SILK SDK 的 24k WeChat 兼容编码。
   > 首次启用/微信重启后需手动发一条文字 + 一条语音捕获句柄，bridge 重启自动恢复；
   > 首次开启语音回复或 bridge 启动检测到句柄缺失时会自动弹出捕获引导。详见 [`docs/voice.md`](docs/voice.md)。
-- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 R3 原生文本发送**（设置内开关，无句柄时自动排队）；**通讯录真实昵称 / 群名**（本机只读）
+- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 原生文本发送**（设置内开关，无句柄时自动排队）；**通讯录真实昵称 / 群名**（本机只读）
 - **机器人页 7 个子栏目**：常规 / 触发 / 互动 / 名单 / 节奏 / 定时 / 语音（定时任务从侧边栏移入），工具栏下方 sticky 分栏条，
   切换回填顶部、按窗口记忆上次子栏目
 - **首启向导环境检查**：显示 Xcode Command Line Tools 状态，可一键「安装 Command Line Tools」
@@ -72,15 +72,16 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
 
 | 模块 | 状态 |
 | --- | --- |
-| SwiftUI App / Swift 核心 | ✅ 525 项测试（2 项按环境跳过：真实 CosyVoice3 服务 E2E）；4.1.15.55 / 4.2.0.5 文本真机 E2E |
+| SwiftUI App / Swift 核心 | ✅ 525 项测试（2 项按环境跳过：真实 CosyVoice3 服务 E2E）；4.1.15.55 / 4.2.0.5 / 4.2.0.12 文本真机 E2E |
 | OneBot bridge（Go） | ✅ 构建 / 鉴权 / 真机附加 / 64 顶层 · 76 子测试通过 |
 | 首启向导 / 安装 | ✅ CLT 检测与安装引导、微信版本 / Hook 预检、备份约 665MB（磁盘需 ≥2.5GB） |
 | 微信 4.1.12.53 | ✅ legacy 收发 + 主动发送 |
 | 微信 4.1.15.55 | ✅ Message finalizer 接收 + R3 文本发送（首次需在本机微信手动发一条消息捕获句柄） |
 | 微信 4.2.0.5 | ✅ 真机验证（2026-10-22/23）：私聊/自消息入站、通讯录、R3 文本发送（含 bridge 重启句柄恢复）、**图片获取**（自然分片优先/按需触发 + 解密，HEVC 走缩略图）；群聊 @ / 拍一拍沿用既有逻辑未单独复测 |
 | 微信 4.2.0.9 | ✅ 适配并完成文本真机验证（2026-10-27）：新增 `hook/versions/4_2_0_9_mac.json`、版本门禁与脚本默认目标；Gadget 注入/重签、通讯录解密、入站事件、R3 文本发送均通过；语音发送与媒体/群聊 @ 未复测 |
+| 微信 4.2.0.12 | ✅ 适配并完成真机验证（2026-11-02）：新增 `hook/versions/4_2_0_12_mac.json`，版本门禁、安装/管理脚本默认目标、R3 版本列表与 `run_bridge.sh` 默认版本文件同步更新；Gadget 注入/重签（保留 sandbox）、gadget 27042、基址解析、Message finalizer、classA/service vptr、slot13、通讯录（29 联系人 / 1 群）、入站（私聊/群聊文本、图片、语音、appmsg、拍一拍）与 **R3 文本发送**（slot13 返回 0 / worker result=1）均通过；语音发送与图片获取下载未复测 |
 
-环境：Apple Silicon、macOS 26+；微信须为 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365)
+环境：Apple Silicon、macOS 26+；微信须为 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365)
 之一，默认位于 `/Applications/WeChat.app` 且当前用户可写；**安装 Hook 需 Xcode Command Line Tools**
 （`xcode-select --install`；完整 Xcode 亦可，不需要 Apple 开发者账号）；从源码构建另需 Xcode 27。
 
@@ -96,8 +97,8 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 ### 快速开始
 
-- **普通用户**：下载 [`WeChat-AI-2.0.2.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.0.2/WeChat-AI-2.0.2.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.0.2/WeChat-AI-2.0.2.zip.sha256)），
+- **普通用户**：下载 [`WeChat-AI-2.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip.sha256)），
   按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -121,7 +122,7 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
      未就绪时 Hook 安装按钮禁用）→ 检测微信（版本须精确匹配）→ 完全退出微信后备份并安装 Hook
      （备份约 665MB、1–2 分钟，磁盘预留 ≥2.5GB）→ 配置 AI → 启动。安装后需**手动打开并登录微信**；
      拒绝「App 数据」授权会导致图片/语音相关功能与 `image_path` 检测失败。
-  5. 首次发送（4.1.15.55 / 4.2.0.5 / 4.2.0.9 的 R3 原生发送）：在本机微信手动发一条消息捕获发送句柄
+  5. 首次发送（4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 的 R3 原生发送）：在本机微信手动发一条消息捕获发送句柄
      （语音还需发一条语音），否则回复会排队。完整步骤与还原方式见 [`docs/install.md`](docs/install.md)。
 
 - **从源码构建**（需 Xcode 27）：
@@ -149,7 +150,7 @@ bash tools/manage_wechat.sh restore   # 还原官方 App
 `install` 前需完全退出微信（含菜单栏图标），并确保已安装 Xcode Command Line Tools
 （提供 `/usr/bin/python3` 与 `/usr/bin/otool`）。安装会先完整备份（约 665MB，磁盘预留 ≥2.5GB），
 App 内可在 设置 → Hook → 还原官方微信 一键还原（还原前先退出微信）。
-当前脚本默认目标是微信 4.2.0.9 (270345)；历史 4.2.0.5 (270341) / 4.1.15.55 / 4.1.12.53 仍在已知支持列表，
+当前脚本默认目标是微信 4.2.0.12 (270348)；历史 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 / 4.1.12.53 仍在已知支持列表，
 可直接安装（版本文件保留），其他版本可用 `WECHAT_SUPPORTED_VERSION` / `WECHAT_SUPPORTED_BUILD` 覆盖。
 修改会破坏微信官方签名，微信升级后可能失效；存在账号风控风险。
 
@@ -179,9 +180,9 @@ bash scripts/package_release.sh     # Releases 用 zip + sha256
 make release                        # 同上：构建 → 打包 → 签名校验 → sha256
 ```
 
-发布产物为 `dist/WeChat-AI-2.0.2.zip`（约 65MB）与 `.sha256`。打包脚本会自动
+发布产物为 `dist/WeChat-AI-2.1.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
 `codesign --verify --strict`；`spctl -a -vv` 对 ad-hoc 未公证包预期返回 `rejected`（属正常），
-分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-2.0.2.zip.sha256` 校验。
+分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-2.1.0.zip.sha256` 校验。
 
 改了 `hook/script.js` 记得跑 `bash scripts/sync_hook_script.sh`。接口 / 行为变更先改 `docs/` 再改代码。
 GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、副本一致、无构建产物）。
@@ -277,7 +278,7 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
   default (toggleable in voice settings).
   > Voice download/transcription and sending are verified on WeChat 4.2.0.5. Outbound uses the official SILK SDK
   > with WeChat-compatible 24k encoding. Handle capture is documented in [`docs/voice.md`](docs/voice.md).
-- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 R3 native text sending** (toggle in Settings, auto-queues without a send handle);
+- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 native text sending** (toggle in Settings, auto-queues without a send handle);
   **real contact nicknames / group names** (local, read-only)
 - **Seven bot sub-tabs**: General / Triggers / Interaction / Lists / Pacing / Schedules / Voice
   (scheduled tasks moved here from the sidebar), with a sticky tab bar, scroll-to-top on switch
@@ -291,15 +292,16 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
 
 | Component | Status |
 | --- | --- |
-| SwiftUI app / Swift core | ✅ 525 tests (2 environment-gated skips: live CosyVoice3 service E2E); text E2E on 4.1.15.55 / 4.2.0.5 |
+| SwiftUI app / Swift core | ✅ 525 tests (2 environment-gated skips: live CosyVoice3 service E2E); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.12 |
 | OneBot bridge (Go) | ✅ builds / auth / device attach / 64 top-level · 76 subtest cases passing |
 | First-run wizard / install | ✅ CLT detection and install guidance, WeChat version / hook preflight, ~665MB backup (needs ≥2.5GB disk) |
 | WeChat 4.1.12.53 | ✅ legacy send + receive |
 | WeChat 4.1.15.55 | ✅ Message-finalizer receive + R3 text sending (send one message in WeChat once to capture the handle) |
 | WeChat 4.2.0.5 | ✅ Real-device verified (2026-10-22/23): private-chat/self-message receive, contact directory, R3 text sending incl. bridge-restart handle recovery, **image fetch** (natural chunks first / on-demand trigger + decryption, thumbnail fallback for HEVC); group @ / pat-pat reuse existing logic and were not separately retested |
 | WeChat 4.2.0.9 | ✅ Adapted and text-verified (2026-10-27): new `hook/versions/4_2_0_9_mac.json`, version gates and script defaults updated; Gadget injection/re-sign, contact decryption, inbound events and R3 text sending passed; voice sending, media and group @ were not retested |
+| WeChat 4.2.0.12 | ✅ Adapted and real-device verified (2026-11-02): new `hook/versions/4_2_0_12_mac.json`; version gates, install/manage script defaults, R3 version list and the `run_bridge.sh` default config updated. Gadget injection/re-sign (sandbox entitlements kept), gadget 27042, base resolution, Message finalizer, classA/service vptr, slot13, contact directory (29 contacts / 1 group), inbound events (private/group text, images, voice, appmsg, pat-pat) and **R3 text sending** (slot13 returned 0 / worker result=1) all passed; voice sending and image-fetch download were not retested |
 
-Requirements: Apple Silicon, macOS 26+; WeChat must be exactly 4.2.0.9 (270345), 4.2.0.5 (270341),
+Requirements: Apple Silicon, macOS 26+; WeChat must be exactly 4.2.0.12 (270348), 4.2.0.9 (270345), 4.2.0.5 (270341),
 4.1.15.55 (270135) or 4.1.12.53 (269365), installed at `/Applications/WeChat.app` (default) and writable by the current
 user; **hook installation requires Xcode Command Line Tools** (`xcode-select --install`; full Xcode
 also works, no Apple Developer account needed). Building from source additionally needs Xcode 27.
@@ -318,8 +320,8 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-2.0.2.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.0.2/WeChat-AI-2.0.2.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.0.2/WeChat-AI-2.0.2.zip.sha256))
+  [`WeChat-AI-2.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip.sha256))
   and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
@@ -346,7 +348,7 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
      required) → fully quit WeChat, then back up and install the hook (~665MB backup, 1–2 minutes,
      reserve ≥2.5GB disk) → configure AI → start. Afterwards **open and log in to WeChat manually**;
      denying the "App Data" permission breaks image/voice features and `image_path` detection.
-  5. First send (R3 native sending on 4.1.15.55 / 4.2.0.5 / 4.2.0.9): manually send one message in WeChat to
+  5. First send (R3 native sending on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12): manually send one message in WeChat to
      capture the send handle (send a voice message too for voice replies), otherwise replies queue.
      Full steps and restore instructions are in [`docs/install.md`](docs/install.md).
 
@@ -377,7 +379,7 @@ Line Tools are installed (`/usr/bin/python3` and `/usr/bin/otool`). The installe
 app first (~665MB; reserve ≥2.5GB disk), and the app offers one-click restore under
 Settings → Hook → Restore Official WeChat (quit WeChat first). Patching breaks WeChat's official
 signature and may stop working after a WeChat update; unofficial clients also carry account risk.
-The scripts target WeChat 4.2.0.9 (270345) by default; the historical 4.2.0.5 / 4.1.15.55 / 4.1.12.53
+The scripts target WeChat 4.2.0.12 (270348) by default; the historical 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53
 remain in the known-supported list and install directly (their version files are kept); use
 `WECHAT_SUPPORTED_VERSION` / `WECHAT_SUPPORTED_BUILD` to override for other builds.
 
@@ -407,10 +409,10 @@ bash scripts/package_release.sh     # release zip + sha256
 make release                        # same: build → package → signature check → sha256
 ```
 
-The release artifacts are `dist/WeChat-AI-2.0.2.zip` (~65MB) and `.sha256`. Packaging runs
+The release artifacts are `dist/WeChat-AI-2.1.0.zip` (~65MB) and `.sha256`. Packaging runs
 `codesign --verify --strict`; `spctl -a -vv` reports `rejected` for an ad-hoc, non-notarized bundle
 (that is expected). Verify before publishing with
-`cd dist && shasum -a 256 -c WeChat-AI-2.0.2.zip.sha256`.
+`cd dist && shasum -a 256 -c WeChat-AI-2.1.0.zip.sha256`.
 
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`. Change `docs/` before code
 for interface or behaviour changes. GitHub Actions only runs Linux-friendly checks (docs links,
