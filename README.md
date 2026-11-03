@@ -72,10 +72,10 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
 
 | 模块 | 状态 |
 | --- | --- |
-| SwiftUI App / Swift 核心 | ✅ 525 项测试（2 项按环境跳过：真实 CosyVoice3 服务 E2E）；4.1.15.55 / 4.2.0.5 / 4.2.0.12 文本真机 E2E |
-| OneBot bridge（Go） | ✅ 构建 / 鉴权 / 真机附加 / 64 顶层 · 76 子测试通过 |
+| SwiftUI App / Swift 核心 | ✅ 525 项测试（2 项按环境跳过：真实 CosyVoice3 服务 E2E）；4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 文本真机 E2E |
+| OneBot bridge（Go） | ✅ 构建 / 鉴权 / 真机附加 / 8 个 `_test.go` · 63 顶层 + 97 子测试通过 |
 | 首启向导 / 安装 | ✅ CLT 检测与安装引导、微信版本 / Hook 预检、备份约 665MB（磁盘需 ≥2.5GB） |
-| 微信 4.1.12.53 | ✅ legacy 收发 + 主动发送 |
+| 微信 4.1.12.53 | ✅ legacy 收发 + 出站发送 |
 | 微信 4.1.15.55 | ✅ Message finalizer 接收 + R3 文本发送（首次需在本机微信手动发一条消息捕获句柄） |
 | 微信 4.2.0.5 | ✅ 真机验证（2026-10-22/23）：私聊/自消息入站、通讯录、R3 文本发送（含 bridge 重启句柄恢复）、**图片获取**（自然分片优先/按需触发 + 解密，HEVC 走缩略图）；群聊 @ / 拍一拍沿用既有逻辑未单独复测 |
 | 微信 4.2.0.9 | ✅ 适配并完成文本真机验证（2026-10-27）：新增 `hook/versions/4_2_0_9_mac.json`、版本门禁与脚本默认目标；Gadget 注入/重签、通讯录解密、入站事件、R3 文本发送均通过；语音发送与媒体/群聊 @ 未复测 |
@@ -97,8 +97,8 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 ### 快速开始
 
-- **普通用户**：下载 [`WeChat-AI-2.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip.sha256)），
+- **普通用户**：下载 [`WeChat-AI-2.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip.sha256)），
   按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -180,9 +180,9 @@ bash scripts/package_release.sh     # Releases 用 zip + sha256
 make release                        # 同上：构建 → 打包 → 签名校验 → sha256
 ```
 
-发布产物为 `dist/WeChat-AI-2.1.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
+发布产物为 `dist/WeChat-AI-2.1.1.zip`（约 65MB）与 `.sha256`。打包脚本会自动
 `codesign --verify --strict`；`spctl -a -vv` 对 ad-hoc 未公证包预期返回 `rejected`（属正常），
-分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-2.1.0.zip.sha256` 校验。
+分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-2.1.1.zip.sha256` 校验。
 
 改了 `hook/script.js` 记得跑 `bash scripts/sync_hook_script.sh`。接口 / 行为变更先改 `docs/` 再改代码。
 GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、副本一致、无构建产物）。
@@ -202,7 +202,7 @@ GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、�
   详见 [`docs/voice.md`](docs/voice.md)。
 - **权限**：首次读取微信容器会触发「App 数据」授权，拒绝则图片/语音相关功能与 `image_path` 检测失败；
   修改微信 bundle 可能需要「App 管理」授权。App 不请求麦克风 / 语音识别 / 自动化权限。
-- **微信与安装位置**：Hook 只支持 3 个精确版本，默认 `/Applications/WeChat.app`，当前用户需可写；
+- **微信与安装位置**：Hook 只支持 5 个精确版本，默认 `/Applications/WeChat.app`，当前用户需可写；
   App Store 版微信的路径/签名不同，可能不适用。
 - **备份与还原**：安装前会完整备份（约 665MB，磁盘预留 ≥2.5GB）；可在 设置 → Hook → 还原官方微信
   （还原前先完全退出微信）。
@@ -292,8 +292,8 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
 
 | Component | Status |
 | --- | --- |
-| SwiftUI app / Swift core | ✅ 525 tests (2 environment-gated skips: live CosyVoice3 service E2E); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.12 |
-| OneBot bridge (Go) | ✅ builds / auth / device attach / 64 top-level · 76 subtest cases passing |
+| SwiftUI app / Swift core | ✅ 525 tests (2 environment-gated skips: live CosyVoice3 service E2E); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 |
+| OneBot bridge (Go) | ✅ builds / auth / device attach / 8 `_test.go` files · 63 top-level + 97 subtests passing |
 | First-run wizard / install | ✅ CLT detection and install guidance, WeChat version / hook preflight, ~665MB backup (needs ≥2.5GB disk) |
 | WeChat 4.1.12.53 | ✅ legacy send + receive |
 | WeChat 4.1.15.55 | ✅ Message-finalizer receive + R3 text sending (send one message in WeChat once to capture the handle) |
@@ -320,8 +320,8 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-2.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.0/WeChat-AI-2.1.0.zip.sha256))
+  [`WeChat-AI-2.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip.sha256))
   and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
@@ -409,10 +409,10 @@ bash scripts/package_release.sh     # release zip + sha256
 make release                        # same: build → package → signature check → sha256
 ```
 
-The release artifacts are `dist/WeChat-AI-2.1.0.zip` (~65MB) and `.sha256`. Packaging runs
+The release artifacts are `dist/WeChat-AI-2.1.1.zip` (~65MB) and `.sha256`. Packaging runs
 `codesign --verify --strict`; `spctl -a -vv` reports `rejected` for an ad-hoc, non-notarized bundle
 (that is expected). Verify before publishing with
-`cd dist && shasum -a 256 -c WeChat-AI-2.1.0.zip.sha256`.
+`cd dist && shasum -a 256 -c WeChat-AI-2.1.1.zip.sha256`.
 
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`. Change `docs/` before code
 for interface or behaviour changes. GitHub Actions only runs Linux-friendly checks (docs links,
@@ -436,7 +436,7 @@ script syntax, copy equality, no build artifacts).
 - **Permissions**: the first read of WeChat's container triggers the "App Data" permission — denying it
   breaks image/voice features and `image_path` detection. Patching the WeChat bundle may require "App
   Management". The app never asks for microphone, speech-recognition or automation access.
-- **WeChat and install location**: the hook supports exactly three WeChat versions, expects
+- **WeChat and install location**: the hook supports exactly five WeChat versions, expects
   `/Applications/WeChat.app` and needs the current user to have write access; App Store builds use a
   different path/signature and may not work.
 - **Backup and restore**: installation backs up the official app first (~665MB; reserve ≥2.5GB);

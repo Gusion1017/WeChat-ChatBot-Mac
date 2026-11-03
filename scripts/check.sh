@@ -4,7 +4,7 @@
 #
 # 用法：
 #   bash scripts/check.sh              # 快速检查（约 10s，需已构建过 SwiftPM 缓存）
-#   bash scripts/check.sh --docs       # 只检查文档、脚本与 Hook 副本一致性
+#   bash scripts/check.sh --docs       # 只检查文档链接、Hook 副本一致性与版本 JSON（不跑 shell 语法）
 #   bash scripts/check.sh --with-go    # 额外构建 bridge 并跑 Go 测试（较慢）
 #
 # 环境变量：

@@ -236,7 +236,3 @@ enum UIFormat {
         return "\(stamp) [\(entry.level.label)] \(entry.source): \(entry.message)"
     }
 }
-
-// MARK: - Short aliases used by pages
-
-typealias AccentColor = Theme

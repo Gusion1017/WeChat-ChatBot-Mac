@@ -217,7 +217,7 @@ curl -s -X POST http://127.0.0.1:5051/tts \
   本条语音回复自动改发文字。
 - 显存/内存：模型常驻约 8–9 GB RSS（CPU），MPS 另计。
 - 文本上限 500 字；长文本上游会分句合成，耗时线性增加。
-- 打包 `.app` 已把 `scripts/{install,run}_cosyvoice.sh` 与 `devtools/cosyvoice/*.py` 复制到
+- 打包 `.app` 已把 `scripts/{install,run}_cosyvoice.sh` 与 `devtools/cosyvoice/server.py` / `patch_repo.py` 复制到
   `Contents/Resources/cosyvoice/`；Python 环境与模型仍在首次安装时下载，不随包分发。
 - App 强杀时子进程可能遗留；正常退出会在 `willTerminate` 终止（见 `CosyVoiceProcessRegistry`）。
 - macOS 13/14 不保证可用；目标 macOS 26+（与 App 一致）。
@@ -290,7 +290,7 @@ curl -s -X POST http://127.0.0.1:5051/tts \
 - `scripts/install_cosyvoice.sh --dry-run` 在源码路径与 `--home` 生产路径下均输出正确的
   `LOCAL_DIR/VENV/MODEL_DIR/REFS/MARKER`；打包 `.app` 的 `Contents/Resources/cosyvoice/`
   已实际生成并验证脚本存在；
-- `swift test`：**398 项 0 失败（8 跳过）**；`--filter CosyVoice`：**58 项（2 跳过）0 失败**；
+- `swift test`（2026-11-03 复测）：**525 项执行（523 通过 / 2 跳过）0 失败**；`--filter CosyVoice`：**69 项（2 跳过）0 失败**；
 - 导出自定义音色 zip 含全部契约文件、`personal_use_only=true`、备份说明；内置拒绝、空列表报错；
 - `bash scripts/check.sh --with-go` 通过（Swift + Go + 文档/脚本静态检查）。
 

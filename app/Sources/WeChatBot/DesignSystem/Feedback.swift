@@ -64,27 +64,6 @@ struct LoadingState: View {
     }
 }
 
-/// Pulsing placeholder for content that is still loading.
-struct SkeletonBlock: View {
-    var height: CGFloat = 12
-    var width: CGFloat?
-    var radius: CGFloat = 5
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animate = false
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .fill(Color.primary.opacity(reduceMotion ? 0.07 : (animate ? 0.105 : 0.055)))
-            .frame(width: width, height: height)
-            .animation(
-                reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
-                value: animate
-            )
-            .onAppear { animate = true }
-            .accessibilityHidden(true)
-    }
-}
-
 /// Indeterminate or determinate progress block for long-running operations
 /// (Hook install, restore...).
 struct ProgressPanel: View {

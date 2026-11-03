@@ -28,7 +28,7 @@ scripts/run_cosyvoice.sh [--host 127.0.0.1] [--port 5051] \
 | `--venv` | `COSYVOICE_VENV` | `_local/cosyvoice/venv` |
 | `--refs` | `COSYVOICE_REFS` | `_local/cosyvoice/voices` |
 | `--device` | `COSYVOICE_DEVICE` | `cpu`（`mps`/`auto` 走 hybrid：llm+flow 上 GPU、hift 留 CPU；失败自动回退 CPU） |
-| `--flow-steps` | `COSYVOICE_FLOW_STEPS` | `6`（10=官方默认；4=速度优先；实测见 §7） |
+| `--flow-steps` | `COSYVOICE_FLOW_STEPS` | `6`（10=官方默认；4=速度优先；实测见 §6） |
 | `--threads` | `COSYVOICE_THREADS` | `0`=自动 |
 | `--log-level` | `COSYVOICE_LOG_LEVEL` | `info` |
 
@@ -360,7 +360,7 @@ _local/cosyvoice/voices/
 
 ---
 
-## 7. 实测性能（M3 Max 38GB / macOS 26 / torch 2.3.1）
+## 6. 实测性能（M3 Max 38GB / macOS 26 / torch 2.3.1）
 
 热态（第二次及以后请求），文本 20 字 → 约 4.5s 音频：
 
@@ -372,12 +372,12 @@ _local/cosyvoice/voices/
 | MPS hybrid（llm+flow 在 MPS）4 步 | 7.1s | 1.3s | 5.8s | 0.3s | 1.43 |
 | MPS flow-only（仅 flow 在 MPS）4 步 | 9.3s | 2.0s | 7.4s | 0.6s | 1.88 |
 
-- 冷态首包 = 模型加载（约 12s 权重）+ 首次合成（约 2–3 倍热态耗时）；启动到 `ready` 实测见 `_local/cosyvoice/report.md`。
+- 冷态首包 = 模型加载（约 12s 权重）+ 首次合成（约 2–3 倍热态耗时）；启动到 `ready` 实测见 [`docs/cosyvoice.md`](../../docs/cosyvoice.md) §7.1。
 - 常驻 RSS ≈ **8.8GB**（fp32 全量）。
 - flow 步数降到 4 时，ASR 复核文本与 10 步完全一致（未见糊/重复），但更低的 2 步未验证，不建议。
 - **MPS 不是万能**：flow 在 MPS 上快 2.8x，但 LLM 在 MPS 上反而慢（小 batch 逐 token 开销大），hift 有 float64/stft 限制只能留 CPU。
 
-## 6. 兼容性备注
+## 7. 兼容性备注
 
 - 目前是 **HTTP/1.1 非流式**：整段合成完再返回 WAV。若以后需要首包更低，可加
   `stream=1` 分块 WAV/PCM 接口（v1 未实现，App 不要依赖）。

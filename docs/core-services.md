@@ -749,9 +749,9 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 
 ### 8.1 `swift test`（推荐，无需 UI）
 
-测试 target 位于 `app/Tests/WeChatAITests/`（`CoreServicesTests.swift`（48）、
-`SleepPreventionTests.swift`（9）、`MessageRoutingTests.swift`（12）、
-`NativeSendConfigTests.swift`（5）、`ConversationNameTests.swift`（8）、`WorkingHoursStatusTests.swift`（5）、
+测试 target 位于 `app/Tests/WeChatAITests/`（`CoreServicesTests.swift`（52）、
+`SleepPreventionTests.swift`（10）、`MessageRoutingTests.swift`（12）、
+`NativeSendConfigTests.swift`（5）、`ConversationNameTests.swift`（8）、`WorkingHoursStatusTests.swift`（6）、
 `MenuBarClickTests.swift`（9）、`ContactDirectoryTests.swift`（15）、`PatMessageTests.swift`（20）、
 `PatReplySettingsTests.swift`（7）、
 `HookSelfIDTests.swift`（4）、`WeChatAppmsgTests.swift`（26）、`AppmsgRoutingTests.swift`（20）、
@@ -831,7 +831,7 @@ RuleEngine 白黑名单/@/关键词/冷却、Scheduler 各 repeat 的 nextFireAt
 ChatEngine 分段/角色合并/关键词分词。输出 `[selftest] PASS/FAIL/WARN` 与汇总退出码。
 
 历史 CLI 驱动实测：**63 passed / 0 failed / 0 warnings**；当前 `swift test` 为
-**200/200 通过**（见 8.1；2026-10-23 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
+**525 项（523 通过 / 2 跳过）**（见 8.1；2026-11-03 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、
 `config.json` 无明文 Key。
 

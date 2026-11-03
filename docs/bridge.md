@@ -63,7 +63,7 @@ scripts/build_bridge.sh
 - 构建参数：`-trimpath -buildvcs=false -ldflags="-s -w"`；
 - 自检：产物必须是 Mach-O arm64，`onebot -h` 必须正常；若仓库存在 `hook/script.js`，
   还会对比它与 `bridge/script.js` 的 SHA256，不一致时给出同步警告；
-- 运行 `go test ./...`（6 个 `_test.go`：鉴权/参数校验/WS 动作、入站归一化、
+- 运行 `go test ./...`（8 个 `_test.go`：鉴权/参数校验/WS 动作、入站归一化、
   `HandleMsg` 字段保留、通讯录、protobuf dump、工具函数；`BRIDGE_SKIP_TESTS=1` 可跳过）。
 
 干净重建（下载与编译全部重来，约 70 秒，取决于网络）：

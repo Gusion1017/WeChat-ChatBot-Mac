@@ -45,7 +45,7 @@ test-go: ## 构建 bridge 并跑 Go 测试（工具链由 build_bridge.sh 准备
 check: ## 静态检查 + Swift 测试（scripts/check.sh）
 	bash scripts/check.sh
 
-docs-check: ## 只检查文档链接、脚本语法与 hook/bridge 脚本一致性
+docs-check: ## 只检查文档链接、hook/bridge 脚本副本一致性与版本 JSON（不跑 shell 语法）
 	bash scripts/check.sh --docs
 
 clean: ## 预览可清理的构建产物（真正删除加 --yes）

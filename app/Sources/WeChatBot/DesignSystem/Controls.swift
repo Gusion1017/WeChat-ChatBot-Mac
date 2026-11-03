@@ -202,31 +202,6 @@ struct FormField<Content: View>: View {
     }
 }
 
-/// Compact read-only key/value row for details panels.
-struct KeyValueRow: View {
-    let label: String
-    let value: String
-    var mono: Bool = false
-    var valueColor: Color = .secondary
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(L(label))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 88, alignment: .leading)
-            Text(value)
-                .font(mono ? .system(.caption, design: .monospaced) : .caption)
-                .foregroundStyle(valueColor)
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
 /// Monospaced path row with copy button.
 struct PathRow: View {
     let label: String
@@ -438,24 +413,6 @@ struct SettingsDivider: View {
             .frame(height: 1)
             .padding(.leading, 14)
             .accessibilityHidden(true)
-    }
-}
-
-/// A small inline "未连接 / 未配置" state label used in settings rows.
-struct UnavailableLabel: View {
-    var text: String = "服务未连接"
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "bolt.slash")
-                .font(.system(size: 9, weight: .semibold))
-            Text(L(text)).font(.caption2)
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Color.primary.opacity(0.05), in: Capsule())
-        .accessibilityElement(children: .combine)
     }
 }
 

@@ -29,7 +29,7 @@ jobs:
 
       - name: Python syntax
         run: |
-          python3 -m py_compile scripts/check_docs.py devtools/*.py tools/*.py
+          python3 -m py_compile scripts/check_docs.py devtools/*.py devtools/cosyvoice/*.py tools/*.py
 
       - name: Docs links, script copy and version JSON
         run: bash scripts/check.sh --docs

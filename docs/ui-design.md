@@ -618,7 +618,7 @@ app/Sources/WeChatBot/
 │  ├─ SettingsView.swift
 │  ├─ OnboardingView.swift
 │  ├─ MenuBarView.swift
-│  └─ Components/               # 13 个复用组件/编辑 sheet（含 ReplyProgressBar、DashboardSystemVitalsCard）
+│  └─ Components/               # 17 个复用组件/编辑 sheet（含 ReplyProgressBar、DashboardSystemVitalsCard）
 ├─ Core/
 │  ├─ AppStore.swift / AppStore+Runtime.swift
 │  ├─ AppLifecycle.swift        # 主窗口注册表、关闭即隐藏、AppDelegate

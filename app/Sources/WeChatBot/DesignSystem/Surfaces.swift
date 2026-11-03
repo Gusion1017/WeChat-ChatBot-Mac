@@ -279,22 +279,6 @@ struct PillLabel: View {
     }
 }
 
-/// Headline section title with optional subtitle.
-struct SectionHeader: View {
-    let title: String
-    var subtitle: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(L(title)).font(.title2.weight(.semibold))
-            if let subtitle {
-                Text(L(subtitle)).font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 // MARK: - Metrics
 
 /// Compact statistic tile used on the dashboard.

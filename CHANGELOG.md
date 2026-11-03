@@ -6,6 +6,18 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-11-03
+
+### 变更
+
+- **仓库整理（2026-11-03）**：`dist/RELEASE_NOTES_2.0.2.md` / `RELEASE_NOTES_2.1.0.md`
+  移入 `docs/releases/` 入库（原先只存在于 gitignore 的 `dist/`，`clean.sh --yes` 会删除）；
+  清理已移除功能的本地化残留（旧语音引擎/转写资源/主动聊天文案），补齐记忆页英文翻译，
+  修正 zh-Hans 表 31 条英文值；移除 5 个从未引用的 DesignSystem 组件；
+  文档同步测试数（Swift 525 / Go 63 顶层 + 97 子测试）、支持微信版本数（5 个）与索引版本号；
+  `.gitignore` 补充 SQLite sidecar 与覆盖率规则；`--docs` 检查说明与 CI Python 语法覆盖修正。
+  构建缓存与冗余解包 App 已清理（可再生，不影响源码）。
+
 ## [2.1.0] — 2026-11-03
 
 ### 新增
@@ -868,7 +880,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v2.1.1...HEAD
 [1.3.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.3.0
 [1.4.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.4.0
 [1.5.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.0
@@ -883,6 +895,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 [2.0.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.1
 [2.0.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.2
 [2.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.0
+[2.1.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.1
 [1.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.0.0
 [1.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.1.0
 [1.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.0
