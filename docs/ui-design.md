@@ -470,7 +470,7 @@ Window("WeChat AI", id: "main")
 
 - **徽标位置**：存在可用更新（版本高于当前且未跳过）时，三处出现提示：
   设置分类侧边栏的「更新」行显示「新」小徽标（无障碍「有可用更新」），主窗口侧边栏 footer 的
-  版本区域与菜单栏面板 footer 显示「可更新 vX」。两个 footer 徽标可点击，通过
+  版本区域与菜单栏面板 footer 显示「有新版本 X」。两个 footer 徽标可点击，通过
   `requestUpdatePageFocus()` 深链到「设置 → 更新」；设置分类内的「更新」行本身即入口。
   徽标只读 `UpdateCenter` 的可用更新状态
   （`hasAvailableUpdate` / `availableRelease`），不依赖系统通知权限。
@@ -538,7 +538,7 @@ Window("WeChat AI", id: "main")
   会先调用 `MenuBarController.shared.dismissPanel()` 收起面板，避免主窗口与弹层同时出现。
 - 面板内容：头部品牌与运行状态胶囊；带描边的状态卡（微信、Hook、AI、电量、DeepSeek 余额、
   今日收到/回复/延迟）；快捷操作按「启动/停止 → 打开主窗口 → 会话 / 机器人 / 设置」分层；
-  底部版本与退出（⌥⌘Q）；有可用更新时底部版本区域显示「可更新 vX」（只读
+  底部版本与退出（⌥⌘Q）；有可用更新时底部版本区域显示「有新版本 X」（只读
   `UpdateCenter.shared`）。启停不收起面板，导航/打开主窗口后收起。
 - 图标：模板 SF Symbol 随机器人运行状态切换填充/轮廓
   （`bubble.left.and.bubble.right.fill` / `bubble.left.and.bubble.right`），不叠加颜色或状态点，

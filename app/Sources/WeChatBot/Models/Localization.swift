@@ -97,7 +97,6 @@ enum L10n {
         // 应用内更新（2026-11）：动态状态、发布信息与安装失败原因。
         // 先具体后宽泛：「已下载 X / Y」必须排在「已下载 X」之前。
         ("^发现新版本 (.*)，可在设置 → 更新中安装$", "Version $1 is available. Install it in Settings → Update."),
-        ("^可更新 (.*)$", "Update $1 available"),
         ("^已跳过 (.*)$", "Skipped $1"),
         ("^上次检查：(.*)$", "Last checked: $1"),
         ("^发布于 (.*)$", "Published $1"),

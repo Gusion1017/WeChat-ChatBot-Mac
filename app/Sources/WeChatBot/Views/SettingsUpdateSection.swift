@@ -103,7 +103,7 @@ struct SettingsUpdateSection: View {
             StatusPresentation(text: L("已是最新"), color: Theme.success, symbol: "checkmark.circle.fill")
         case .available(let release):
             StatusPresentation(
-                text: Lf("可更新 v%@", release.version.description),
+                text: Lf("有新版本 %@", release.version.description),
                 color: Theme.accent,
                 symbol: "arrow.down.circle.fill",
                 filled: true

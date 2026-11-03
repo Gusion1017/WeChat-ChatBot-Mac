@@ -103,7 +103,7 @@ struct SettingsView: View {
         }
         .background(PageBackground())
         .onAppear {
-            // 侧边栏 / 菜单栏 / 更新提示点「可更新」后直接落到「更新」分类。
+            // 侧边栏 / 菜单栏 / 更新提示点「有新版本」后直接落到「更新」分类。
             if updateCenter.consumeUpdatePageFocus() {
                 category = .updates
             }

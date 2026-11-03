@@ -1943,7 +1943,7 @@
 "尚未检查" = "Not checked yet";
 "正在检查" = "Checking";
 "已是最新" = "Up to date";
-"可更新 v%@" = "v%@ available";
+"有新版本 %@" = "New version %@";
 "下载中" = "Downloading";
 "校验中" = "Verifying";
 "安装中" = "Installing";

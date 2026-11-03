@@ -16,7 +16,7 @@ struct MenuBarView: View {
     var onNavigate: (() -> Void)?
 
     @Environment(AppStore.self) private var store
-    /// 有可用更新时在 footer 显示「可更新 vX」，点击直达「设置 → 更新」。
+    /// 有可用更新时在 footer 显示「有新版本 X」，点击直达「设置 → 更新」。
     @State private var updates = UpdateCenter.shared
     /// 启动/停止是异步的，本地状态只用于避免重复点击与给出静态文字反馈。
     @State private var isToggling = false
@@ -413,7 +413,7 @@ struct MenuBarView: View {
                     updates.requestUpdatePageFocus()
                     open(.settings)
                 } label: {
-                    Text(Lf("可更新 v%@", release.version.description))
+                    Text(Lf("有新版本 %@", release.version.description))
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                         .lineLimit(1)

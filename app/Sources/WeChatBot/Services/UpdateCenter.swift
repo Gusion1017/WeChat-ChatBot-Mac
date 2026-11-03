@@ -34,7 +34,7 @@ final class UpdateCenter {
     private(set) var installTarget: UpdateInstallTarget?
     /// 不可原地更新的原因（Translocation / 只读目录 / 非 .app）。
     private(set) var installTargetError: AppUpdateError?
-    /// 侧边栏 / 菜单栏的「可更新」入口请求把设置页切到「更新」分类；
+    /// 侧边栏 / 菜单栏的「有新版本」入口请求把设置页切到「更新」分类；
     /// SettingsView 在出现或该值变化时消费一次。
     private(set) var wantsUpdatePageFocus = false
 
@@ -292,7 +292,7 @@ final class UpdateCenter {
 
     // MARK: - Settings / actions
 
-    /// 「可更新」入口：请求设置页定位到「更新」分类（只消费一次）。
+    /// 「有新版本」入口：请求设置页定位到「更新」分类（只消费一次）。
     func requestUpdatePageFocus() {
         wantsUpdatePageFocus = true
     }

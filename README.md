@@ -45,7 +45,7 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
   详见 [`docs/accounts.md`](docs/accounts.md)
 - **应用内更新（设置 → 更新）**：启动后自动检查 GitHub Releases（默认开启，6 小时内不重复），
   发现新版本时设置侧边栏「更新」行显示「新」徽标，主窗口侧边栏与菜单栏面板 footer 显示
-  「可更新 vX」；确认后从 GitHub 下载
+  「有新版本 X」；确认后从 GitHub 下载
   `WeChat-AI-<version>.zip`、校验同名 SHA256 与签名，退出 App 后原地替换并 ad-hoc 重签，
   安装阶段失败会自动恢复旧版并重新打开。更新会停止机器人并退出 App；ad-hoc 签名未公证，
   更新后首次打开可能需系统「仍要打开」放行。详见 [`docs/updates.md`](docs/updates.md)
@@ -103,8 +103,8 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 ### 快速开始
 
-- **普通用户**：下载 [`WeChat-AI-3.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip.sha256)），
+- **普通用户**：下载 [`WeChat-AI-3.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip.sha256)），
   按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -186,9 +186,9 @@ bash scripts/package_release.sh     # Releases 用 zip + sha256
 make release                        # 同上：构建 → 打包 → 签名校验 → sha256
 ```
 
-发布产物为 `dist/WeChat-AI-3.1.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
+发布产物为 `dist/WeChat-AI-3.1.1.zip`（约 65MB）与 `.sha256`。打包脚本会自动
 `codesign --verify --strict`；`spctl -a -vv` 对 ad-hoc 未公证包预期返回 `rejected`（属正常），
-分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-3.1.0.zip.sha256` 校验。
+分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-3.1.1.zip.sha256` 校验。
 
 改了 `hook/script.js` 记得跑 `bash scripts/sync_hook_script.sh`。接口 / 行为变更先改 `docs/` 再改代码。
 GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、副本一致、无构建产物）。
@@ -264,7 +264,7 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
   switch and must be restarted manually. See [`docs/accounts.md`](docs/accounts.md)
 - **In-app updates (Settings → Update)**: checks GitHub Releases automatically after launch (on by
   default, at most once every 6 hours). A newer version marks the Update row in Settings with a
-  "New" badge and shows "vX available" in the main-window sidebar and the menu-bar panel; after
+  "New" badge and shows "New version X" in the main-window sidebar and the menu-bar panel; after
   confirmation the app downloads
   `WeChat-AI-<version>.zip`, verifies its SHA256 and signature, quits, replaces and ad-hoc
   re-signs itself in place, then reopens — install-time failures restore the old version. Updating stops the
@@ -335,8 +335,8 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-3.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip.sha256))
+  [`WeChat-AI-3.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip.sha256))
   and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
@@ -424,10 +424,10 @@ bash scripts/package_release.sh     # release zip + sha256
 make release                        # same: build → package → signature check → sha256
 ```
 
-The release artifacts are `dist/WeChat-AI-3.1.0.zip` (~65MB) and `.sha256`. Packaging runs
+The release artifacts are `dist/WeChat-AI-3.1.1.zip` (~65MB) and `.sha256`. Packaging runs
 `codesign --verify --strict`; `spctl -a -vv` reports `rejected` for an ad-hoc, non-notarized bundle
 (that is expected). Verify before publishing with
-`cd dist && shasum -a 256 -c WeChat-AI-3.1.0.zip.sha256`.
+`cd dist && shasum -a 256 -c WeChat-AI-3.1.1.zip.sha256`.
 
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`. Change `docs/` before code
 for interface or behaviour changes. GitHub Actions only runs Linux-friendly checks (docs links,
