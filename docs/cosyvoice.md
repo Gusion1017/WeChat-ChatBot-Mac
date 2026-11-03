@@ -279,7 +279,7 @@ RTF 口径：`duration = samples / sample_rate`，`rtf = processing_time_seconds
 
 已完成：
 
-- `swift test`：**546 项执行（544 通过 / 2 跳过）0 失败**；`--filter CosyVoice` 与
+- `swift test`：**597 项执行（595 通过 / 2 跳过）0 失败**；`--filter CosyVoice` 与
   `--filter ReferenceImport` 通过；真实 GPU E2E（`WECHATAI_COSYVOICE_E2E=1`）通过；
 - `python3 devtools/cosyvoice/test_server.py`：**72 项通过**（设备解析/auto、fake MLX 设备设置、
   health device、合成、x-vector fallback、headers、前置检查）；

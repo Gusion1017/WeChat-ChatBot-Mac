@@ -1,8 +1,10 @@
+import Combine
 import SwiftUI
 
 /// Root window: custom glass sidebar plus the routed detail page.
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @Environment(ToastCenter.self) private var toast
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
@@ -33,6 +35,15 @@ struct RootView: View {
             if !hasCompletedOnboarding {
                 store.isOnboardingPresented = true
             }
+        }
+        // 后台自动检查发现新版本：只在主窗口提示一次，常驻徽标直接读 UpdateCenter。
+        .onReceive(NotificationCenter.default.publisher(for: .weChatAIUpdateAvailable)) { notification in
+            guard let release = notification.object as? AppUpdateRelease else { return }
+            toast.show(
+                Lf("发现新版本 %@，可在设置 → 更新中安装", release.version.description),
+                tone: .info,
+                symbol: "arrow.down.circle"
+            )
         }
         .toastOverlay()
         // NOTE: intentionally no global `.animation(value: sidebarSelection)` here.

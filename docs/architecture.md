@@ -110,8 +110,15 @@ Qwen3-TTS 本地 TTS 安装与音色、日志文件仍全局共享。完整行�
 │       └── legacy-migration.json   # 仅旧版迁移目标有
 ├── media/                          # 旧版遗留媒体（只读保留，不迁移、不删除）
 ├── backups/ runtime/ cosyvoice/    # 备份、运行期 Hook 配置、本地 TTS 安装（Qwen3 运行环境/模型/音色）
+├── updates/                        # 应用内更新工作目录（下载 zip/解压暂存/助手脚本；>24h 清理）
 └── chatbot.sqlite                  # 旧版单库（迁移后保留，不删）
 ```
+
+- 应用内更新是**全局能力**：更新设置 `updates`（`autoCheck` / `lastCheckedAt` /
+  `skippedTag` / `lastNotifiedTag`）只存于全局 `config.json`，不随微信账号切换；
+  `UpdateCenter.shared` 是独立 `@MainActor @Observable` 单例，不以 `AppStore` API 暴露。
+- 更新只操作当前 App bundle（`Bundle.main.bundleURL` 所在目录）与 `updates/` 工作目录，
+  不修改微信、Hook、bridge 或账号数据；下载/安装门禁与回滚见 [`updates.md`](updates.md)。
 
 - 账号目录名就是 wxid，校验 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`；`_unassigned` 为保留名。
 - `config.json` 仍是全局设置入口；运行期的 `bot` / `personas` / `schedules` 以
@@ -364,6 +371,10 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - `SleepPreventionCenter`（`Services/SleepPreventionService.swift`，`@MainActor @Observable`）：
   `general.sleepPrevention` 的运行时执行者，持有/释放 IOKit `PreventUserIdleSystemSleep` 断言，
   监听电源适配器变化；纯决策函数 `shouldPreventSleep(mode:onExternalPower:)` 可单测。
+- `UpdateCenter`（`Services/UpdateCenter.swift`，`@MainActor @Observable` 单例）：
+  应用内更新的唯一 UI 状态源；检查 GitHub Releases、节流/提示、下载与 SHA256 校验、安装门禁、
+  停止机器人并启动更新助手。`UpdateInstaller` 负责解压/包校验/助手脚本/回滚与启动后清理。
+  设置写入全局 `config.json` 的 `updates` 段；契约见 [`updates.md`](updates.md)。
 - `AppSettings`/`Conversation`/`ChatMessage`/`AIProvider`/`Persona`/`ScheduledTask`/`HookStatus`/`BotStats`（`Models/Models.swift`，Lead 所有）。
 - `ImageFetcher`（`Services/ImageFetcher.swift`，`@MainActor`）：入站图片获取的**串行队列**。
   只按消息入队，不持有 `OneBotClient`/`AppStore`（`fetch` / `onFetched` / `onFailed` 闭包注入）；

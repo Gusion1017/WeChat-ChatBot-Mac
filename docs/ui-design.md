@@ -27,7 +27,7 @@
 | 自动化 | 人格设定 `personas` | 人格卡片网格 + 编辑 sheet |
 | 系统 | 记忆库 `memory` | 记忆卡：角色列表（含全局共享）、记忆卡、全量记录/导出、记忆设置、旧记忆导入；入口仅显示列表，聚合需显式点击；人格统一由人格设定维护。聊天记录清理在具体会话内 |
 | 系统 | 运行日志 `logs` | 实时流、级别/来源过滤、暂停、清空、导出 |
-| 系统 | 设置 `settings` | 通用/外观/通知/Hook/OneBot/数据与备份（当前微信账号、已保存账号、重新检测）/关于 |
+| 系统 | 设置 `settings` | 通用/外观/通知/更新/Hook/OneBot/数据与备份（当前微信账号、已保存账号、重新检测）/关于 |
 
 附加入口：
 
@@ -389,6 +389,7 @@ Window("WeChat AI", id: "main")
 | 通用 | 登录启动、退出确认、**防睡眠（永不/接入电源时/始终 + 当前状态）**、语言、重新打开向导；窗口/Dock 行为只做说明（Dock 图标随主窗口显隐，无开关） |
 | 外观 | 系统/浅色/深色分段选择 + 三个外观缩略预览；减少动态效果与动态字体状态；设计说明 |
 | 通知 | 通知开关、声音开关、系统权限说明 |
+| 更新 | 当前版本/Build、安装位置与门禁提示、立即检查、自动检查开关、新版本说明、下载进度、跳过/取消跳过、GitHub/发布说明链接、更新日志（`update.log`）入口、错误与重试 |
 | Hook | 微信版本/进程/Gadget/Bridge/网关/版本匹配、**CLT 状态/安装/重新检测**、**R3 发送句柄状态**、安装/还原/刷新、进度、风险提示、路径/端口/自动启动/**R3 原生发送开关（4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12，默认开；首次需本机手动发一条消息）** |
 | OneBot | Host/Port/连接类型/Token（安全显示+复制）、Bridge 路径、图片目录、WS 地址 |
 | 数据与备份 | **当前微信账号（mask/账号数据目录/账号配置/会话数据库/角色目录/媒体目录）**、**已保存的账号**、**重新检测微信账号**；全局配置 `config.json`、备份目录、运行日志目录（`~/Library/Logs/WeChatAI/`）；导出配置、打开目录、重新加载、日志清空 |
@@ -465,6 +466,44 @@ Window("WeChat AI", id: "main")
 - 概率、对等、仅短回复、音色与运行设备均由全局语音设置控制；已确定改发语音时默认
   跳过拟人化随机延迟（可在语音设置关闭），语音回复的进度条不再出现「N 秒后发送」倒计时。
 
+「应用内更新」交互（应用组：通用 / 外观 / 通知 / 更新；契约见 [`updates.md`](updates.md)）：
+
+- **徽标位置**：存在可用更新（版本高于当前且未跳过）时，三处出现提示：
+  设置分类侧边栏的「更新」行显示「新」小徽标（无障碍「有可用更新」），主窗口侧边栏 footer 的
+  版本区域与菜单栏面板 footer 显示「可更新 vX」。两个 footer 徽标可点击，通过
+  `requestUpdatePageFocus()` 深链到「设置 → 更新」；设置分类内的「更新」行本身即入口。
+  徽标只读 `UpdateCenter` 的可用更新状态
+  （`hasAvailableUpdate` / `availableRelease`），不依赖系统通知权限。
+- **一次性提醒**：自动检查首次发现某个新版本时，主窗口弹一次应用内 toast
+  （「发现新版本 vX，可在设置 → 更新中安装」）；同一 tag 由 `updates.lastNotifiedTag` 去重。
+  手动检查不重复弹 toast，更新页直接进入 `available`。
+- **更新页结构**（从上到下）：
+  - 版本卡：当前 `CFBundleShortVersionString` / Build、安装位置
+    （`Bundle.main.bundleURL`）与门禁状态；开发构建（`dist/`、`.build`）显示提示但不阻断；
+  - 新版本卡：Release 标题/说明/发布时间、「下载并安装」「跳过此版本」、GitHub Release 链接；
+  - 进度区：下载进度（总大小未知时用不确定进度）、SHA256 校验、准备安装；
+  - 设置区：自动检查开关（即时持久化）、已跳过的版本与「取消跳过」；
+  - 页脚：GitHub Releases 与更新日志（`update.log`）入口。
+- **页面状态**：`idle` / `checking` / `upToDate` / `available` / `downloading` /
+  `verifying` / `installing` / `failed(message)`。检查/下载/校验/安装进行中禁用重复触发，
+  按钮显示进度；自动检查失败不进入错误态，也不把页面卡在「检查中」。
+- **确认弹窗**：点击「下载并安装」先二次确认，明确会**停止机器人并退出 App**，随后由更新助手
+  替换当前 App 并重新打开；取消不产生下载或文件改动。
+- **进度与退出**：`downloading` 显示已接收/总大小与百分比；`verifying` 显示校验中；
+  `installing` 显示安装中并提示 App 会自动重新打开。助手启动成功后 App 自行退出，
+  不再提供「取消安装」。
+- **跳过版本**：写入 `updates.skippedTag` 后徽标与 toast 消失，页面显示「已跳过 vX」；
+  「取消跳过」清空 tag，若该版本仍高于当前则恢复 `available` 与徽标。
+- **错误**：`failed(message)` 用 `InlineNotice` + 「重试」「打开发布页」入口展示，不吞错；
+  下载/校验/解压/门禁/助手启动失败分别映射为可读中文提示（见
+  [`updates.md`](updates.md) §6）。自动检查失败只写日志，仅在更新页状态与日志里可见。
+- **安装位置门禁**：非 `.app` 运行、bundle id 非 `com.gusionw.wechatai`、App Translocation、
+  安装目录不可写或发布包缺 zip/`.sha256` 时禁用「下载并安装」并显示对应原因与处理建议；
+  安装位置卡片展示版本、Build、路径与校验状态，门禁失败时提供「打开发布页手动下载」；
+  不请求管理员权限。
+- **更新后**：新版本首次启动清理旧 `.update-backup-*` 与超过 24 小时的更新工作目录；
+  ad-hoc 签名未公证，首次打开可能需 Gatekeeper「仍要打开」放行，页面与安装文档给出提醒。
+
 ### 5.10 首次启动向导
 
 4 步 sheet（720×620），顶部步骤指示器 + 跳过；右上角「语言 / Language」选择
@@ -499,7 +538,8 @@ Window("WeChat AI", id: "main")
   会先调用 `MenuBarController.shared.dismissPanel()` 收起面板，避免主窗口与弹层同时出现。
 - 面板内容：头部品牌与运行状态胶囊；带描边的状态卡（微信、Hook、AI、电量、DeepSeek 余额、
   今日收到/回复/延迟）；快捷操作按「启动/停止 → 打开主窗口 → 会话 / 机器人 / 设置」分层；
-  底部版本与退出（⌥⌘Q）。启停不收起面板，导航/打开主窗口后收起。
+  底部版本与退出（⌥⌘Q）；有可用更新时底部版本区域显示「可更新 vX」（只读
+  `UpdateCenter.shared`）。启停不收起面板，导航/打开主窗口后收起。
 - 图标：模板 SF Symbol 随机器人运行状态切换填充/轮廓
   （`bubble.left.and.bubble.right.fill` / `bubble.left.and.bubble.right`），不叠加颜色或状态点，
   也不为图标跑动画；状态栏图标不显示鼠标悬停 tooltip，仅保留无障碍值（`机器人运行中` /
@@ -618,6 +658,7 @@ app/Sources/WeChatBot/
 │  ├─ SchedulesPanel.swift    # 机器人 → 定时（2026-10-28 移入）
 │  ├─ LogsView.swift
 │  ├─ SettingsView.swift
+│  ├─ SettingsUpdateSection.swift # 设置 → 更新（GitHub Releases）
 │  ├─ OnboardingView.swift
 │  ├─ MenuBarView.swift
 │  └─ Components/               # 17 个复用组件/编辑 sheet（含 ReplyProgressBar、DashboardSystemVitalsCard）
@@ -645,12 +686,21 @@ UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网�
   契约见 [`memory.md`](memory.md) §3、§10–§11。
 - 配置集合（providers/personas/schedules）由 UI 修改数组后调用 `persist()`；Core 不提供
   冲突的 CRUD，避免重复实现。
+- 应用内更新：UI 不直接发网络请求或操作 bundle，只读 `UpdateCenter.shared` 的
+  `state/latestRelease/currentVersion/currentBuild/installTarget/installTargetError/
+  autoCheckEnabled/skippedTag` 状态，并调用其 `checkForUpdates()`/`downloadAndInstall()`/
+  `setAutoCheck(_:)`/`skipAvailableRelease()`/`clearSkippedRelease()`/`reloadSettings()`/
+  `refreshIfNeeded()`/`openReleasePage()`/`openAllReleasesPage()`/`revealUpdateLog()` 与
+  `requestUpdatePageFocus()`/`consumeUpdatePageFocus()`（徽标深链）。
+  `UpdateCenter` 是独立 `@MainActor @Observable` 单例，不并入 `AppStore`；设置写入
+  `store.settings.updates` 并持久化。契约见 [`updates.md`](updates.md) 与
+  [`core-services.md`](core-services.md) §5.12。
 
 ## 11. 验证与已知限制
 
 已验证：
 
-- `cd app && SWIFT_DISABLE_SANDBOX=1 swift test` **546 项执行（544 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）
+- `cd app && SWIFT_DISABLE_SANDBOX=1 swift test` **597 项执行（595 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）
   （含批量记忆、压缩器、权重强化、旧库迁移、防睡眠配置兼容与三档决策、回复进度倒计时、
   自消息路由修复、通讯录标题补全、拍一拍回复、唤醒后免唤醒词窗口、appmsg 引用/链接/文件等分类与历史文本修复、
   入站帧单次解析与历史修复 trusted 语义、微信 4.2.0.5 R3 版本门禁/运行期配置合并、识图设置/多模态请求/图片编码与描述落库/引用图片说明）。
@@ -736,6 +786,9 @@ UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网�
 - 多账号 UI（设置 → 数据与备份的「当前微信账号 / 已保存的账号 / 重新检测」，总览切号提示）
   随 2026-10-27 功能新增；窗口内真实切号走查、成功/未变化/失败三种 toast 与英文文案
   待集成后补验，不把界面截图写入仓库。
+- 应用内更新（设置 → 更新、三处徽标、确认弹窗、下载/校验/安装进度与错误态）为 docs-first
+  契约；真实升级、失败回滚、Gatekeeper 放行与英文文案的窗口走查待补验，
+  不把未验证结果写入本文「已验证」。契约见 [`updates.md`](updates.md)。
 - 开发期截图位于 `/tmp/wechatai-*.png`、`/tmp/shot-*.png`、`/tmp/demo-*.png`，不纳入仓库。
 
 > 语音设置统一在「机器人 → 语音」提供，复用共用组件 `VoiceSettingsPanel`；设置页已不再提供「语音」分类。

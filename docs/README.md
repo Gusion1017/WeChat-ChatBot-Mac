@@ -7,6 +7,7 @@
 | 文档 | 内容 | 类型 |
 | --- | --- | --- |
 | [`install.md`](install.md) | **安装与启动**：Releases App（v2.1.1，约 65MB）/ 源码 ZIP 两种方式、**Command Line Tools 前置**、Gatekeeper、菜单栏、首次向导与发布打包 | 操作手册 |
+| [`updates.md`](updates.md) | **应用内更新（设置 → 更新）**：GitHub Releases 检查/限流、SemVer 比较、SHA256 校验、状态机、原地安装与失败回滚、安装门禁与安全边界 | 现行契约 |
 | [`architecture.md`](architecture.md) | 总体架构、目录边界、OneBot 桥接契约 | 现行契约 |
 | [`accounts.md`](accounts.md) | **多微信账号数据隔离**：隔离矩阵、`accounts/<wxid>/` 布局、识别算法、三种切号路径、旧版单库迁移与 `_unassigned` 认领、边界与排障 | 现行契约 |
 | [`core-services.md`](core-services.md) | Swift 核心服务：AppStore、AI/OneBot/记忆/触发判定/调度、防睡眠、并发与错误处理 | 现行契约 |
@@ -31,6 +32,7 @@
 
 - 想跑起来：根目录 [`README.md`](../README.md) 的「快速开始」。
 - 从 GitHub ZIP 安装 / 给普通用户发布：先看 [`install.md`](install.md)。
+- 想了解设置里的自动更新、SHA256 校验与失败回滚：看 [`updates.md`](updates.md)。
 - 想改协议：先读 [`architecture.md`](architecture.md) §3–§4，再读 [`bridge.md`](bridge.md)。
 - 想改 App 页面或交互：[`ui-design.md`](ui-design.md) + [`core-services.md`](core-services.md)。
 - 想懂账号切换/换微信后数据去哪了：[`accounts.md`](accounts.md)。

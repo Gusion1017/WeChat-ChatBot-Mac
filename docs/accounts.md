@@ -695,7 +695,7 @@ python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前基线：`swift test` 546 项执行（544 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）。
+当前基线：`swift test` 597 项执行（595 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 ## 12. 排障
 

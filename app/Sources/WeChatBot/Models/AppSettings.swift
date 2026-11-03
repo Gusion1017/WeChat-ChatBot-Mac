@@ -339,6 +339,38 @@ extension AISettings {
     }
 }
 
+/// 应用内更新（GitHub Releases）的全局设置。
+///
+/// 只保存「是否自动检查 / 上次检查时间 / 跳过与已提示的 tag」；下载与安装过程
+/// 全部是运行期状态，不落盘。旧 `config.json` 没有 `updates` 键时整段回退默认值。
+struct UpdateSettings: Codable, Hashable {
+    /// 启动后自动检查更新（受 `UpdateCheckPolicy.autoCheckInterval` 节流）。
+    var autoCheck: Bool = true
+    /// 上次成功检查 GitHub Releases 的时间（自动检查据此节流）。
+    var lastCheckedAt: Date?
+    /// 用户主动「跳过此版本」的 tag；空字符串 = 不跳过。
+    var skippedTag: String = ""
+    /// 已在界面/通知里提示过的 tag，避免每次启动重复提示。
+    var lastNotifiedTag: String = ""
+}
+
+extension UpdateSettings {
+    private enum CodingKeys: String, CodingKey {
+        case autoCheck, lastCheckedAt, skippedTag, lastNotifiedTag
+    }
+
+    /// 逐键解码：段内缺键或类型损坏时只回退该字段，不让整份 `config.json` 失效。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = UpdateSettings()
+        autoCheck = (try? container.decodeIfPresent(Bool.self, forKey: .autoCheck)) ?? defaults.autoCheck
+        lastCheckedAt = try? container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        skippedTag = (try? container.decodeIfPresent(String.self, forKey: .skippedTag)) ?? defaults.skippedTag
+        lastNotifiedTag = (try? container.decodeIfPresent(String.self, forKey: .lastNotifiedTag))
+            ?? defaults.lastNotifiedTag
+    }
+}
+
 // MARK: - Full persisted state
 
 struct AppSettings: Codable, Hashable {
@@ -348,6 +380,8 @@ struct AppSettings: Codable, Hashable {
     var onebot = OneBotSettings()
     var ai = AISettings()
     var bot = BotSettings()
+    /// 应用内更新设置（全局，不随微信账号切换）。
+    var updates = UpdateSettings()
 
     var providers: [AIProvider] = [AppSettings.makeDefaultProvider()]
     var personas: [Persona] = [AppSettings.makeDefaultPersona()]
@@ -475,6 +509,52 @@ extension ProfileSettings {
     }
 }
 
+// 自定义解码：顶层新增 `updates` 段后，旧 `config.json` 缺键不能让整份设置解码失败。
+// 逐段读取并在单段损坏时只回退该段，和 `SettingsStore.decodeSectionsLossily` 的降级策略一致。
+// 实现放在 extension 里以保留合成的 memberwise init。
+extension AppSettings {
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, general, hook, onebot, ai, bot, updates
+        case providers, personas, schedules
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = AppSettings()
+        schemaVersion = (try? container.decodeIfPresent(Int.self, forKey: .schemaVersion))
+            ?? defaults.schemaVersion
+        general = (try? container.decodeIfPresent(GeneralSettings.self, forKey: .general))
+            ?? defaults.general
+        hook = (try? container.decodeIfPresent(HookSettings.self, forKey: .hook)) ?? defaults.hook
+        onebot = (try? container.decodeIfPresent(OneBotSettings.self, forKey: .onebot))
+            ?? defaults.onebot
+        ai = (try? container.decodeIfPresent(AISettings.self, forKey: .ai)) ?? defaults.ai
+        bot = (try? container.decodeIfPresent(BotSettings.self, forKey: .bot)) ?? defaults.bot
+        updates = (try? container.decodeIfPresent(UpdateSettings.self, forKey: .updates))
+            ?? defaults.updates
+        providers = (try? container.decodeIfPresent([AIProvider].self, forKey: .providers))
+            ?? defaults.providers
+        personas = (try? container.decodeIfPresent([Persona].self, forKey: .personas))
+            ?? defaults.personas
+        schedules = (try? container.decodeIfPresent([ScheduledTask].self, forKey: .schedules))
+            ?? defaults.schedules
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(general, forKey: .general)
+        try container.encode(hook, forKey: .hook)
+        try container.encode(onebot, forKey: .onebot)
+        try container.encode(ai, forKey: .ai)
+        try container.encode(bot, forKey: .bot)
+        try container.encode(updates, forKey: .updates)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(personas, forKey: .personas)
+        try container.encode(schedules, forKey: .schedules)
+    }
+}
+
 extension AppSettings {
     /// 从完整设置中抽出账号级部分（用于写 `profile.json`）。
     var profile: ProfileSettings {
@@ -569,6 +649,7 @@ enum SettingsStore {
         if let value = decode("onebot", as: OneBotSettings.self) { settings.onebot = value }
         if let value = decode("ai", as: AISettings.self) { settings.ai = value }
         if let value = decode("bot", as: BotSettings.self) { settings.bot = value }
+        if let value = decode("updates", as: UpdateSettings.self) { settings.updates = value }
         if let value = decode("providers", as: [AIProvider].self) { settings.providers = value }
         if let value = decode("personas", as: [Persona].self) { settings.personas = value }
         if let value = decode("schedules", as: [ScheduledTask].self) { settings.schedules = value }

@@ -40,6 +40,10 @@
 | `Services/AppResources.swift` | bundle / 开发树资源定位（bridge/hook/tools） |
 | `Services/LogPipeline.swift` | 日志批量刷新、ANSI 清理、过滤与入库节流（200ms 批量，避免主线程逐行失效） |
 | `Services/CrashReporter.swift` | AppKit 布局安全阀、未捕获异常报告、会话面包屑、主线程看门狗 |
+| `Models/AppUpdateModels.swift` | 应用内更新模型：`AppVersion` 解析/比较、Release/Asset、`AppUpdateState`/`AppUpdateError`、`UpdateCheckPolicy` |
+| `Services/GitHubUpdateClient.swift` | GitHub Releases 只读客户端：latest 检查、资产下载、`.sha256` 拉取、URL 白名单、HTTP/传输错误映射 |
+| `Services/UpdateCenter.swift` | 更新 UI 唯一状态源（独立单例）：自动/手动检查、节流与提示、下载/校验/安装编排、跳过版本与设置持久化 |
+| `Services/UpdateInstaller.swift` | 安装门禁与文件操作：工作目录、解压/包校验、更新助手脚本、启动助手、失败回滚与更新后清理 |
 | `Services/MentionText.swift` | 群聊 @ 文本兜底解析（结构化 `at` 缺失时用群昵称匹配） |
 | `Services/ContactDirectory.swift` | 通讯录目录快照、会话标题补全与群昵称解析 |
 | `Services/PatMessage.swift` | 拍一拍目标判定与 `{name}` 文本模板 |
@@ -92,6 +96,11 @@ var isSwitchingAccount: Bool
 func dismissAccountSwitchNotice()
 func refreshWeChatAccount() async -> Bool   // 仅检测到不同账号才切库；返回是否真的切换
 ```
+
+应用内更新**不走** `AppStore` 运行时 API：`UpdateCenter.shared` 是独立的
+`@MainActor @Observable` 单例，App 启动时 `configure(store:)` 注入 `AppStore` 以读写
+`settings.updates` 与日志；UI 只观察其状态并调用检查/安装/跳过/打开链接方法。
+契约见 [`updates.md`](updates.md) §4–§7 与本文 §5.12。
 
 约定：
 
@@ -168,7 +177,7 @@ RuntimeCoordinator.startRuntime
 
 | 文件 | 内容 | 加载 | 保存 |
 | --- | --- | --- | --- |
-| `config.json` | 完整 `AppSettings`（`general/hook/onebot/ai/bot/providers/personas/schedules` 镜像） | `SettingsStore.load()` 先解码它，沿用旧的损坏备份/默认值逻辑 | `SettingsPersistence.save(...)` 写完整 `AppSettings`（含账号字段镜像，供旧版回滚）；账号字段运行时以 profile 为准 |
+| `config.json` | 完整 `AppSettings`（`general/hook/onebot/ai/bot/updates/providers/personas/schedules` 镜像） | `SettingsStore.load()` 先解码它，沿用旧的损坏备份/默认值逻辑 | `SettingsPersistence.save(...)` 写完整 `AppSettings`（含账号字段镜像，供旧版回滚）；账号字段运行时以 profile 为准 |
 | `accounts/<id>/profile.json` | `ProfileSettings`：`schemaVersion` / `bot` / `personas` / `schedules` | `SettingsStore.loadProfile(profileURL:)`，缺失 `.default`，损坏备份 `profile.corrupt-<ts>.json` 后默认 | `SettingsPersistence.save(_:profileURL:)` 在 `profileURL != nil` 时双写；按编码字节去重，原子 replace |
 
 - `SettingsStore.load()` = 解码 `config.json` 得到完整 `AppSettings` → `settings.applyProfile(loadProfile(...))`；
@@ -710,6 +719,53 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 - 旧记忆导入：只读旧 `memories` 表，按内容拆分/关键词启发式分类（来源 `legacy-import`、
   核心记忆置顶），只在记忆面板手动触发；不自动迁移、不改旧表。
 
+### 5.12 应用内更新（UpdateCenter / GitHub Releases）
+
+- **定位**：`UpdateCenter` 是更新流程的唯一 UI 状态源（`@MainActor @Observable` 单例），
+  不并入 `AppStore`，更新入口不以 `AppStore` 运行时方法暴露；启动时 `configure(store:)`
+  注入 store，读取/写回全局 `settings.updates` 并写 `Update` 日志。仓库固定为
+  `Gusion1017/WeChat-ChatBot-Mac`，无鉴权只读；接口/资产/限流见 [`updates.md`](updates.md) §2。
+- **模型与纯函数**（`Models/AppUpdateModels.swift`）：
+  `AppVersion`（`v` 前缀、缺 minor/patch 补 0、`+build` 忽略、预发布 < 同号正式）、
+  `AppUpdateRelease`/`AppUpdateAsset`、`AppUpdateAssetSelector`（优先 `WeChat-AI-*.zip` 并配对
+  同名 `.sha256`）、`AppUpdateState`（idle → checking → upToDate/available → downloading →
+  verifying → installing；任一步失败 → failed）、`AppUpdateError`、`UpdateCheckPolicy`
+  （6 小时节流、跳过/提示判定）。
+- **检查与自动检查**：`GitHubUpdateClient.latestRelease()` 拉取 latest 正式版并解析资产；
+  403 且 `X-RateLimit-Remaining: 0`（或任意 429）→ `rateLimited`，404 → `releaseNotFound`。
+  自动检查默认开启，启动完成后延迟 8 秒执行；距离上次成功检查不足
+  `UpdateCheckPolicy.autoCheckInterval`（6 小时）不重复，手动检查不受限。
+  自动失败只写日志并恢复原状态（不进入 `failed`），手动失败才在页面展示；自动发现新版本
+  且未跳过时按 `lastNotifiedTag` 去重发一次应用内通知，徽标读 `hasAvailableUpdate`；
+  侧边栏/菜单栏徽标通过 `requestUpdatePageFocus` / `consumeUpdatePageFocus` 深链设置页。
+- **下载与校验**：下载 zip 到 `Application Support/WeChatAI/updates/` 临时工作目录，进度回调
+  在后台队列并节流后回主线程；随后拉取同名 `.sha256`、流式计算 SHA256 比对，解压并校验
+  唯一 `.app` 的 Info.plist/bundle id/版本/主可执行文件/`codesign`，全部通过才进入安装。
+  缺 zip/校验文件、校验不一致、解压/签名失败均拒绝安装；已创建的工作目录会被清理。
+  错误统一映射为 `AppUpdateError`：自动检查失败只写日志并恢复原状态，手动检查/安装失败
+  进入 `failed(message)` 并可重试；助手阶段错误写 `update.log` 并回滚。
+- **安装门禁**：只接受 `.app` 运行、bundle id `com.gusionw.wechatai`、非 App Translocation、
+  安装目录（`Bundle.main.bundleURL` 的父目录）可写；开发构建（`dist/`、`.build`）允许更新但
+  UI 提示。不请求管理员权限，不执行 `sudo`。
+- **助手脚本与回滚**：App 内先停止机器人、写入并启动更新助手，再 `NSApp.terminate`。
+  助手在旧进程退出后（最多等约 60 秒）把旧 App 移到同目录 `.update-backup-<epoch>`，用
+  `ditto` 展开暂存 App，`xattr -dr com.apple.quarantine` 后
+  `/usr/bin/codesign -f -s - --timestamp=none` ad-hoc 重签，`codesign --verify --strict`
+  通过再 `open`。等待超时先 SIGTERM 再 SIGKILL；`xattr` 非 0 只记日志继续。任一步失败时，
+  已替换则删除半成品、恢复旧备份，未替换则保持旧版原样，随后重新打开旧版并以退出码 1 结束。
+  成功后保留备份、删除本次工作目录；新版本启动完成约 8 秒后
+  （`scheduleLaunchCheck`）由 `UpdateInstaller.cleanupAfterUpdate`
+  删除旧备份与超过 24 小时的失败残留目录。日志 `~/Library/Logs/WeChatAI/update.log`。
+- **安全**：不发送 API Key/Cookie/账号/本地路径；拒绝非 https 或非 GitHub 域名资产；
+  SHA256、bundle id、版本、codesign 任一失败即拒绝；无静默安装、后台强制更新、beta 通道或
+  自定义更新源。ad-hoc 未公证，更新后首次打开可能需 Gatekeeper「仍要打开」。
+- **测试**：`UpdateTests.swift`（51 个用例）已覆盖版本解析/比较、6 小时边界、资产选择与
+  `.sha256` 配对、200/404/403/429 与传输错误映射、URL 白名单、SHA256 解析/校验、安装目标
+  （bundle id/版本/Translocation/只读目录）、包元数据与 `codesign` 校验、解包、清理与助手脚本
+  （含真实替换/回滚/工作目录自清理集成）；`UpdateCenter` 的 UI 状态迁移与通知去重仍以手动
+  验收为主。以 `cd app && swift test --filter Update` 实际输出为准；手动验收
+  （真实替换、回滚、Gatekeeper、三处提示）见 [`updates.md`](updates.md) §9。
+
 ## 6. 错误处理策略
 
 | 场景 | 行为 |
@@ -799,7 +855,7 @@ profile seed、旧文件保留）、`claimUnassigned` 只复制不删除/不覆�
 config + profile 双文件加载/损坏备份/去重双写、`MemoryStore` 切换 A/B 库后会话/记忆/日志/KV
 互不可见。2026-10-28 审查修复另加回归：`_unassigned` 启动认领、`legacyMigrationDone` 门禁、
 空壳目标库替换、WAL 主库无 `-wal/-shm` 时的迁移、`MemoryStore.suspend()` 禁止隐式 open。
-当前 `swift test` **546 项**通过
+当前 `swift test` **597 项**通过
 （2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 记忆 v2（2026-10-28）新增、2026-10-29 扩展到 36 项的 `CharacterMemoryTests.swift`（临时目录，不碰真实网络/数据）：
@@ -833,7 +889,7 @@ RuleEngine 白黑名单/@/关键词/冷却、Scheduler 各 repeat 的 nextFireAt
 ChatEngine 分段/角色合并/关键词分词。输出 `[selftest] PASS/FAIL/WARN` 与汇总退出码。
 
 历史 CLI 驱动实测：**63 passed / 0 failed / 0 warnings**；当前 `swift test` 为
-**546 项（544 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
+**597 项（595 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、
 `config.json` 无明文 Key。
 

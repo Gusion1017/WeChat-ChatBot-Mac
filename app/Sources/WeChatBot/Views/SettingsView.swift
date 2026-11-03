@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 设置：通用 / 外观 / 通知 / Hook / OneBot / 数据与备份 / 关于。
+/// 设置：通用 / 外观 / 通知 / 更新 / Hook / OneBot / 数据与备份 / 关于。
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @Environment(ToastCenter.self) private var toast
@@ -15,6 +15,8 @@ struct SettingsView: View {
     @State private var progress: Double?
     @State private var progressMessage: String?
     @State private var sleepCenter = SleepPreventionCenter.shared
+    /// 更新状态（可用更新徽标 / 深链到「更新」分类）。
+    @State private var updateCenter = UpdateCenter.shared
     /// Hook 安装所需的 Xcode Command Line Tools 状态（值由环境检查卡回填）。
     @State private var commandLineToolsStatus: CommandLineToolsStatus?
 
@@ -22,6 +24,7 @@ struct SettingsView: View {
         case general
         case appearance
         case notifications
+        case updates
         case hook
         case onebot
         case data
@@ -34,6 +37,7 @@ struct SettingsView: View {
             case .general: "通用"
             case .appearance: "外观"
             case .notifications: "通知"
+            case .updates: "更新"
             case .hook: "Hook"
             case .onebot: "OneBot"
             case .data: "数据与备份"
@@ -46,6 +50,7 @@ struct SettingsView: View {
             case .general: "gearshape"
             case .appearance: "paintbrush"
             case .notifications: "bell"
+            case .updates: "arrow.triangle.2.circlepath"
             case .hook: "link"
             case .onebot: "network"
             case .data: "externaldrive"
@@ -58,6 +63,7 @@ struct SettingsView: View {
             case .general: .secondary
             case .appearance: Theme.violet
             case .notifications: Theme.warning
+            case .updates: Theme.success
             case .hook: Theme.info
             case .onebot: Theme.accent
             case .data: Theme.info
@@ -96,6 +102,16 @@ struct SettingsView: View {
             }
         }
         .background(PageBackground())
+        .onAppear {
+            // 侧边栏 / 菜单栏 / 更新提示点「可更新」后直接落到「更新」分类。
+            if updateCenter.consumeUpdatePageFocus() {
+                category = .updates
+            }
+        }
+        .onChange(of: updateCenter.wantsUpdatePageFocus) { _, wantsFocus in
+            guard wantsFocus, updateCenter.consumeUpdatePageFocus() else { return }
+            category = .updates
+        }
         .sheet(item: $hookAction) { action in
             switch action {
             case .install:
@@ -133,7 +149,7 @@ struct SettingsView: View {
 
     private var categorySidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sidebarGroup("应用", items: [.general, .appearance, .notifications])
+            sidebarGroup("应用", items: [.general, .appearance, .notifications, .updates])
             sidebarGroup("集成", items: [.hook, .onebot])
             sidebarGroup("数据", items: [.data, .about])
             Spacer()
@@ -171,6 +187,15 @@ struct SettingsView: View {
                             .font(.system(size: 12.5, weight: category == item ? .semibold : .regular))
                             .foregroundStyle(.primary)
                         Spacer(minLength: 2)
+                        if item == .updates, updateCenter.hasAvailableUpdate {
+                            Text(L("新"))
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4.5)
+                                .padding(.vertical, 1)
+                                .background(Theme.accent, in: Capsule())
+                                .accessibilityLabel(L("有可用更新"))
+                        }
                     }
                     .padding(.horizontal, 8)
                     .frame(height: 28)
@@ -194,6 +219,7 @@ struct SettingsView: View {
         case .general: generalSettings
         case .appearance: appearanceSettings
         case .notifications: notificationSettings
+        case .updates: SettingsUpdateSection()
         case .hook: hookSettings
         case .onebot: oneBotSettings
         case .data: dataSettings

@@ -94,6 +94,26 @@ enum L10n {
         ("^删除密钥失败：(.*)$", "Failed to delete key: $1"),
         ("^通道已保存，但密钥写入失败：(.*)$", "Channel saved, but failed to write API key: $1"),
         ("^AI 连接失败：(.*)$", "AI connection failed: $1"),
+        // 应用内更新（2026-11）：动态状态、发布信息与安装失败原因。
+        // 先具体后宽泛：「已下载 X / Y」必须排在「已下载 X」之前。
+        ("^发现新版本 (.*)，可在设置 → 更新中安装$", "Version $1 is available. Install it in Settings → Update."),
+        ("^可更新 (.*)$", "Update $1 available"),
+        ("^已跳过 (.*)$", "Skipped $1"),
+        ("^上次检查：(.*)$", "Last checked: $1"),
+        ("^发布于 (.*)$", "Published $1"),
+        ("^已下载 (.*) / (.*)$", "Downloaded $1 / $2"),
+        ("^已下载 (.*)$", "Downloaded $1"),
+        // AppUpdateError.localizedDescription 兜底（含路径/HTTP 状态等运行时参数）。
+        ("^无法解析版本号：(.*)$", "Can't parse version: $1"),
+        ("^更新检查失败（HTTP (\\d+)）$", "Update check failed (HTTP $1)"),
+        ("^更新信息解析失败：(.*)$", "Failed to parse update info: $1"),
+        ("^下载更新失败：(.*)$", "Failed to download update: $1"),
+        ("^解压更新包失败：(.*)$", "Failed to unpack update: $1"),
+        ("^更新包不是有效的 WeChat AI 应用：(.*)$", "Update is not a valid WeChat AI app: $1"),
+        ("^更新包签名校验失败：(.*)$", "Update signature verification failed: $1"),
+        ("^App 运行在系统隔离路径，无法原地更新：(.*)$", "App is running from an isolated path; in-place update is unavailable: $1"),
+        ("^没有写入权限：(.*)$", "No write permission: $1"),
+        ("^无法启动更新助手：(.*)$", "Failed to launch update helper: $1"),
         // 微信账号档案切换/旧版迁移提示（运行时拼出的动态中文，2026-10-27）。
         ("^检测到微信账号已切换：(.*)$", "WeChat account switched: $1"),
         ("^已切换到微信账号 (.*) 的数据档案；机器人已停止，请确认微信登录稳定后重新启动。$",

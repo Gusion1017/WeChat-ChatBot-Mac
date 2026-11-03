@@ -6,6 +6,20 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-04
+
+### 新增
+
+- **应用内更新（设置 → 更新，GitHub Releases）**：设置「应用」组新增「更新」分类，启动后自动检查
+  `Gusion1017/WeChat-ChatBot-Mac` 的最新正式版本（默认开启，启动后延迟 8 秒，6 小时内不重复；
+  手动检查不受节流限制）。发现新版本时设置「更新」行显示「新」徽标，主窗口侧边栏 footer
+  与菜单栏面板 footer 显示「可更新 vX」，自动检查只弹一次应用内提醒（按 `lastNotifiedTag` 去重），
+  支持跳过/取消跳过该版本。用户确认后下载 `WeChat-AI-<version>.zip`，校验同名 `.sha256`、bundle id、版本与
+  codesign 签名；App 停止机器人并退出，由更新助手把旧 App 备份为
+  `<App>.app.update-backup-<epoch>`、展开并 ad-hoc 重签新版本；助手阶段失败时恢复备份并重新打开旧版。
+  更新设置存全局 `config.json` 的 `updates` 段，旧配置缺键逐段回退。ad-hoc 签名未公证，
+  更新后首次打开可能需系统「仍要打开」放行。契约见 [`docs/updates.md`](docs/updates.md)。
+
 ## [3.0.0] — 2026-11-04
 
 ### 变更
@@ -902,7 +916,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.0...HEAD
 [1.3.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.3.0
 [1.4.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.4.0
 [1.5.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.0
@@ -919,6 +933,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 [2.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.0
 [2.1.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.1
 [3.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.0.0
+[3.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.1.0
 [1.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.0.0
 [1.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.1.0
 [1.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.0

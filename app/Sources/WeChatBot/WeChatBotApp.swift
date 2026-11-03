@@ -31,6 +31,9 @@ struct WeChatAIApp: App {
         // 左键开合 NSPopover 状态面板，右键不执行操作。这里注入依赖，
         // AppDelegate 启动完成后再创建条目。
         MenuBarController.shared.configure(store: store)
+        // 应用内更新：读取设置 / 解析当前安装位置；真正的网络检查在启动完成后延迟执行，
+        // 避免和 bridge / 微信检测抢启动阶段的 CPU。
+        UpdateCenter.shared.configure(store: store)
     }
 
     /// 把主线程现场快照与看门狗回调挂到会话 store 上。

@@ -187,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ActivationPolicyController.reapplyCurrent()
         // 菜单栏条目依赖 AppKit 完成启动后再创建（依赖已由 `WeChatAIApp.init` 注入）。
         MenuBarController.shared.start()
+        // 应用内更新：延迟数秒后做一次带节流的自动检查（失败只写日志，不打扰启动）。
+        UpdateCenter.shared.scheduleLaunchCheck()
         closeShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             Self.handleCloseShortcut(event)
         }

@@ -6,6 +6,8 @@ struct SidebarView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredItem: SidebarItem?
+    /// 有可用更新时在 footer 显示「可更新 vX」，点击直达「设置 → 更新」。
+    @State private var updates = UpdateCenter.shared
 
     private struct SidebarSection: Identifiable {
         let id: String
@@ -207,6 +209,26 @@ struct SidebarView: View {
             Text(appVersion)
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let release = updates.availableRelease {
+                Button {
+                    updates.requestUpdatePageFocus()
+                    store.sidebarSelection = .settings
+                } label: {
+                    Text(Lf("可更新 v%@", release.version.description))
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Theme.accent.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(L("有新版本可用，打开设置安装"))
+                .accessibilityLabel(L("有新版本可用，打开设置安装"))
+            }
             Spacer(minLength: 2)
             Button {
                 store.sidebarSelection = .settings

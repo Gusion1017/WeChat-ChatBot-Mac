@@ -43,6 +43,12 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
   按当前微信账号自动切换；AI 模型、Hook、OneBot、Keychain、本地 TTS 安装与音色、文件日志全局共享。
   升级旧版时旧单库/旧媒体只复制保留、不删除；运行中换号会停止机器人，需手动重新启动。
   详见 [`docs/accounts.md`](docs/accounts.md)
+- **应用内更新（设置 → 更新）**：启动后自动检查 GitHub Releases（默认开启，6 小时内不重复），
+  发现新版本时设置侧边栏「更新」行显示「新」徽标，主窗口侧边栏与菜单栏面板 footer 显示
+  「可更新 vX」；确认后从 GitHub 下载
+  `WeChat-AI-<version>.zip`、校验同名 SHA256 与签名，退出 App 后原地替换并 ad-hoc 重签，
+  安装阶段失败会自动恢复旧版并重新打开。更新会停止机器人并退出 App；ad-hoc 签名未公证，
+  更新后首次打开可能需系统「仍要打开」放行。详见 [`docs/updates.md`](docs/updates.md)
 - **拟人化延迟**、回复进度倒计时、防睡眠、定时消息、实时会话看板、会话重命名/置顶/删除聊天（仅本机）、运行日志
 - **设备与账户**：总览「设备与账户」卡与菜单栏弹层显示本机电池电量 / 充电状态 / 剩余时间
   （IOKit，30 秒刷新）和 DeepSeek 账户余额（总额、赠送/充值、可用状态；启动查询 + 每 5 分钟刷新，
@@ -72,7 +78,7 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
 
 | 模块 | 状态 |
 | --- | --- |
-| SwiftUI App / Swift 核心 | ✅ 546 项测试（2 项按环境跳过：真实本地 TTS 服务 E2E；含 GPU/CPU 与参考音导入）；4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 文本真机 E2E |
+| SwiftUI App / Swift 核心 | ✅ 597 项测试（2 项按环境跳过：真实本地 TTS 服务 E2E；含 GPU/CPU 与参考音导入）；4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 文本真机 E2E |
 | OneBot bridge（Go） | ✅ 构建 / 鉴权 / 真机附加 / 8 个 `_test.go` · 63 顶层 + 97 子测试通过 |
 | 首启向导 / 安装 | ✅ CLT 检测与安装引导、微信版本 / Hook 预检、备份约 665MB（磁盘需 ≥2.5GB） |
 | 微信 4.1.12.53 | ✅ legacy 收发 + 出站发送 |
@@ -97,8 +103,8 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 ### 快速开始
 
-- **普通用户**：下载 [`WeChat-AI-3.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip.sha256)），
+- **普通用户**：下载 [`WeChat-AI-3.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip.sha256)），
   按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -157,7 +163,7 @@ App 内可在 设置 → Hook → 还原官方微信 一键还原（还原前先
 ### 目录结构
 
 ```
-app/        SwiftUI App（SwiftPM）+ 546 项测试
+app/        SwiftUI App（SwiftPM）+ 597 项测试
 bridge/     Go OneBot 桥接（GPL-3.0 衍生，改动见 NOTICE）；silkenc/ SILK 编码，testdata/ 测试样本
 hook/       script.js（唯一事实来源）与版本地址表
 tools/      Hook 安装、备份、还原
@@ -180,9 +186,9 @@ bash scripts/package_release.sh     # Releases 用 zip + sha256
 make release                        # 同上：构建 → 打包 → 签名校验 → sha256
 ```
 
-发布产物为 `dist/WeChat-AI-3.0.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
+发布产物为 `dist/WeChat-AI-3.1.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
 `codesign --verify --strict`；`spctl -a -vv` 对 ad-hoc 未公证包预期返回 `rejected`（属正常），
-分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-3.0.0.zip.sha256` 校验。
+分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-3.1.0.zip.sha256` 校验。
 
 改了 `hook/script.js` 记得跑 `bash scripts/sync_hook_script.sh`。接口 / 行为变更先改 `docs/` 再改代码。
 GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、副本一致、无构建产物）。
@@ -256,6 +262,14 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
   account, while AI models, hook, OneBot, Keychain, the local TTS install and voices, and file logs stay global.
   Upgrading copies the legacy database/media without deleting them; a running bot stops on account
   switch and must be restarted manually. See [`docs/accounts.md`](docs/accounts.md)
+- **In-app updates (Settings → Update)**: checks GitHub Releases automatically after launch (on by
+  default, at most once every 6 hours). A newer version marks the Update row in Settings with a
+  "New" badge and shows "vX available" in the main-window sidebar and the menu-bar panel; after
+  confirmation the app downloads
+  `WeChat-AI-<version>.zip`, verifies its SHA256 and signature, quits, replaces and ad-hoc
+  re-signs itself in place, then reopens — install-time failures restore the old version. Updating stops the
+  bot and quits the app; builds are ad-hoc signed and not notarized, so the first launch may need
+  "Open Anyway". See [`docs/updates.md`](docs/updates.md)
 - **Human-like delay**, reply progress countdown, sleep prevention, scheduled messages, live
   conversation board and runtime logs
 - **Device & Account**: the Overview card and menu-bar popover show the Mac's battery percentage,
@@ -293,7 +307,7 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
 
 | Component | Status |
 | --- | --- |
-| SwiftUI app / Swift core | ✅ 546 tests (2 environment-gated skips: live local-TTS service E2E; includes GPU/CPU + reference-import coverage); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 |
+| SwiftUI app / Swift core | ✅ 597 tests (2 environment-gated skips: live local-TTS service E2E; includes GPU/CPU + reference-import coverage); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 |
 | OneBot bridge (Go) | ✅ builds / auth / device attach / 8 `_test.go` files · 63 top-level + 97 subtests passing |
 | First-run wizard / install | ✅ CLT detection and install guidance, WeChat version / hook preflight, ~665MB backup (needs ≥2.5GB disk) |
 | WeChat 4.1.12.53 | ✅ legacy send + receive |
@@ -321,8 +335,8 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-3.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip.sha256))
+  [`WeChat-AI-3.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.0/WeChat-AI-3.1.0.zip.sha256))
   and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
@@ -387,7 +401,7 @@ remain in the known-supported list and install directly (their version files are
 ### Repository Layout
 
 ```
-app/        SwiftUI app (SwiftPM) + 546 tests
+app/        SwiftUI app (SwiftPM) + 597 tests
 bridge/     Go OneBot bridge (GPL-3.0 derivative, changes listed in NOTICE); silkenc/ official SILK encoder, testdata/
 hook/       script.js (single source of truth) and version address tables
 tools/      hook install, backup and restore
@@ -410,10 +424,10 @@ bash scripts/package_release.sh     # release zip + sha256
 make release                        # same: build → package → signature check → sha256
 ```
 
-The release artifacts are `dist/WeChat-AI-3.0.0.zip` (~65MB) and `.sha256`. Packaging runs
+The release artifacts are `dist/WeChat-AI-3.1.0.zip` (~65MB) and `.sha256`. Packaging runs
 `codesign --verify --strict`; `spctl -a -vv` reports `rejected` for an ad-hoc, non-notarized bundle
 (that is expected). Verify before publishing with
-`cd dist && shasum -a 256 -c WeChat-AI-3.0.0.zip.sha256`.
+`cd dist && shasum -a 256 -c WeChat-AI-3.1.0.zip.sha256`.
 
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`. Change `docs/` before code
 for interface or behaviour changes. GitHub Actions only runs Linux-friendly checks (docs links,
