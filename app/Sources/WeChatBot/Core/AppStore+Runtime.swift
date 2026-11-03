@@ -3181,8 +3181,9 @@ final class RuntimeCoordinator {
 
     /// 尝试把一段 AI 回复合成语音并通过 bridge 发送。
     ///
-    /// CosyVoice3 是唯一语音引擎：未安装、本地服务未就绪、未选择音色或合成失败时，
-    /// 本条回复改发文字（不再跨引擎回退）。
+    /// 2026-11-03 起只有 Qwen3-TTS-1.7B 单模型：未安装、本地服务未就绪、
+    /// 运行中的服务不是 `qwen3tts`（旧版 CosyVoice3 残留）、未选择音色或合成失败时，
+    /// 本条回复改发文字（不再跨模型回退）。
     ///
     /// 返回 `false` 时调用方必须降级为文字（spec §3.3）：服务未就绪、合成失败、
     /// bridge 返回 `voice_send_unsupported`（4.2 Hook 尚未支持）都走这一条。
@@ -3205,34 +3206,44 @@ final class RuntimeCoordinator {
 
         let hasVoice = settings.hasCosyVoiceVoice
         // 没有选择音色时不做健康探测（启动/合成都不可用，直接改发文字）。
-        let cosyVoice: (installed: Bool, serviceReady: Bool, endpoint: URL) =
+        let availability: (installed: Bool, serviceReady: Bool, failureReason: String?, endpoint: URL) =
             hasVoice
                 ? await cosyVoiceAvailability(settings)
-                : (false, false, settings.effectiveCosyVoiceEndpoint)
+                : (false, false, nil, settings.effectiveCosyVoiceEndpoint)
         if !hasVoice {
-            log(.debug, "Voice", "未选择 CosyVoice3 音色，本条改发文字")
+            log(.debug, "Voice", "未选择语音音色，本条改发文字")
         }
         // 服务未运行且允许自动启动：后台拉起（首次加载模型慢，不阻塞本条回复）。
-        // 未选音色或音色库为空时不起服务（App 不内置任何音色）。
-        if hasVoice, cosyVoice.installed, !cosyVoice.serviceReady,
-           settings.cosyVoiceAutoStart {
-            log(.info, "Voice", "CosyVoice3 服务未运行，已在后台启动；本条改发文字")
-            startCosyVoiceInBackground(endpoint: cosyVoice.endpoint)
+        // 未选音色、未安装或端口上已经有异常服务（旧版残留/端口冲突）时不再盲起。
+        if hasVoice, availability.installed, availability.failureReason == nil,
+           !availability.serviceReady, settings.cosyVoiceAutoStart {
+            log(.info, "Voice",
+                "本地语音服务未运行，已在后台启动（\(settings.voiceComputeDevice.label)）；本条改发文字")
+            startCosyVoiceInBackground(
+                endpoint: availability.endpoint,
+                device: settings.voiceComputeDevice)
         }
         await syncCosyVoiceEndpoint(settings)
 
-        guard VoiceEngineAvailability.canSynthesize(
-            cosyVoiceInstalled: cosyVoice.installed,
-            cosyVoiceServiceReady: cosyVoice.serviceReady,
+        // 运行中的服务不是 Qwen3-TTS（旧版 CosyVoice3 残留等）时明确降级，
+        // 不要悄悄复用错误模型合成。
+        if let reason = availability.failureReason {
+            log(.warning, "Voice", "本地语音服务不可用：\(reason)；本条改发文字")
+            return false
+        }
+
+        guard VoiceAvailability.canSynthesize(
+            cosyVoiceInstalled: availability.installed,
+            cosyVoiceServiceReady: availability.serviceReady,
             hasVoice: hasVoice
         ) else {
             let reason: String
             if !hasVoice {
-                reason = "未选择 CosyVoice3 音色"
-            } else if !cosyVoice.installed {
-                reason = "CosyVoice3 尚未安装"
+                reason = "未选择语音音色"
+            } else if !availability.installed {
+                reason = "Qwen3-TTS 尚未安装"
             } else {
-                reason = "CosyVoice3 本地服务未就绪"
+                reason = "Qwen3-TTS 本地服务未就绪"
             }
             log(.warning, "Voice", "语音合成不可用（\(reason)）；本条改发文字")
             return false
@@ -3246,11 +3257,11 @@ final class RuntimeCoordinator {
                 maxSeconds: settings.effectiveMaxVoiceSeconds,
                 allowsTruncation: settings.overLimit == .truncate
             )
-            // 记录最近合成活动：CosyVoice3 健康轮询据此从 5s 降频到 30s。
+            // 记录最近合成活动：本地服务健康轮询据此从 5s 降频到 30s。
             await CosyVoiceRuntime.shared.noteSynthesisActivity()
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            log(.warning, "Voice", "CosyVoice3 语音合成失败：\(reason)；本条改发文字")
+            log(.warning, "Voice", "Qwen3-TTS 语音合成失败：\(reason)；本条改发文字")
             return false
         }
         if let epoch, epoch != accountEpoch { return false }
@@ -3304,26 +3315,38 @@ final class RuntimeCoordinator {
         }
     }
 
-    /// 出站语音的就绪判定：CosyVoice3 已安装、已选择音色，且本地服务最近一次健康检查通过。
+    /// 出站语音的就绪判定：Qwen3-TTS 已安装、已选择音色，且本地服务最近一次
+    /// 健康检查通过（缓存只在 `/health.engine == qwen3tts` 时置为就绪）。
     ///
     /// 回复决策在 `@MainActor` 同步读取缓存快照；服务是否真的在跑由后台
     /// `CosyVoiceRuntime` 健康轮询推进。
     private func voiceModelsReady(_ settings: VoiceSettings) -> Bool {
         guard CosyVoiceInstallation.isInstalled() else { return false }
-        // App 不内置音色：没选音色就没有可合成的 CosyVoice 音色。
+        // App 不内置音色：没选音色就没有可合成的音色。
         guard settings.hasCosyVoiceVoice else { return false }
+        guard CosyVoiceRuntimeCache.isReady else { return false }
         return VoiceSynthesisService.isReady
     }
 
-    /// 一次 CosyVoice3 可用性探测（安装状态 + 服务健康）。
+    /// 一次本地语音可用性探测（Qwen3-TTS 安装状态 + 服务健康 + 引擎校验）。
+    ///
+    /// `failureReason` 非 nil 表示端口上的服务不可复用（旧版 CosyVoice3 残留、
+    /// 端口被其他程序占用等），回复路径据此明确降级文字。
     private func cosyVoiceAvailability(
         _ settings: VoiceSettings
-    ) async -> (installed: Bool, serviceReady: Bool, endpoint: URL) {
+    ) async -> (installed: Bool, serviceReady: Bool, failureReason: String?, endpoint: URL) {
         let installed = CosyVoiceInstallation.isInstalled()
         let endpoint = settings.effectiveCosyVoiceEndpoint
-        guard installed else { return (false, false, endpoint) }
+        guard installed else { return (false, false, nil, endpoint) }
         let state = await CosyVoiceRuntime.shared.quickStatus(endpoint: endpoint)
-        return (true, state.isRunning, endpoint)
+        switch state {
+        case .running:
+            return (true, true, nil, endpoint)
+        case .failed(let reason):
+            return (true, false, reason, endpoint)
+        default:
+            return (true, false, nil, endpoint)
+        }
     }
 
     /// 本机音色库是否非空（空音色时 App 不启动服务，提示用户先添加音色）。
@@ -3341,47 +3364,50 @@ final class RuntimeCoordinator {
         await CosyVoiceClient.shared.updateEndpoint(endpoint)
     }
 
-    /// 后台启动 CosyVoice3 服务（失败只记日志，不影响文字回复）。
-    private func startCosyVoiceInBackground(endpoint: URL) {
+    /// 后台启动本地语音服务（失败只记日志，不影响文字回复）。
+    private func startCosyVoiceInBackground(endpoint: URL, device: VoiceComputeDevice) {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard await self.hasCosyVoiceVoices() else {
-                self.log(.info, "Voice", "未添加任何 CosyVoice3 音色，跳过自动启动服务")
+                self.log(.info, "Voice", "未添加任何音色，跳过自动启动本地语音服务")
                 return
             }
             do {
-                _ = try await CosyVoiceRuntime.shared.start(endpoint: endpoint)
-                self.log(.info, "Voice", "CosyVoice3 服务已就绪")
+                _ = try await CosyVoiceRuntime.shared.start(
+                    endpoint: endpoint, device: device)
+                self.log(.info, "Voice", "本地语音服务已就绪（\(device.label)）")
             } catch {
                 self.log(.info, "Voice",
-                    "CosyVoice3 自动启动未完成：\(error.localizedDescription)")
+                    "本地语音服务自动启动未完成：\(error.localizedDescription)")
             }
         }
     }
 
-    /// App 启动时按设置自动拉起 CosyVoice3 服务。
+    /// App 启动时按设置自动拉起本地语音服务。
     ///
-    /// 只在「允许语音回复 + 开启自动启动 + 已安装」时执行：CosyVoice3 是 8GB 级的
-    /// Python 旁路，没必要在用户没开语音回复时随 App 启动。
+    /// 只在「允许语音回复 + 开启自动启动 + Qwen3-TTS 已安装」时执行：本地模型是
+    /// GB 级的 MLX 旁路，没必要在用户没开语音回复时随 App 启动。
     private func autoStartCosyVoiceIfNeeded() {
         let voice = store.settings.bot.voiceSettings
         guard voice.replyEnabled,
               voice.cosyVoiceAutoStart,
               CosyVoiceInstallation.isInstalled() else { return }
         let endpoint = voice.effectiveCosyVoiceEndpoint
+        let device = voice.voiceComputeDevice
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard await self.hasCosyVoiceVoices() else {
-                self.log(.info, "Voice", "未添加任何 CosyVoice3 音色，跳过自动启动服务")
+                self.log(.info, "Voice", "未添加任何音色，跳过自动启动本地语音服务")
                 return
             }
             await self.syncCosyVoiceEndpoint(voice)
             do {
-                _ = try await CosyVoiceRuntime.shared.start(endpoint: endpoint)
-                self.log(.info, "Voice", "CosyVoice3 服务已就绪")
+                _ = try await CosyVoiceRuntime.shared.start(
+                    endpoint: endpoint, device: device)
+                self.log(.info, "Voice", "本地语音服务已就绪（\(device.label)）")
             } catch {
                 self.log(.info, "Voice",
-                    "CosyVoice3 自动启动未完成：\(error.localizedDescription)")
+                    "本地语音服务自动启动未完成：\(error.localizedDescription)")
             }
         }
     }
@@ -3561,7 +3587,7 @@ final class RuntimeCoordinator {
     func settingsDidChange() {
         guard bootstrapped || bootstrapping else { return }
         hookManager.configure(wechatPath: store.settings.hook.wechatPath)
-        // CosyVoice3 是唯一语音引擎：设置变更后把服务地址同步给客户端。
+        // 本地语音引擎设置变更后把服务地址同步给客户端（引擎切换由设置页负责停/启服务）。
         let voice = store.settings.bot.voiceSettings
         Task { @MainActor [weak self] in
             await self?.syncCosyVoiceEndpoint(voice)

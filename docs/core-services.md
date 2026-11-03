@@ -24,12 +24,12 @@
 | `Services/OneBotClient.swift` | WS 收事件、HTTP 发送/图片获取、媒体落地、事件解析、去重、重连 |
 | `Services/ImageFetcher.swift` | 入站图片获取串行队列 + `ImageFetchPolicy`（设置开关 / 去重 / 取消） |
 | `Services/VoiceTranscriptionService.swift` / `VoiceFetcher.swift` | 入站语音转写（SpeechAnalyzer）与 `/fetch_voice` 串行队列 |
-| `Services/VoiceSynthesisService.swift` / `VoiceSynthesisText.swift` / `VoiceSynthesisAudio.swift` | 本地 TTS 编排（唯一引擎 CosyVoice3）：文本清洗、24k WAV 写出、失败改发文字 |
-| `Services/VoicePreviewController.swift` | 音色试听（共享 AVAudioPlayer，走本地 CosyVoice3 HTTP 服务） |
-| `Services/CosyVoiceClient.swift` | CosyVoice3 本地 HTTP 合成（health/voices/tts，24k PCM 解码，仅回环 endpoint） |
-| `Services/CosyVoiceRuntime.swift` / `CosyVoiceInstaller.swift` | 本地 sidecar 启停/健康轮询/日志；安装脚本执行、`PROGRESS` 解析、取消/删除 |
-| `Models/CosyVoiceVoice.swift` | 本机音色目录、health 快照、CosyVoice3 就绪判定 |
-| `Services/VoiceReplyDecision.swift` | 语音回复决策（开关/概率/对等/短回复/CosyVoice3 就绪） |
+| `Services/VoiceSynthesisService.swift` / `VoiceSynthesisText.swift` / `VoiceSynthesisAudio.swift` | 本地 TTS 编排（Qwen3-TTS-1.7B 单模型，GPU/CPU）：文本清洗、24k WAV 写出、失败改发文字 |
+| `Services/VoicePreviewController.swift` | 音色试听（共享 AVAudioPlayer，走本地 TTS HTTP 服务） |
+| `Services/CosyVoiceClient.swift` | 本地 TTS HTTP 合成（health/voices/tts，24k PCM 解码，仅回环 endpoint） |
+| `Services/CosyVoiceRuntime.swift` / `CosyVoiceInstaller.swift` | 本地 sidecar 启停/健康轮询/日志（含引擎一致性校验）；按引擎安装、`PROGRESS` 解析、取消/删除 |
+| `Models/CosyVoiceVoice.swift` | 本机音色目录、health 快照（含 `engine`）、本地 TTS 就绪判定 |
+| `Services/VoiceReplyDecision.swift` | 语音回复决策（开关/概率/对等/短回复/本地 TTS 就绪） |
 | `Services/VisionEngine.swift` | 识图支持：候选图片筛选、ImageIO 缩放/JPEG data URL、多模态请求消息、描述清洗 |
 | `Services/AIClient.swift` | OpenAI 兼容 `/chat/completions`，SSE 流式 / 非流式 / 超时 / 错误映射 |
 | `Services/RuleEngine.swift` | 白黑名单、私聊/群触发、唤醒窗口、冷却、频率、工作时段 |
@@ -743,7 +743,7 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 - 账号隔离：账号目录名经过 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 校验，`_unassigned` 为保留名；
   UI 与日志展示 mask（见 `AppAccount.maskedID`），公开文档不写真实 wxid。
 - 旧版迁移只 copy、不删除旧库/旧媒体/旧配置；`account-state.json` 只存账号指针，不含聊天内容。
-- Keychain、CosyVoice3 安装与音色、日志文件与备份全局共享；换账号不会复制或删除 API Key。
+- Keychain、本地 TTS 安装与音色、日志文件与备份全局共享；换账号不会复制或删除 API Key。
 
 ## 8. 自检与测试
 
@@ -757,13 +757,15 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 `HookSelfIDTests.swift`（4）、`WeChatAppmsgTests.swift`（26）、`AppmsgRoutingTests.swift`（20）、
 `WakeWindowTests.swift`（6）、`ImageFetchTests.swift`（16）、`OneBotEventParserTests.swift`（5）、
 `DataRepairTrustTests.swift`（2）、`VisionTests.swift`（12）、`SystemVitalsTests.swift`（16），
-以及 `VoiceReadTests` / `VoiceSynthesisTests` / `VoiceRuntimeStatusTests` / `CosyVoiceTests` 等语音测试；
-2026-10-27 账号隔离 + 2026-10-28 记忆 v2（含人格单一来源 + 全局共享）+ 2026-10-30 移除主动聊天后为 525 项（2 项按环境跳过：真实 CosyVoice3 服务 E2E）：
+以及 `VoiceReadTests` / `VoiceSynthesisTests` / `VoiceRuntimeStatusTests` / `CosyVoiceTests` /
+`ReferenceImportTests` 等语音测试；
+2026-10-27 账号隔离 + 2026-10-28 记忆 v2（含人格单一来源 + 全局共享）+ 2026-10-30 移除主动聊天 +
+2026-11-04 语音收敛为 Qwen3-TTS-1.7B 单模型 + GPU/CPU + 参考音导入简化后为 **546 项**（2 项按环境跳过：真实本地 TTS 服务 E2E）：
 
 ```bash
 cd app
 swift test --scratch-path .build-verify
-# Executed 525 tests, with 2 skipped, 0 failures
+# Executed 546 tests, with 2 skipped, 0 failures
 ```
 
 覆盖：MemoryStore 建表/批量写/分页/before 翻页/搜索/KV、消息溢出游标与 8 条批量阈值
@@ -797,8 +799,8 @@ profile seed、旧文件保留）、`claimUnassigned` 只复制不删除/不覆�
 config + profile 双文件加载/损坏备份/去重双写、`MemoryStore` 切换 A/B 库后会话/记忆/日志/KV
 互不可见。2026-10-28 审查修复另加回归：`_unassigned` 启动认领、`legacyMigrationDone` 门禁、
 空壳目标库替换、WAL 主库无 `-wal/-shm` 时的迁移、`MemoryStore.suspend()` 禁止隐式 open。
-当前 `swift test` 525 项通过
-（2 项按环境跳过：真实 CosyVoice3 服务 E2E）。
+当前 `swift test` **546 项**通过
+（2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 记忆 v2（2026-10-28）新增、2026-10-29 扩展到 36 项的 `CharacterMemoryTests.swift`（临时目录，不碰真实网络/数据）：
 目录 key 编码/超长哈希/特殊字符、创建角色只生成 `memory.sqlite`（不生成 `persona.md`）、
@@ -831,7 +833,7 @@ RuleEngine 白黑名单/@/关键词/冷却、Scheduler 各 repeat 的 nextFireAt
 ChatEngine 分段/角色合并/关键词分词。输出 `[selftest] PASS/FAIL/WARN` 与汇总退出码。
 
 历史 CLI 驱动实测：**63 passed / 0 failed / 0 warnings**；当前 `swift test` 为
-**525 项（523 通过 / 2 跳过）**（见 8.1；2026-11-03 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
+**546 项（544 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、
 `config.json` 无明文 Key。
 

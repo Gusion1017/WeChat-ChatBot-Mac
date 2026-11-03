@@ -31,6 +31,7 @@ final class CosyVoiceTests: XCTestCase {
         XCTAssertFalse(settings.hasCosyVoiceVoice)
         XCTAssertEqual(settings.cosyVoiceEndpoint, "http://127.0.0.1:5051")
         XCTAssertTrue(settings.cosyVoiceAutoStart)
+        XCTAssertEqual(settings.voiceComputeDevice, .gpu, "默认运行设备是 GPU（MLX）")
         XCTAssertEqual(settings.cosyVoiceSpeed, 1.0, accuracy: 0.0001)
         XCTAssertEqual(settings.effectiveCosyVoiceSpeed, 1.0, accuracy: 0.0001)
         XCTAssertEqual(settings.effectiveCosyVoiceEndpoint.absoluteString, "http://127.0.0.1:5051")
@@ -40,7 +41,7 @@ final class CosyVoiceTests: XCTestCase {
 
     func testLegacyVoiceSettingsJSONWithoutNewKeysUsesDefaults() throws {
         // 旧 config.json 的 voice 段：只有 Kokoro/ZipVoice/引擎选择相关的键，
-        // 没有 cosyVoice*。这些键已随引擎移除：解码时忽略，重新编码时不再写回。
+        // 没有 cosyVoice*。这些键已随旧引擎移除：解码时忽略，重新编码时不再写回。
         let json = """
         {
           "engine": "kokoro",
@@ -48,6 +49,7 @@ final class CosyVoiceTests: XCTestCase {
           "kokoroSpeed": 1.5,
           "cloneID": "old-clone",
           "modelDownloadConsent": true,
+          "voiceEngine": "qwen3tts",
           "replyEnabled": true,
           "replyProbability": 0.4
         }
@@ -59,6 +61,7 @@ final class CosyVoiceTests: XCTestCase {
         XCTAssertEqual(settings.effectiveCosyVoiceVoiceID, "")
         XCTAssertEqual(settings.cosyVoiceEndpoint, "http://127.0.0.1:5051")
         XCTAssertTrue(settings.cosyVoiceAutoStart)
+        XCTAssertEqual(settings.voiceComputeDevice, .gpu, "旧配置缺键时默认 GPU")
         XCTAssertEqual(settings.cosyVoiceSpeed, 1.0, accuracy: 0.0001)
         XCTAssertTrue(settings.skipHumanizeDelayForVoiceReply, "旧配置缺键时默认跳过拟人化延迟")
 
@@ -66,7 +69,7 @@ final class CosyVoiceTests: XCTestCase {
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         for removedKey in ["engine", "kokoroSpeakerID", "kokoroSpeed", "cloneID",
-                           "modelDownloadConsent"] {
+                           "modelDownloadConsent", "voiceEngine"] {
             XCTAssertNil(object[removedKey], "已移除的配置键不应再写入：\(removedKey)")
         }
     }
@@ -78,7 +81,8 @@ final class CosyVoiceTests: XCTestCase {
           "cosyVoiceVoiceID": "  loli  ",
           "cosyVoiceEndpoint": "127.0.0.1:6060",
           "cosyVoiceAutoStart": false,
-          "cosyVoiceSpeed": 9.5
+          "cosyVoiceSpeed": 9.5,
+          "voiceComputeDevice": "cpu"
         }
         """.data(using: .utf8)!
         let settings = try JSONDecoder().decode(VoiceSettings.self, from: json)
@@ -86,6 +90,7 @@ final class CosyVoiceTests: XCTestCase {
         XCTAssertEqual(settings.effectiveCosyVoiceVoiceID, "loli")
         XCTAssertEqual(settings.cosyVoiceSpeed, 2.0, accuracy: 0.0001, "语速必须收敛到 0.5–2.0")
         XCTAssertFalse(settings.cosyVoiceAutoStart)
+        XCTAssertEqual(settings.voiceComputeDevice, .cpu)
         XCTAssertTrue(settings.hasValidCosyVoiceEndpoint)
         XCTAssertEqual(settings.effectiveCosyVoiceEndpoint.absoluteString, "http://127.0.0.1:6060")
 
@@ -96,6 +101,8 @@ final class CosyVoiceTests: XCTestCase {
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertNil(object["engine"], "引擎选择已移除，不再写入")
+        XCTAssertNil(object["voiceEngine"], "引擎选择已移除，不再写入")
+        XCTAssertEqual(object["voiceComputeDevice"] as? String, "cpu")
         XCTAssertNotNil(object["cosyVoiceVoiceID"])
         XCTAssertNotNil(object["cosyVoiceEndpoint"])
         XCTAssertEqual(object["cosyVoiceAutoStart"] as? Bool, false)
@@ -103,13 +110,54 @@ final class CosyVoiceTests: XCTestCase {
 
     func testLegacyEngineValuesAreIgnored() throws {
         // 历史引擎值（kokoro / zipvoiceClone / cosyvoice / 未知值）不再有对应类型：
-        // 解码时忽略该键，CosyVoice3 是唯一引擎。
+        // 解码时忽略该键，Qwen3-TTS 是唯一模型。
         for legacy in ["kokoro", "zipvoiceClone", "cosyvoice", "whisper-tts"] {
             let json = Data(#"{"engine":"\#(legacy)","cosyVoiceVoiceID":"loli"}"#.utf8)
             let settings = try JSONDecoder().decode(VoiceSettings.self, from: json)
             XCTAssertEqual(settings.cosyVoiceVoiceID, "loli", "legacy=\(legacy)")
             XCTAssertEqual(settings.effectiveCosyVoiceVoiceID, "loli", "legacy=\(legacy)")
         }
+    }
+
+    func testVoiceComputeDeviceDefaultsLegacyInvalidAndRoundTrip() throws {
+        // 默认 GPU；rawValue 是跨进程契约（脚本 --device / COSYVOICE_DEVICE / health.device）。
+        XCTAssertEqual(VoiceSettings().voiceComputeDevice, .gpu)
+        XCTAssertEqual(VoiceComputeDevice.gpu.rawValue, "gpu")
+        XCTAssertEqual(VoiceComputeDevice.cpu.rawValue, "cpu")
+        XCTAssertEqual(VoiceComputeDevice.allCases, [.gpu, .cpu])
+        XCTAssertTrue(VoiceComputeDevice.gpu.label.contains("GPU"))
+        XCTAssertTrue(VoiceComputeDevice.cpu.label.contains("CPU"))
+        // Lead 实测：MLX CPU 后端 warmup 一句「你好。」约 244s，UI 必须如实标注极慢。
+        XCTAssertTrue(VoiceComputeDevice.cpu.label.contains("极慢"),
+                      "CPU 文案必须如实标注极慢：\(VoiceComputeDevice.cpu.label)")
+
+        // 旧配置：没有 voiceComputeDevice 键（历史 engine/voiceEngine 值只应被忽略）→ GPU。
+        let legacy = Data(
+            #"{"engine":"kokoro","voiceEngine":"qwen3tts","replyEnabled":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(VoiceSettings.self, from: legacy)
+        XCTAssertEqual(decoded.voiceComputeDevice, .gpu)
+        XCTAssertTrue(decoded.replyEnabled)
+
+        // 非法 raw 值 → 回退 GPU，不让整份 config 解码失败。
+        for invalid in ["tpu", "", "GPU "] {
+            let json = Data(#"{"voiceComputeDevice":"\#(invalid)"}"#.utf8)
+            XCTAssertEqual(
+                try JSONDecoder().decode(VoiceSettings.self, from: json).voiceComputeDevice,
+                .gpu,
+                "invalid=\(invalid)")
+        }
+
+        // 往返编码：写 rawValue，且不再写已删除的 voiceEngine 键。
+        var settings = VoiceSettings()
+        settings.voiceComputeDevice = .cpu
+        let encoded = try JSONEncoder().encode(settings)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["voiceComputeDevice"] as? String, "cpu")
+        XCTAssertNil(object["voiceEngine"], "已删除的 voiceEngine 键不应再写入")
+        XCTAssertEqual(
+            try JSONDecoder().decode(VoiceSettings.self, from: encoded).voiceComputeDevice,
+            .cpu)
     }
 
     func testInvalidCosyVoiceEndpointFallsBackToDefault() {
@@ -196,25 +244,25 @@ final class CosyVoiceTests: XCTestCase {
         XCTAssertEqual(list.voices[1].description, "")
     }
 
-    func testVoiceEngineAvailability() {
-        // CosyVoice3 是唯一引擎：安装 + 服务就绪 + 已选音色才可合成，否则直接改发文字。
+    func testVoiceAvailability() {
+        // Qwen3-TTS 是唯一模型：安装 + 服务就绪 + 已选音色才可合成，否则直接改发文字。
         XCTAssertTrue(
-            VoiceEngineAvailability.canSynthesize(
+            VoiceAvailability.canSynthesize(
                 cosyVoiceInstalled: true,
                 cosyVoiceServiceReady: true,
                 hasVoice: true))
         XCTAssertFalse(
-            VoiceEngineAvailability.canSynthesize(
+            VoiceAvailability.canSynthesize(
                 cosyVoiceInstalled: false,
                 cosyVoiceServiceReady: true,
                 hasVoice: true))
         XCTAssertFalse(
-            VoiceEngineAvailability.canSynthesize(
+            VoiceAvailability.canSynthesize(
                 cosyVoiceInstalled: true,
                 cosyVoiceServiceReady: false,
                 hasVoice: true))
         XCTAssertFalse(
-            VoiceEngineAvailability.canSynthesize(
+            VoiceAvailability.canSynthesize(
                 cosyVoiceInstalled: true,
                 cosyVoiceServiceReady: true,
                 hasVoice: false))
@@ -550,8 +598,14 @@ final class CosyVoiceTests: XCTestCase {
             home: home,
             endpoint: URL(string: "http://127.0.0.1:5151")!)
         XCTAssertEqual(environment["COSYVOICE_LOCAL_DIR"], home.path)
-        XCTAssertEqual(environment["COSYVOICE_VENV"], home.appendingPathComponent("venv").path)
+        XCTAssertEqual(environment["COSYVOICE_VENV"],
+                       home.appendingPathComponent("venv-qwen3tts").path)
+        XCTAssertEqual(environment["COSYVOICE_MODEL_DIR"],
+                       home.appendingPathComponent(
+                        "models/Qwen3-TTS-12Hz-1.7B-Base-bf16").path)
         XCTAssertEqual(environment["COSYVOICE_REFS"], home.appendingPathComponent("voices").path)
+        XCTAssertEqual(environment["COSYVOICE_DEVICE"], "gpu", "默认运行设备是 GPU")
+        XCTAssertNil(environment["COSYVOICE_ENGINE"], "单模型后不再有 engine env")
         XCTAssertEqual(environment["COSYVOICE_PORT"], "5151")
         XCTAssertEqual(environment["COSYVOICE_HOST"], "127.0.0.1")
         let serverDirectory = try XCTUnwrap(
@@ -572,17 +626,25 @@ final class CosyVoiceTests: XCTestCase {
         XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
         XCTAssertEqual(
             CosyVoiceInstallation.modelDirectory(home: home).lastPathComponent,
-            "Fun-CosyVoice3-0.5B-2512")
+            "Qwen3-TTS-12Hz-1.7B-Base-bf16")
+        XCTAssertEqual(
+            CosyVoiceInstallation.markerURL(home: home).lastPathComponent,
+            ".installed-qwen3tts")
 
         // 标记文件缺失 → 未安装。
         try FileManager.default.removeItem(at: CosyVoiceInstallation.markerURL(home: home))
         XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
 
-        // 标记回来但模型缺失 → 未安装。
+        // 标记回来但模型关键文件缺失 → 未安装（MLX：config.json + *.safetensors）。
         try Data("{}".utf8).write(to: CosyVoiceInstallation.markerURL(home: home))
+        let modelDirectory = CosyVoiceInstallation.modelDirectory(home: home)
         try FileManager.default.removeItem(
-            at: CosyVoiceInstallation.modelDirectory(home: home)
-                .appendingPathComponent("llm.pt"))
+            at: modelDirectory.appendingPathComponent("config.json"))
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+        try Data("{}".utf8).write(to: modelDirectory.appendingPathComponent("config.json"))
+        XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
+        try FileManager.default.removeItem(
+            at: modelDirectory.appendingPathComponent("model.safetensors"))
         XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
     }
 
@@ -602,18 +664,14 @@ final class CosyVoiceTests: XCTestCase {
             #!/bin/bash
             set -e
             echo "PROGRESS 0.10 检查运行环境"
-            mkdir -p "$COSYVOICE_HOME/venv/bin" "$COSYVOICE_MODEL_DIR"
-            printf '#!/bin/sh\\n' > "$COSYVOICE_HOME/venv/bin/python"
-            chmod +x "$COSYVOICE_HOME/venv/bin/python"
-            : > "$COSYVOICE_MODEL_DIR/llm.pt"
-            : > "$COSYVOICE_MODEL_DIR/flow.pt"
-            : > "$COSYVOICE_MODEL_DIR/hift.pt"
-            : > "$COSYVOICE_MODEL_DIR/speech_tokenizer_v3.onnx"
-            : > "$COSYVOICE_MODEL_DIR/campplus.onnx"
-            : > "$COSYVOICE_MODEL_DIR/cosyvoice3.yaml"
+            mkdir -p "$COSYVOICE_HOME/venv-qwen3tts/bin" "$COSYVOICE_MODEL_DIR"
+            printf '#!/bin/sh\\n' > "$COSYVOICE_HOME/venv-qwen3tts/bin/python"
+            chmod +x "$COSYVOICE_HOME/venv-qwen3tts/bin/python"
+            printf '{"model_type":"qwen3_tts"}\\n' > "$COSYVOICE_MODEL_DIR/config.json"
+            : > "$COSYVOICE_MODEL_DIR/model.safetensors"
             echo "PROGRESS 0.60 下载模型"
             echo "PROGRESS 1.00 安装完成"
-            printf '{"version":1}\\n' > "$COSYVOICE_HOME/.installed"
+            printf '{"version":1}\\n' > "$COSYVOICE_HOME/.installed-qwen3tts"
             exit 0
             """)
         setenv(CosyVoiceInstallation.installScriptEnvironmentKey, script.path, 1)
@@ -910,32 +968,49 @@ final class CosyVoiceTests: XCTestCase {
         let fixture = try makeVoicesFixture()
         addTeardownBlock { try? FileManager.default.removeItem(at: fixture) }
         let store = makeVoiceStore(voicesDirectory: fixture)
+        // 2026-11 简化：单条只保留 1 秒下限，2 秒现在合法；31 秒单条不再由
+        // prepareAudio 拒绝，而是在保存时由「合并总长 ≤30s」兜底拒绝。
         let short = try makeAudioFile(
             in: FileManager.default.temporaryDirectory, seconds: 2, amplitude: 0.5)
+        let tooShort = try makeAudioFile(
+            in: FileManager.default.temporaryDirectory, seconds: 0.5, amplitude: 0.5)
         let long = try makeAudioFile(
             in: FileManager.default.temporaryDirectory, seconds: 31, amplitude: 0.5)
         addTeardownBlock {
             try? FileManager.default.removeItem(at: short)
+            try? FileManager.default.removeItem(at: tooShort)
             try? FileManager.default.removeItem(at: long)
         }
+        // 2 秒音频 ≥1s：可以正常保存（参考文本非空 → zero_shot）。
+        let accepted = try await store.add(
+            name: "两秒", audioURL: short, referenceText: "参考", description: "")
+        XCTAssertEqual(accepted.mode, CosyVoiceManagedVoice.modeZeroShot)
+        XCTAssertEqual(try XCTUnwrap(accepted.duration), 2, accuracy: 0.1)
+        try await store.delete(id: accepted.id)
+
+        // 低于 1 秒仍拒绝。
         do {
             _ = try await store.add(
-                name: "太短", audioURL: short, referenceText: "", description: "")
-            XCTFail("2 秒音频应被拒绝")
+                name: "太短", audioURL: tooShort, referenceText: "", description: "")
+            XCTFail("0.5 秒音频应被拒绝（最短 1 秒）")
         } catch let error as CosyVoiceVoiceStoreError {
             guard case .audioTooShort = error else {
                 return XCTFail("错误类型不对：\(error)")
             }
         }
+        // 31 秒单条：prepareAudio 通过，但合并总长超过 30 秒兜底被拒绝。
         do {
             _ = try await store.add(
                 name: "太长", audioURL: long, referenceText: "", description: "")
-            XCTFail("31 秒音频应被拒绝")
+            XCTFail("31 秒单条超过 30 秒总预算，保存应被拒绝")
         } catch let error as CosyVoiceVoiceStoreError {
-            guard case .audioTooLong = error else {
+            guard case .referenceTotalTooLong(let seconds) = error else {
                 return XCTFail("错误类型不对：\(error)")
             }
+            XCTAssertEqual(seconds, 31, accuracy: 0.1)
         }
+        // 单条无上限：prepareAudio 本身不再因超长抛错。
+        XCTAssertNoThrow(try CosyVoiceVoiceStore.prepareAudio(url: long))
 
         XCTAssertTrue(CosyVoiceVoiceStore.isValidID("custom-abc-123"))
         XCTAssertFalse(CosyVoiceVoiceStore.isValidID("../evil"))
@@ -1435,21 +1510,18 @@ final class CosyVoiceTests: XCTestCase {
             }
             XCTAssertEqual(max, 5)
         }
-        do {
-            _ = try await store.add(
-                name: "部分文本",
-                references: [
-                    .newAudio(audio, text: "A"),
-                    .newAudio(audio, text: "  "),
-                ],
-                description: ""
-            )
-            XCTFail("部分填写参考文本应被拒绝")
-        } catch let error as CosyVoiceVoiceStoreError {
-            guard case .inconsistentReferenceText = error else {
-                return XCTFail("错误类型不对：\(error)")
-            }
-        }
+        // 2026-11 简化：部分片段没填文本不再拒绝，用非空文本按顺序合并。
+        let partial = try await store.add(
+            name: "部分文本",
+            references: [
+                .newAudio(audio, text: "A"),
+                .newAudio(audio, text: "  "),
+            ],
+            description: ""
+        )
+        XCTAssertEqual(partial.mode, CosyVoiceManagedVoice.modeZeroShot)
+        XCTAssertEqual(partial.referenceText, "A",
+                       "非空参考文本按顺序用换行连接")
         do {
             let tooLong = Array(
                 repeating: CosyVoiceReferenceInput.newAudio(longAudio, text: "A"), count: 3)
@@ -1506,10 +1578,14 @@ final class CosyVoiceTests: XCTestCase {
             }
         }
 
-        // 失败的校验不应留下音色。
+        // 失败的校验不应留下音色；部分文本 + 合法单条两条都会成功落盘。
         let listed = try await store.list()
         XCTAssertEqual(listed.map(\.id).prefix(3), ["girl", "loli", "onee"])
-        XCTAssertEqual(listed.count, 4, "只有「合法单条」被写入，其余校验失败不能落盘")
+        XCTAssertEqual(
+            listed.count, 5,
+            "部分文本与合法单条都会写入；只有校验失败的（零条/六条/超总长）不能落盘")
+        XCTAssertTrue(listed.contains { $0.id == partial.id })
+        XCTAssertTrue(listed.contains { $0.id == single.id })
     }
 
     func testVoiceStoreUpdateReplacesReferenceClips() async throws {
@@ -1992,7 +2068,8 @@ final class CosyVoiceTests: XCTestCase {
     // MARK: - 6.5 真实服务端到端（默认跳过；`WECHATAI_COSYVOICE_E2E=1` 手动跑）
 
     /// 拉起真实 `scripts/run_cosyvoice.sh`（复用已运行服务）并合成一句话。
-    /// 需要真实的 `_local/cosyvoice`（venv + 模型 + 音色 + `.installed`），故默认跳过。
+    /// 需要真实的 `_local/cosyvoice`（venv-qwen3tts + Qwen3 模型 + 音色 + `.installed-qwen3tts`），
+    /// 故默认跳过。
     func testRealServiceEndToEndWhenEnabled() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["WECHATAI_COSYVOICE_E2E"] == "1",
@@ -2007,7 +2084,7 @@ final class CosyVoiceTests: XCTestCase {
         }
         try XCTSkipUnless(
             CosyVoiceInstallation.isInstalled(home: home),
-            "CosyVoice3 尚未完整安装（缺 .installed/venv/模型）：\(home.path)")
+            "Qwen3-TTS 尚未完整安装（缺 .installed-qwen3tts/venv-qwen3tts/模型）：\(home.path)")
         let endpoint = URL(
             string: environment["WECHATAI_COSYVOICE_E2E_ENDPOINT"] ?? "http://127.0.0.1:5051")!
         let outputDirectory = Self.makeTempDirectory()
@@ -2029,9 +2106,15 @@ final class CosyVoiceTests: XCTestCase {
         do {
             let health = try await runtime.start(endpoint: endpoint)
             XCTAssertTrue(health.isReady)
+            XCTAssertEqual(health.engine, "qwen3tts", "唯一模型必须是 Qwen3-TTS")
+            XCTAssertTrue(health.isQwen3TTSEngine)
+            // 用户音色库可能没有内置三音色：取服务端列表里的第一个（真实参考音）。
+            let voices = try await client.voices(endpoint: endpoint)
+            let voiceID = try XCTUnwrap(
+                voices.first?.id, "本机音色库为空，无法做端到端合成")
             let raw = try await client.synthesizeRaw(
                 text: "你好呀，我是你的微信 AI 助手。",
-                voiceID: "girl",
+                voiceID: voiceID,
                 speed: 1.0,
                 timeout: 180)
             XCTAssertEqual(raw.sampleRate, 24_000)
@@ -2059,13 +2142,13 @@ final class CosyVoiceTests: XCTestCase {
         let realHome = CosyVoiceInstallation.home
         try XCTSkipUnless(
             CosyVoiceInstallation.isInstalled(home: realHome),
-            "CosyVoice3 尚未完整安装：\(realHome.path)")
+            "Qwen3-TTS 尚未完整安装：\(realHome.path)")
 
-        // 临时 home：venv/models/repo 用 symlink 复用真实安装，voices 用副本（不碰个人参考音）。
+        // 临时 home：venv-qwen3tts/models 用 symlink 复用真实安装，voices 用副本（不碰个人参考音）。
         let home = Self.makeTempDirectory()
         addTeardownBlock { try? FileManager.default.removeItem(at: home) }
         let fileManager = FileManager.default
-        for name in ["venv", "models", "repo"] {
+        for name in ["venv-qwen3tts", "models"] {
             try fileManager.createSymbolicLink(
                 at: home.appendingPathComponent(name),
                 withDestinationURL: realHome.appendingPathComponent(name))
@@ -2074,7 +2157,7 @@ final class CosyVoiceTests: XCTestCase {
             at: realHome.appendingPathComponent("voices"),
             to: home.appendingPathComponent("voices"))
         try Data(#"{"version":1}"#.utf8)
-            .write(to: home.appendingPathComponent(".installed"))
+            .write(to: home.appendingPathComponent(".installed-qwen3tts"))
 
         let endpoint = URL(string: "http://127.0.0.1:5061")!
         let outputDirectory = Self.makeTempDirectory()
@@ -2231,6 +2314,315 @@ final class CosyVoiceTests: XCTestCase {
         }
     }
 
+    // MARK: - 8. 单模型 Qwen3-TTS + GPU/CPU 运行设备
+
+    func testHealthDecodesEngineAndDeviceTolerantly() throws {
+        let withEngine = Data("""
+        {"ok":true,"ready":true,"engine":"qwen3tts","device":"gpu","model":"Qwen3-TTS"}
+        """.utf8)
+        let health = try JSONDecoder().decode(CosyVoiceHealth.self, from: withEngine)
+        XCTAssertEqual(health.engine, "qwen3tts")
+        XCTAssertTrue(health.isQwen3TTSEngine)
+        XCTAssertEqual(health.computeDeviceLabel, "GPU")
+        XCTAssertEqual(health.model, "Qwen3-TTS")
+
+        // 旧版服务缺 engine 字段 → nil，且不兼容（不能复用）。
+        let withoutEngine = Data(#"{"ok":true,"ready":true,"device":"mps"}"#.utf8)
+        let legacy = try JSONDecoder().decode(CosyVoiceHealth.self, from: withoutEngine)
+        XCTAssertNil(legacy.engine)
+        XCTAssertFalse(legacy.isQwen3TTSEngine)
+
+        // 旧版 cosyvoice3 引擎同样不可复用。
+        let oldEngine = Data(#"{"ok":true,"ready":true,"engine":"cosyvoice3"}"#.utf8)
+        XCTAssertFalse(
+            try JSONDecoder().decode(CosyVoiceHealth.self, from: oldEngine).isQwen3TTSEngine)
+
+        // 编码保留 engine/device（Console/日志/测试回放用）。
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(health)) as? [String: Any])
+        XCTAssertEqual(object["engine"] as? String, "qwen3tts")
+        XCTAssertEqual(object["device"] as? String, "gpu")
+    }
+
+    func testInstallationUsesSingleQwen3Paths() throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+        try createFakeInstall(home: home)
+
+        XCTAssertEqual(
+            CosyVoiceInstallation.venvPythonURL(home: home).path,
+            home.appendingPathComponent("venv-qwen3tts/bin/python").path)
+        XCTAssertEqual(
+            CosyVoiceInstallation.markerURL(home: home).lastPathComponent,
+            ".installed-qwen3tts")
+        XCTAssertEqual(
+            CosyVoiceInstallation.modelDirectory(home: home).lastPathComponent,
+            "Qwen3-TTS-12Hz-1.7B-Base-bf16")
+        XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
+
+        // 完整性校验：config.json + 至少一个 *.safetensors。
+        let model = CosyVoiceInstallation.modelDirectory(home: home)
+        let config = model.appendingPathComponent("config.json")
+        let weights = model.appendingPathComponent("model.safetensors")
+        try fileManager.removeItem(at: weights)
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+        try Data().write(to: weights)
+        XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
+        try fileManager.removeItem(at: config)
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+        try Data("{}".utf8).write(to: config)
+        XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
+
+        // 标记缺失 → 未安装。
+        try fileManager.removeItem(at: CosyVoiceInstallation.markerURL(home: home))
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+    }
+
+    func testScriptEnvironmentCarriesDeviceAndQwen3Paths() {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+
+        let gpu = CosyVoiceInstallation.scriptEnvironment(home: home)
+        XCTAssertEqual(gpu["COSYVOICE_DEVICE"], "gpu")
+        XCTAssertEqual(gpu["COSYVOICE_VENV"],
+                       home.appendingPathComponent("venv-qwen3tts").path)
+        XCTAssertEqual(gpu["COSYVOICE_MODEL_DIR"],
+                       home.appendingPathComponent(
+                        "models/Qwen3-TTS-12Hz-1.7B-Base-bf16").path)
+        XCTAssertEqual(gpu["COSYVOICE_REFS"],
+                       CosyVoiceInstallation.voicesDirectory(home: home).path)
+        XCTAssertNil(gpu["COSYVOICE_ENGINE"], "单模型后不再有 engine 维度参数")
+
+        let cpu = CosyVoiceInstallation.scriptEnvironment(
+            home: home,
+            endpoint: URL(string: "http://127.0.0.1:5151")!,
+            device: .cpu)
+        XCTAssertEqual(cpu["COSYVOICE_DEVICE"], "cpu")
+        XCTAssertEqual(cpu["COSYVOICE_VENV"], gpu["COSYVOICE_VENV"])
+        XCTAssertEqual(cpu["COSYVOICE_PORT"], "5151")
+        XCTAssertEqual(cpu["COSYVOICE_HOST"], "127.0.0.1")
+    }
+
+    func testInstallerLaunchArgumentsAndEstimate() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        // 预置完整安装：fake 安装脚本退出 0 后校验才能通过。
+        try createFakeInstall(home: home)
+        let script = try makeFakeInstallScript(body: "#!/bin/bash\nexit 0\n")
+        setenv(CosyVoiceInstallation.installScriptEnvironmentKey, script.path, 1)
+
+        // 约 4.7GB（模型 4.2GB + 依赖 0.5GB）。
+        XCTAssertEqual(
+            CosyVoiceInstaller.estimatedTotalBytes,
+            CosyVoiceInstaller.estimatedModelBytes
+                + CosyVoiceInstaller.estimatedDependencyBytes)
+        let totalGB = Double(CosyVoiceInstaller.estimatedTotalBytes) / 1_073_741_824
+        XCTAssertEqual(totalGB, 4.7, accuracy: 0.1, "安装体积按约 4.7GB 展示")
+
+        let process = FakeCosyVoiceProcess(pid: 7_777, running: true)
+        let launcher = FakeCosyVoiceLauncher { process }
+        let installer = CosyVoiceInstaller(launcher: launcher, home: home)
+
+        let task = Task { try await installer.install(consent: true) }
+        XCTAssertTrue(launcher.waitForLaunch(), "安装脚本应被启动")
+        XCTAssertEqual(
+            launcher.lastArguments,
+            ["--home", home.path],
+            "安装脚本只传 --home（单模型，无 --engine）")
+        XCTAssertNil(launcher.lastEnvironment["COSYVOICE_ENGINE"],
+                     "单模型后不再传 engine env")
+        XCTAssertEqual(
+            launcher.lastEnvironment["COSYVOICE_VENV"],
+            home.appendingPathComponent("venv-qwen3tts").path)
+        XCTAssertEqual(
+            launcher.lastEnvironment["COSYVOICE_MODEL_DIR"],
+            CosyVoiceInstallation.modelDirectory(home: home).path)
+
+        process.exit(0)
+        try await task.value
+
+        let snapshot = await installer.snapshot()
+        guard case .installed = snapshot.state else {
+            return XCTFail("安装后状态应为 installed，实际：\(snapshot.state)")
+        }
+        XCTAssertEqual(snapshot.estimatedBytes, CosyVoiceInstaller.estimatedTotalBytes)
+    }
+
+    func testDeleteLocalInstallKeepsSharedVoices() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        try createFakeInstall(home: home)
+        let voices = CosyVoiceInstallation.voicesDirectory(home: home)
+        let model = CosyVoiceInstallation.modelDirectory(home: home)
+        let venvPython = CosyVoiceInstallation.venvPythonURL(home: home)
+        let marker = CosyVoiceInstallation.markerURL(home: home)
+        // 用户参考音：删除安装不能动。
+        try Data("keep".utf8).write(to: voices.appendingPathComponent("keep.txt"))
+
+        let installer = CosyVoiceInstaller(home: home)
+        try await installer.deleteLocalInstall()
+
+        XCTAssertFalse(CosyVoiceInstallation.isInstalled(home: home))
+        XCTAssertFalse(fileManager.fileExists(atPath: model.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: venvPython.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: marker.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: voices.path),
+                      "删除安装必须保留共享 voices 目录")
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: voices.appendingPathComponent("keep.txt").path),
+            "删除安装必须保留用户参考音")
+        let snapshot = await installer.snapshot()
+        XCTAssertEqual(snapshot.state, .notInstalled)
+    }
+
+    func testLegacyCosyVoice3BytesAndCleanupKeepsSharedAndQwen3() throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        try createFakeInstall(home: home)
+        let qwenModel = CosyVoiceInstallation.modelDirectory(home: home)
+        let qwenPython = CosyVoiceInstallation.venvPythonURL(home: home)
+        let qwenMarker = CosyVoiceInstallation.markerURL(home: home)
+        let voices = CosyVoiceInstallation.voicesDirectory(home: home)
+        try Data("keep".utf8).write(to: voices.appendingPathComponent("keep.txt"))
+
+        // 旧版残留：.installed + repo/ + models/Fun-CosyVoice3-0.5B-2512/ + venv/。
+        try Data(#"{"version":1}"#.utf8)
+            .write(to: home.appendingPathComponent(".installed"))
+        let repo = home.appendingPathComponent("repo")
+        try fileManager.createDirectory(at: repo, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 1_000)
+            .write(to: repo.appendingPathComponent("llm.py"))
+        let legacyModel = home.appendingPathComponent("models/Fun-CosyVoice3-0.5B-2512")
+        try fileManager.createDirectory(at: legacyModel, withIntermediateDirectories: true)
+        try Data(repeating: 2, count: 2_000)
+            .write(to: legacyModel.appendingPathComponent("llm.pt"))
+        let legacyVenvBin = home.appendingPathComponent("venv/bin")
+        try fileManager.createDirectory(at: legacyVenvBin, withIntermediateDirectories: true)
+        try Data(repeating: 3, count: 500)
+            .write(to: legacyVenvBin.appendingPathComponent("python"))
+
+        let bytes = CosyVoiceInstallation.legacyCosyVoice3Bytes(home: home)
+        XCTAssertGreaterThanOrEqual(bytes, 3_500, "旧版残留体积应被累计：\(bytes)")
+        XCTAssertEqual(CosyVoiceInstallation.legacyCosyVoice3Files(home: home).count, 4)
+
+        try CosyVoiceInstallation.deleteLegacyCosyVoice3(home: home)
+        XCTAssertEqual(CosyVoiceInstallation.legacyCosyVoice3Bytes(home: home), 0)
+        for legacy in [".installed", "repo", "venv", "models/Fun-CosyVoice3-0.5B-2512"] {
+            XCTAssertFalse(
+                fileManager.fileExists(atPath: home.appendingPathComponent(legacy).path),
+                "旧文件应删除：\(legacy)")
+        }
+        // 共享音色与 Qwen3 安装保留。
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: voices.appendingPathComponent("keep.txt").path))
+        XCTAssertTrue(fileManager.fileExists(atPath: qwenModel.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: qwenPython.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: qwenMarker.path))
+        XCTAssertTrue(CosyVoiceInstallation.isInstalled(home: home))
+    }
+
+    func testRuntimeRejectsLegacyCosyVoice3Service() async throws {
+        // 旧版服务：engine=cosyvoice3 / 缺 engine 都不可复用，必须明确报错并降级。
+        let payloads: [Data] = [
+            Self.readyHealthJSON(engine: "cosyvoice3"),
+            Data(#"{"ok":true,"ready":true,"model":"Fun-CosyVoice3-0.5B-2512","device":"mps"}"#.utf8),
+        ]
+        for payload in payloads {
+            let home = Self.makeTempDirectory()
+            addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+            try createFakeInstall(home: home)
+            FakeCosyVoiceURLProtocol.setHandler { _ in
+                .http(status: 200, body: payload,
+                      headers: ["Content-Type": "application/json"])
+            }
+            let launcher = FakeCosyVoiceLauncher()
+            let runtime = CosyVoiceRuntime(
+                client: makeClient(), launcher: launcher, home: home)
+            do {
+                _ = try await runtime.start(
+                    endpoint: URL(string: "http://127.0.0.1:5051")!)
+                XCTFail("旧版 CosyVoice3 服务不能被复用")
+            } catch let error as CosyVoiceError {
+                guard case .serviceUnavailable(let reason) = error else {
+                    return XCTFail("错误类型不对：\(error)")
+                }
+                XCTAssertTrue(reason.contains("CosyVoice3"),
+                              "错误文案应提示旧版 CosyVoice3 残留：\(reason)")
+                XCTAssertTrue(reason.contains("重启 App"),
+                              "错误文案应提示重启 App：\(reason)")
+            } catch {
+                XCTFail("错误类型不对：\(error)")
+            }
+            XCTAssertEqual(launcher.launchCount, 0, "旧服务残留时不应启动新进程")
+            let snapshot = await runtime.snapshot()
+            guard case .failed = snapshot.state else {
+                return XCTFail("状态应为 failed，实际：\(snapshot.state)")
+            }
+            XCTAssertFalse(runtime.isServiceReadySnapshot)
+            await runtime.stop()
+        }
+    }
+
+    func testRuntimeLaunchArgumentsCarryDeviceAndEnvironment() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        try createFakeInstall(home: home)
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                value += 1
+                return value
+            }
+        }
+        let counter = Counter()
+        let readyJSON = Self.readyHealthJSON(engine: "qwen3tts")
+        FakeCosyVoiceURLProtocol.setHandler { _ in
+            // 第一次探测：端口空闲 → 启动进程；之后返回 qwen3 ready。
+            if counter.next() == 1 {
+                return .failure(URLError(.cannotConnectToHost))
+            }
+            return .http(status: 200, body: readyJSON,
+                         headers: ["Content-Type": "application/json"])
+        }
+        let process = FakeCosyVoiceProcess(pid: 8_123, running: true)
+        let launcher = FakeCosyVoiceLauncher { process }
+        let runtime = CosyVoiceRuntime(
+            client: makeClient(), launcher: launcher, home: home)
+        let health = try await runtime.start(
+            endpoint: URL(string: "http://127.0.0.1:5051")!,
+            device: .cpu,
+            timeout: 5)
+        defer { Task { await runtime.stop() } }
+        XCTAssertEqual(health.engine, "qwen3tts")
+        XCTAssertEqual(launcher.launchCount, 1)
+        XCTAssertEqual(
+            Array(launcher.lastArguments.suffix(2)),
+            ["--device", "cpu"],
+            "启动参数应追加 --device cpu")
+        XCTAssertTrue(launcher.lastArguments.contains("--home"))
+        XCTAssertEqual(launcher.lastEnvironment["COSYVOICE_DEVICE"], "cpu")
+        XCTAssertEqual(
+            launcher.lastEnvironment["COSYVOICE_VENV"],
+            home.appendingPathComponent("venv-qwen3tts").path,
+            "启动必须使用 venv-qwen3tts")
+        XCTAssertEqual(
+            launcher.lastEnvironment["COSYVOICE_MODEL_DIR"],
+            CosyVoiceInstallation.modelDirectory(home: home).path)
+        XCTAssertNil(launcher.lastEnvironment["COSYVOICE_ENGINE"],
+                     "单模型后不再传 engine env")
+        await runtime.stop()
+        let stopped = await runtime.snapshot()
+        XCTAssertEqual(stopped.state, .stopped)
+    }
+
     // MARK: - Helpers
 
     private func makeClient(
@@ -2258,6 +2650,7 @@ final class CosyVoiceTests: XCTestCase {
         return url
     }
 
+    /// 生成 Qwen3-TTS 的假安装：venv-qwen3tts + Qwen3 模型目录 + .installed-qwen3tts + voices。
     private func createFakeInstall(home: URL) throws {
         let fileManager = FileManager.default
         let venv = CosyVoiceInstallation.venvPythonURL(home: home)
@@ -2268,12 +2661,9 @@ final class CosyVoiceTests: XCTestCase {
 
         let modelDirectory = CosyVoiceInstallation.modelDirectory(home: home)
         try fileManager.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
-        for name in [
-            "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v3.onnx",
-            "campplus.onnx", "cosyvoice3.yaml",
-        ] {
-            try Data().write(to: modelDirectory.appendingPathComponent(name))
-        }
+        try Data(#"{"model_type":"qwen3_tts"}"#.utf8)
+            .write(to: modelDirectory.appendingPathComponent("config.json"))
+        try Data().write(to: modelDirectory.appendingPathComponent("model.safetensors"))
         try fileManager.createDirectory(
             at: CosyVoiceInstallation.voicesDirectory(home: home),
             withIntermediateDirectories: true)
@@ -2289,13 +2679,14 @@ final class CosyVoiceTests: XCTestCase {
         return url
     }
 
-    private static func readyHealthJSON() -> Data {
-        Data("""
-        {"ok":true,"ready":true,"model":"Fun-CosyVoice3-0.5B-2512",
+    private static func readyHealthJSON(engine: String? = "qwen3tts") -> Data {
+        let engineField = engine.map { #","engine":"\#($0)""# } ?? ""
+        return Data("""
+        {"ok":true,"ready":true,"model":"Qwen3-TTS-12Hz-1.7B-Base-bf16",
          "sample_rate":24000,"voices":["girl","loli","onee"],
          "voices_detail":[{"id":"girl","name":"少女"},{"id":"loli","name":"萝莉"},
                           {"id":"onee","name":"御姐"}],
-         "device":"mps"}
+         "device":"gpu"\(engineField)}
         """.utf8)
     }
 
@@ -2619,9 +3010,10 @@ final class FakeCosyVoiceProcess: CosyVoiceLaunchedProcess, @unchecked Sendable 
 }
 
 final class FakeCosyVoiceLauncher: CosyVoiceServerLaunching, @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private var launches = 0
-    private var lastArguments: [String] = []
+    private var recordedArguments: [String] = []
+    private var recordedEnvironment: [String: String] = [:]
     private let factory: () throws -> FakeCosyVoiceProcess
     private var process: FakeCosyVoiceProcess?
 
@@ -2635,6 +3027,31 @@ final class FakeCosyVoiceLauncher: CosyVoiceServerLaunching, @unchecked Sendable
         return launches
     }
 
+    /// 最近一次 launch 的参数（安装器/启动器契约断言用）。
+    var lastArguments: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedArguments
+    }
+
+    /// 最近一次 launch 的环境变量。
+    var lastEnvironment: [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedEnvironment
+    }
+
+    /// 等到至少发生一次 launch（避免测试里 sleep 竞态）。
+    func waitForLaunch(timeout: TimeInterval = 3) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while launches == 0 {
+            if !lock.wait(until: deadline) { return launches > 0 }
+        }
+        return true
+    }
+
     func launch(
         script: URL,
         arguments: [String],
@@ -2646,8 +3063,10 @@ final class FakeCosyVoiceLauncher: CosyVoiceServerLaunching, @unchecked Sendable
         created.onExit(onExit)
         lock.lock()
         launches += 1
-        lastArguments = arguments
+        recordedArguments = arguments
+        recordedEnvironment = environment
         process = created
+        lock.broadcast()
         lock.unlock()
         onLine("fake server started")
         return created

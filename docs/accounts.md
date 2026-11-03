@@ -2,7 +2,7 @@
 
 > 2026-10-27 起，App 以**当前登录的微信账号**为边界保存聊天与机器人数据：同一台 Mac 上换一个
 > 微信账号登录，聊天记录、记忆卡（角色目录）、会话设置、机器人配置、人格与定时任务自动切到该账号自己的档案；
-> AI 模型、Hook、OneBot、Keychain、CosyVoice3 安装与音色等「本机能力」仍全局共享。
+> AI 模型、Hook、OneBot、Keychain、本地 TTS 安装与音色等「本机能力」仍全局共享。
 >
 > 对应实现：`Services/WeChatAccountResolver.swift`（识别当前微信账号）、
 > `Services/AccountProfile.swift`（账号档案路径/状态/旧版迁移）、
@@ -32,7 +32,7 @@
 - `config.json` 中的 `general`（外观/菜单栏/开机启动/语言/防睡眠等）、`hook`、`onebot`、`ai`、
   `providers`。
 - Keychain API Key（service = `com.gusionw.wechatai`，account = `AIProvider.apiKeyReference`）。
-- CosyVoice3 安装、运行环境、模型与音色（`cosyvoice/`）。
+- 本地 TTS 安装、运行环境、模型与音色（`cosyvoice/`；Qwen3-TTS-1.7B 单模型）。
 - 崩溃日志与面包屑（`~/Library/Logs/WeChatAI/`）、bridge 运行日志
   （`~/Library/Logs/WeChatAI/bridge/`）、微信 App 官方备份（`backups/`）。
 
@@ -58,7 +58,7 @@
 | 通用设置 `general` | `config.json` | ❌ | 外观/菜单栏/语言/防睡眠等本机偏好 |
 | Hook / OneBot / AI 通道设置 | `config.json` | ❌ | `hook`、`onebot`、`ai`、`providers` |
 | API Key | macOS Keychain | ❌ | 删账号档案不会删除 Keychain 条目 |
-| CosyVoice3 安装、运行环境、模型与音色 | `cosyvoice/` | ❌ | 约 8GB，按本机共享 |
+| 本地 TTS 安装、运行环境、模型与音色 | `cosyvoice/` | ❌ | Qwen3-TTS-1.7B 约 4.7GB；按本机全局共享 |
 | 崩溃日志 / bridge 日志 | `~/Library/Logs/WeChatAI/` | ❌ | 文件日志不区分账号 |
 | 微信官方备份 | `backups/` | ❌ | 安装 Hook 前的完整备份 |
 | 账号指针 | `account-state.json` | 全局 | 只记录当前/最近账号，不存业务数据 |
@@ -93,7 +93,7 @@
 ├── media/                          # 旧版遗留媒体（只读保留，不迁移、不删除）
 ├── backups/                        # 微信 App 官方备份（全局）
 ├── runtime/                        # 运行期 Hook 配置（全局）
-├── cosyvoice/                      # CosyVoice3 安装：运行环境、模型与音色（全局）
+├── cosyvoice/                      # 本地 TTS 安装：Qwen3-TTS 运行环境、模型与音色（全局）
 └── chatbot.sqlite                  # 旧版单库（迁移后保留，不删除）
 ```
 
@@ -503,8 +503,8 @@ bridge `get_login_info` 确认真实账号 `<id>` 后：
 4. **删除聊天只删当前账号**。`clearMessages` / `deleteConversation` 作用于当前 active 的
    `MemoryStore`，不会跨账号删除；删除会话仍会删除该会话的旧长期记忆与总结游标，并把该会话的
    角色目录移到废纸篓（见 [memory.md](memory.md) §10）。
-5. **Keychain、CosyVoice3 安装与音色、崩溃与 bridge 日志全局**。换账号不会更换 API Key、
-   不会重新安装 CosyVoice3 运行环境/模型，也不会切换日志目录；排查问题时注意日志是全局的，
+5. **Keychain、本地 TTS 安装与音色、崩溃与 bridge 日志全局**。换账号不会更换 API Key、
+   不会重新安装本地 TTS 运行环境/模型，也不会切换日志目录；排查问题时注意日志是全局的，
    业务数据是分账号的。
 6. **旧媒体路径保留**。旧版 `media/` 不迁移；新账号的新媒体在账号目录。手动移动/删除旧目录
    会使旧消息中的媒体失效。
@@ -695,7 +695,7 @@ python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前基线：`swift test` 525 项执行（523 通过 / 2 项按环境跳过：真实 CosyVoice3 服务 E2E）。
+当前基线：`swift test` 546 项执行（544 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 ## 12. 排障
 

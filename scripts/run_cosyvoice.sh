@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# 启动 CosyVoice3 本地旁路 HTTP 服务（默认 127.0.0.1:5051）。
+# 启动本地旁路 TTS HTTP 服务（默认 127.0.0.1:5051）：Qwen3-TTS-1.7B（Apple MLX）单引擎。
+#
+# 历史命名：文件名保持 `run_cosyvoice.sh`（App 打包与调用路径是固定契约），
+# 但 v2.0.0 起只运行 Qwen3-TTS-1.7B，CosyVoice3 已移除，不再有 --engine / repo / torch。
+#
+# 推理设备（--device，env COSYVOICE_DEVICE 同义）：
+#   gpu（默认）：MLX Metal；cpu：MLX CPU（较慢）；auto：Metal 可用则 GPU，否则 CPU。
+#   设备在加载模型前由 server.py 设置；/health 的 device 返回实际 gpu/cpu。
 #
 # 默认行为（App 用）：前台 `exec` Python，SIGTERM/SIGINT 直接到达 uvicorn，
 # 不 daemonize、不写 pid 文件；stdout/stderr 原样透传给调用方。
@@ -10,13 +17,13 @@
 # 用法：
 #   scripts/run_cosyvoice.sh [--home DIR] [--host 127.0.0.1] [--port 5051]
 #                            [--model-dir DIR] [--venv DIR] [--refs DIR]
-#                            [--device cpu|mps|auto] [--threads N]
-#                            [--log-level info] [--wait-health] [--require-voices]
-#   （同名环境变量：COSYVOICE_HOST / COSYVOICE_PORT / COSYVOICE_MODEL_DIR /
-#     COSYVOICE_VENV / COSYVOICE_REFS / COSYVOICE_DEVICE / COSYVOICE_THREADS /
+#                            [--device gpu|cpu|auto] [--log-level info]
+#                            [--wait-health] [--require-voices]
+#   （同名环境变量：COSYVOICE_HOME / COSYVOICE_HOST / COSYVOICE_PORT /
+#     COSYVOICE_MODEL_DIR / COSYVOICE_VENV / COSYVOICE_REFS / COSYVOICE_DEVICE /
 #     COSYVOICE_LOCAL_DIR）
 #
-# 退出码：0 正常；2 前置检查失败/端口占用；3 脚本层错误（venv/server.py 缺失）
+# 退出码：0 正常；2 前置检查失败/端口占用；3 脚本层错误（venv/server.py 缺失、参数非法）
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,11 +48,11 @@ HOME_DIR_ARG=""
 VENV_ARG=""
 MODEL_DIR_ARG=""
 REFS_ARG=""
-CV_REPO_ARG=""
+QWEN3_MODEL_NAME="Qwen3-TTS-12Hz-1.7B-Base-bf16"
+QWEN3_VENV_DIR_NAME="venv-qwen3tts"
 HOST="${COSYVOICE_HOST:-127.0.0.1}"
 PORT="${COSYVOICE_PORT:-5051}"
-DEVICE="${COSYVOICE_DEVICE:-cpu}"
-THREADS="${COSYVOICE_THREADS:-0}"
+DEVICE="${COSYVOICE_DEVICE:-gpu}"
 LOG_LEVEL="${COSYVOICE_LOG_LEVEL:-info}"
 WAIT_HEALTH="${COSYVOICE_WAIT_HEALTH:-0}"
 WAIT_TIMEOUT="${COSYVOICE_WAIT_TIMEOUT:-90}"
@@ -56,7 +63,9 @@ REQUIRE_VOICES="${COSYVOICE_REQUIRE_VOICES:-0}"
 say() { printf '%s\n' "$*" >&2; }
 die() { local _code="${2:-2}"; printf 'ERROR: %s\n' "$1" >&2; exit "$_code"; }
 
-usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() {
+  awk 'NR > 1 { if ($0 ~ /^#/) { sub(/^# ?/, ""); print } else { exit } }' "${BASH_SOURCE[0]}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,9 +75,7 @@ while [[ $# -gt 0 ]]; do
     --model-dir) MODEL_DIR_ARG="${2:?}"; shift 2 ;;
     --venv) VENV_ARG="${2:?}"; shift 2 ;;
     --refs) REFS_ARG="${2:?}"; shift 2 ;;
-    --repo) CV_REPO_ARG="${2:?}"; shift 2 ;;
     --device) DEVICE="${2:?}"; shift 2 ;;
-    --threads) THREADS="${2:?}"; shift 2 ;;
     --log-level) LOG_LEVEL="${2:?}"; shift 2 ;;
     --wait-health) WAIT_HEALTH=1; shift ;;
     --wait-timeout) WAIT_TIMEOUT="${2:?}"; shift 2 ;;
@@ -80,11 +87,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$DEVICE" in
+  gpu|cpu|auto) ;;
+  *) die "未知推理设备：${DEVICE}（可选：gpu | cpu | auto）" 3 ;;
+esac
+
 LOCAL_DIR="${HOME_DIR_ARG:-${COSYVOICE_HOME:-${COSYVOICE_LOCAL_DIR:-$REPO_ROOT/_local/cosyvoice}}}"
-VENV="${VENV_ARG:-${COSYVOICE_VENV:-$LOCAL_DIR/venv}}"
-MODEL_DIR="${MODEL_DIR_ARG:-${COSYVOICE_MODEL_DIR:-$LOCAL_DIR/models/Fun-CosyVoice3-0.5B-2512}}"
+VENV="${VENV_ARG:-${COSYVOICE_VENV:-$LOCAL_DIR/$QWEN3_VENV_DIR_NAME}}"
+MODEL_DIR="${MODEL_DIR_ARG:-${COSYVOICE_MODEL_DIR:-$LOCAL_DIR/models/$QWEN3_MODEL_NAME}}"
 REFS="${REFS_ARG:-${COSYVOICE_REFS:-$LOCAL_DIR/voices}}"
-CV_REPO="${CV_REPO_ARG:-${COSYVOICE_REPO:-$LOCAL_DIR/repo}}"
 PY="$VENV/bin/python"
 CV_DEVTOOLS="${COSYVOICE_SERVER_DIR:-$REPO_ROOT/devtools/cosyvoice}"
 # 打包版 App：脚本与 server.py 同目录（Contents/Resources/cosyvoice/），
@@ -98,26 +109,36 @@ CURL_BIN="$(find_tool curl /usr/bin/curl /opt/homebrew/bin/curl || true)"
 # ---------------------------- 前置检查（人类可读错误） ---------------------------- #
 if [[ ! -x "$PY" ]]; then
   die "找不到 Python：$PY
-CosyVoice3 还没安装。先运行：scripts/install_cosyvoice.sh" 3
+Qwen3-TTS 还没安装。先运行：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}" 3
 fi
 if [[ ! -f "$SERVER" ]]; then
   die "找不到服务脚本：${SERVER}（仓库不完整？）" 3
 fi
+
 if [[ ! -d "$MODEL_DIR" ]]; then
-  die "模型目录不存在：$MODEL_DIR
-先运行：scripts/install_cosyvoice.sh   （约 5.4GB 下载）" 2
+  die "Qwen3-TTS 模型目录不存在：$MODEL_DIR
+先运行：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}   （约 4.2GB 下载）" 2
 fi
-missing=()
-for f in llm.pt flow.pt hift.pt speech_tokenizer_v3.onnx campplus.onnx cosyvoice3.yaml; do
-  [[ -f "$MODEL_DIR/$f" ]] || missing+=("$f")
+if [[ ! -f "$MODEL_DIR/config.json" ]]; then
+  die "Qwen3-TTS 模型缺少 config.json：$MODEL_DIR
+可能没下载完，重跑：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}" 2
+fi
+qwen_has_weights=0
+for f in "$MODEL_DIR"/*.safetensors; do
+  if [[ -f "$f" ]]; then qwen_has_weights=1; break; fi
 done
-if [[ ${#missing[@]} -gt 0 ]]; then
-  die "模型文件不全（缺 ${missing[*]}）：$MODEL_DIR
-可能没下载完，重跑：scripts/install_cosyvoice.sh" 2
+if [[ "$qwen_has_weights" -eq 0 ]]; then
+  die "Qwen3-TTS 模型缺少 *.safetensors：$MODEL_DIR
+可能没下载完，重跑：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}" 2
 fi
+if ! "$PY" -c 'import mlx_audio, fastapi, uvicorn' >/dev/null 2>&1; then
+  die "venv 里缺少 Qwen3-TTS 运行依赖（mlx-audio / fastapi / uvicorn）：$VENV
+先运行：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}" 2
+fi
+
 if [[ ! -d "$REFS" ]]; then
   die "音色目录不存在：$REFS
-安装不完整，先运行：scripts/install_cosyvoice.sh" 2
+安装不完整，先运行：scripts/install_cosyvoice.sh --home ${LOCAL_DIR}" 2
 fi
 
 # 音色数量：普通用户安装后为 0（App 不内置音色），服务仍应能启动，
@@ -149,10 +170,6 @@ else
   say "音色：$VOICE_COUNT 个（${REFS}）"
 fi
 
-# macOS 上 MPS 未实现的算子回退 CPU（server.py 也会设置，这里兜底）
-if [[ "$DEVICE" == "mps" || "$DEVICE" == "auto" ]]; then
-  export PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}"
-fi
 export PYTHONUNBUFFERED=1
 export TQDM_DISABLE=1
 
@@ -160,17 +177,15 @@ SERVER_ARGS=(
   "$SERVER"
   --host "$HOST" --port "$PORT"
   --model-dir "$MODEL_DIR" --refs "$REFS"
-  --repo "$CV_REPO" --venv "$VENV"
-  --device "$DEVICE" --threads "$THREADS" --log-level "$LOG_LEVEL"
+  --venv "$VENV" --device "$DEVICE" --log-level "$LOG_LEVEL"
 )
 
-say "CosyVoice3 sidecar: http://$HOST:$PORT （venv=$VENV, device=${DEVICE}）"
+say "Qwen3-TTS sidecar: http://$HOST:$PORT （venv=$VENV, device=${DEVICE}）"
 
 if [[ "$WAIT_HEALTH" == "1" ]]; then
   # ---------------- 监督模式：等服务健康后转前台 ----------------
   "$PY" "${SERVER_ARGS[@]}" &
   SERVER_PID=$!
-  CHILD=""
   on_signal() {
     say "收到停止信号，转发给服务进程（pid=${SERVER_PID}）……"
     kill -TERM "$SERVER_PID" 2>/dev/null || true

@@ -4,7 +4,13 @@ import Foundation
 
 // MARK: - 安装位置 / 脚本定位
 
-/// CosyVoice3 运行环境在本机的位置约定（与 `cosyvoice-runtime` 队友的脚本一致）。
+/// Qwen3-TTS-1.7B 运行环境在本机的位置约定（与 sidecar 脚本一致）。
+///
+/// 2026-11-03 起语音收敛为单模型 Qwen3-TTS-1.7B：
+/// - venv：`<home>/venv-qwen3tts`；
+/// - 模型：`<home>/models/Qwen3-TTS-12Hz-1.7B-Base-bf16`；
+/// - 安装标记：`<home>/.installed-qwen3tts`；
+/// - 音色：`<home>/voices`（与旧版共享；清理旧版时保留）。
 ///
 /// 解析顺序：
 /// 1. 环境变量 `WECHATAI_COSYVOICE_HOME`（自定义安装位置）；
@@ -19,16 +25,25 @@ enum CosyVoiceInstallation {
     static let runScriptEnvironmentKey = "WECHATAI_COSYVOICE_SCRIPT"
     static let installScriptEnvironmentKey = "WECHATAI_COSYVOICE_INSTALL_SCRIPT"
 
-    static let markerFileName = ".installed"
-    static let venvDirectoryName = "venv"
+    /// 唯一模型 Qwen3-TTS 的安装标记（旧版 `.installed` 只用于残留检测）。
+    static let markerFileName = ".installed-qwen3tts"
+    /// Qwen3-TTS 独立 venv（沿用此前与 CosyVoice3 torch venv 隔离的目录名）。
+    static let venvDirectoryName = "venv-qwen3tts"
     static let modelsDirectoryName = "models"
     static let voicesDirectoryName = "voices"
+    /// HF `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` 下载后的模型目录名。
+    static let modelDirectoryName = "Qwen3-TTS-12Hz-1.7B-Base-bf16"
 
-    /// 模型目录候选名（服务脚本默认 `Fun-CosyVoice3-0.5B-2512`）。
-    static let modelDirectoryNames = [
-        "Fun-CosyVoice3-0.5B-2512",
-        "Fun-CosyVoice3-0.5B",
-    ]
+    // MARK: 旧版 CosyVoice3 残留（只用于检测/清理，不参与运行）
+
+    /// 旧版安装标记文件名。
+    static let legacyMarkerFileName = ".installed"
+    /// 旧版 CosyVoice3 源码仓库副本目录名。
+    static let legacyRepositoryDirectoryName = "repo"
+    /// 旧版 venv 目录名。
+    static let legacyVenvDirectoryName = "venv"
+    /// 旧版 CosyVoice3 模型目录名。
+    static let legacyModelDirectoryName = "Fun-CosyVoice3-0.5B-2512"
 
     /// 判断是否为源码仓库根（打包后的 `Contents/Resources` 不算）。
     nonisolated static var repositoryRoot: URL? {
@@ -67,35 +82,37 @@ enum CosyVoiceInstallation {
     }
 
     /// 实际存在的模型目录；未安装时回退默认名（给脚本传参用）。
+    ///
+    /// 用户可能把模型放到自定义目录名：此时在 `models/` 下找第一个带 `config.json`
+    /// 的子目录，保证「已经手动准备好模型」也能被识别。
     nonisolated static func modelDirectory(home: URL? = nil) -> URL {
         let modelsRoot = (home ?? Self.home)
             .appendingPathComponent(modelsDirectoryName, isDirectory: true)
         let fileManager = FileManager.default
-        for name in modelDirectoryNames {
-            let candidate = modelsRoot.appendingPathComponent(name, isDirectory: true)
-            var isDirectory: ObjCBool = false
-            if fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
-               isDirectory.boolValue {
-                return candidate
-            }
+        let expected = modelsRoot.appendingPathComponent(modelDirectoryName, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: expected.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return expected
         }
-        // 用户自定义目录名：取第一个包含 config/yaml 的子目录。
         if let entries = try? fileManager.contentsOfDirectory(
             at: modelsRoot,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) {
             for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?
+                // 旧版 CosyVoice3 模型目录也有 config.json：跳过，避免把旧模型当成 Qwen3。
+                guard entry.lastPathComponent != legacyModelDirectoryName else { continue }
+                let isDir = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?
                     .isDirectory ?? false
-                guard isDirectory else { continue }
+                guard isDir else { continue }
                 if fileManager.fileExists(
-                    atPath: entry.appendingPathComponent("llm.pt").path) {
+                    atPath: entry.appendingPathComponent("config.json").path) {
                     return entry
                 }
             }
         }
-        return modelsRoot.appendingPathComponent(modelDirectoryNames[0], isDirectory: true)
+        return expected
     }
 
     nonisolated static func voicesDirectory(home: URL? = nil) -> URL {
@@ -106,14 +123,17 @@ enum CosyVoiceInstallation {
         (home ?? Self.home).appendingPathComponent(markerFileName)
     }
 
-    /// 已安装 = 标记文件 + venv python 可执行 + 模型关键权重存在。
+    /// 已安装 = 标记文件 + venv python 可执行 + 模型关键文件存在。
     ///
     /// 只信标记文件会在用户手动删模型后误判；只查文件又会在安装进行中被误判，
-    /// 因此标记文件由安装脚本在**全部成功**后才写，这里再补一次关键文件校验。
+    /// 因此标记文件由安装脚本在**全部成功**后才写，这里再补一次关键文件校验：
+    /// MLX 模型要求 `config.json` + 至少一个 `*.safetensors`。
     nonisolated static func isInstalled(home: URL? = nil) -> Bool {
         let home = home ?? Self.home
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: markerURL(home: home).path) else { return false }
+        guard fileManager.fileExists(atPath: markerURL(home: home).path) else {
+            return false
+        }
         guard fileManager.isExecutableFile(atPath: venvPythonURL(home: home).path) else {
             return false
         }
@@ -123,24 +143,90 @@ enum CosyVoiceInstallation {
               isDirectory.boolValue else {
             return false
         }
-        // 关键权重：llm.pt 是最大件，另外至少要有 flow/hift 之一与 tokenizer。
-        let hasLLM = fileManager.fileExists(
-            atPath: modelDirectory.appendingPathComponent("llm.pt").path)
-        guard hasLLM else { return false }
         let contents = (try? fileManager.contentsOfDirectory(
             at: modelDirectory, includingPropertiesForKeys: nil)) ?? []
         let names = Set(contents.map(\.lastPathComponent))
-        let hasFlow = names.contains("flow.pt")
-            || names.contains("flow.onnx")
-            || names.contains { $0.hasPrefix("flow") && $0.hasSuffix(".pt") }
-        let hasHift = names.contains("hift.pt")
-            || names.contains { $0.hasPrefix("hift") && $0.hasSuffix(".pt") }
-        let hasTokenizer = names.contains("speech_tokenizer_v3.onnx")
-            || names.contains { $0.hasPrefix("speech_tokenizer") }
-        let hasSpeaker = names.contains("campplus.onnx")
-        let hasConfig = names.contains("cosyvoice3.yaml")
-            || names.contains { $0.hasPrefix("cosyvoice") && $0.hasSuffix(".yaml") }
-        return hasFlow && hasHift && hasTokenizer && hasSpeaker && hasConfig
+        return names.contains("config.json")
+            && names.contains { $0.hasSuffix(".safetensors") }
+    }
+
+    /// 删除 Qwen3-TTS 的模型目录、安装标记与 venv；共享的 `voices/` 保留。
+    ///
+    /// 调用方应先停服务；旧版 CosyVoice3 残留由 `deleteLegacyCosyVoice3` 单独清理。
+    nonisolated static func removeInstallFiles(home: URL) throws {
+        let fileManager = FileManager.default
+        let modelDirectory = modelDirectory(home: home)
+        if fileManager.fileExists(atPath: modelDirectory.path) {
+            try fileManager.removeItem(at: modelDirectory)
+        }
+        let marker = markerURL(home: home)
+        if fileManager.fileExists(atPath: marker.path) {
+            try fileManager.removeItem(at: marker)
+        }
+        let venv = home.appendingPathComponent(venvDirectoryName, isDirectory: true)
+        if fileManager.fileExists(atPath: venv.path) {
+            try fileManager.removeItem(at: venv)
+        }
+    }
+
+    // MARK: 旧版 CosyVoice3 清理（可选入口，保留用户音色与 Qwen3 文件）
+
+    /// 旧版 CosyVoice3 残留文件（只返回实际存在的路径）。
+    ///
+    /// 固定四类：`<home>/.installed`、`<home>/repo`、
+    /// `models/Fun-CosyVoice3-0.5B-2512`、`<home>/venv`。
+    nonisolated static func legacyCosyVoice3Files(home: URL? = nil) -> [URL] {
+        let home = home ?? Self.home
+        let candidates = [
+            home.appendingPathComponent(legacyMarkerFileName),
+            home.appendingPathComponent(legacyRepositoryDirectoryName, isDirectory: true),
+            home.appendingPathComponent(modelsDirectoryName, isDirectory: true)
+                .appendingPathComponent(legacyModelDirectoryName, isDirectory: true),
+            home.appendingPathComponent(legacyVenvDirectoryName, isDirectory: true),
+        ]
+        let fileManager = FileManager.default
+        return candidates.filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    /// 旧版残留占用的字节数（UI 展示「清理 CosyVoice3 旧文件（约 xGB）」）。
+    nonisolated static func legacyCosyVoice3Bytes(home: URL? = nil) -> Int64 {
+        legacyCosyVoice3Files(home: home).reduce(Int64(0)) { total, url in
+            total + directorySize(at: url)
+        }
+    }
+
+    /// 只删除旧版 CosyVoice3 残留（模型/仓库/venv/标记），保留 `voices/` 与 Qwen3 文件。
+    ///
+    /// 调用方应先 `CosyVoiceRuntime.stop()`，避免删掉运行中服务的文件。
+    nonisolated static func deleteLegacyCosyVoice3(home: URL? = nil) throws {
+        let fileManager = FileManager.default
+        for url in legacyCosyVoice3Files(home: home) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    /// 目录/文件占用（逻辑大小；目录递归求和，单文件直接取 fileSize）。
+    nonisolated private static func directorySize(at url: URL) -> Int64 {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return 0
+        }
+        if !isDirectory.boolValue {
+            return Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in enumerator {
+            let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            guard values?.isRegularFile == true else { continue }
+            total += Int64(values?.fileSize ?? 0)
+        }
+        return total
     }
 
     /// `scripts/run_cosyvoice.sh`：环境变量 → 仓库 → 安装目录下的 scripts。
@@ -222,9 +308,13 @@ enum CosyVoiceInstallation {
     }
 
     /// 启动/安装脚本的环境变量（脚本自身也支持同名 env，双保险）。
+    ///
+    /// 固定契约：venv `<home>/venv-qwen3tts`、模型 `<home>/models/Qwen3-TTS-…`、
+    /// 音色 `<home>/voices`、设备 `COSYVOICE_DEVICE=gpu|cpu`。
     nonisolated static func scriptEnvironment(
         home: URL? = nil,
-        endpoint: URL? = nil
+        endpoint: URL? = nil,
+        device: VoiceComputeDevice = .gpu
     ) -> [String: String] {
         let home = home ?? Self.home
         var environment: [String: String] = [
@@ -234,6 +324,8 @@ enum CosyVoiceInstallation {
             "COSYVOICE_VENV": home.appendingPathComponent(venvDirectoryName).path,
             "COSYVOICE_MODEL_DIR": modelDirectory(home: home).path,
             "COSYVOICE_REFS": voicesDirectory(home: home).path,
+            // 运行设备契约：脚本 --device 与 env 同义，两个都传避免旧脚本丢参数。
+            "COSYVOICE_DEVICE": device.rawValue,
         ]
         if let serverDirectory {
             environment["COSYVOICE_SERVER_DIR"] = serverDirectory.path
@@ -243,6 +335,17 @@ enum CosyVoiceInstallation {
             if let port = endpoint.port { environment["COSYVOICE_PORT"] = String(port) }
         }
         return environment
+    }
+
+    /// 删除安装文件前的安全检查：只拒绝 `/`、家目录本身等危险路径。
+    ///
+    /// 与 `isSafeToDelete` 不同：这里删的是 home 下固定的
+    /// `models/Qwen3-…`、`venv-qwen3tts`、`.installed-qwen3tts` 子路径，不再删除整个 home，
+    /// 因此允许自定义安装目录（测试/高级用户）。
+    nonisolated static func isSafeToRemoveInstallFiles(home: URL) -> Bool {
+        let path = home.standardizedFileURL.path
+        guard !path.isEmpty else { return false }
+        return path != "/" && path != NSHomeDirectory()
     }
 
     /// 删除安装目录前的安全检查：只允许删 `_local/cosyvoice` 或 Application Support 下的
@@ -563,19 +666,24 @@ enum CosyVoiceHealthPolling {
 
 // MARK: - Runtime
 
-/// CosyVoice3 本地服务生命周期管理（actor）。
+/// 本地语音服务生命周期管理（actor）。
+///
+/// 2026-11-03 起只有 Qwen3-TTS-1.7B 单模型；启动时通过 `--device gpu|cpu`
+/// 与 `COSYVOICE_DEVICE` 指定运行设备，同一时间只运行一个服务进程。
 ///
 /// 职责：
 /// - 定位并启动 `scripts/run_cosyvoice.sh`（后台 Process，前台 exec 到 Python）；
 /// - 采集服务日志（设置页展示最后 N 行），健康轮询 ≤90s；
 /// - 停止（SIGTERM → 5s → SIGKILL）、崩溃检测（5s 一次健康检查）；
 /// - 已安装 + 服务健康的状态以 nonisolated 快照暴露给回复决策（`isServiceReadySnapshot`）；
+/// - 复用已有服务前校验 `/health.engine` 必须是 `qwen3tts`：旧版 CosyVoice3 服务残留时
+///   明确报错并提示用户退出旧版/重启 App（不悄悄复用）；
 /// - App 正常退出时尽力停止子进程（`NSApplication.willTerminateNotification`）。
 actor CosyVoiceRuntime {
     static let shared = CosyVoiceRuntime()
 
     static let defaultPort = 5051
-    /// 启动等待上限：首次加载 0.5B 模型在 M3 Max 上约 20–60s。
+    /// 启动等待上限：首次加载 Qwen3-TTS-1.7B 在 M 系芯片上约 20–60s。
     static let startupTimeout: TimeInterval = 90
     static let healthPollInterval: TimeInterval = 0.5
     static let probeTimeout: TimeInterval = 1.5
@@ -593,6 +701,8 @@ actor CosyVoiceRuntime {
 
     private var state: CosyVoiceServiceState = .unknown
     private var currentEndpoint: URL?
+    /// 当前/最近一次启动/复用的运行设备（仅用于停止日志）。
+    private var currentDevice: VoiceComputeDevice = .gpu
     private var process: (any CosyVoiceLaunchedProcess)?
     private var ownsProcess = false
     private var lastExitStatus: Int32?
@@ -617,7 +727,7 @@ actor CosyVoiceRuntime {
 
     // MARK: 只读快照（nonisolated，供回复决策同步读取）
 
-    /// 已安装 + 最近一次健康检查通过。
+    /// 已安装 + 最近一次健康检查通过（且运行的是 Qwen3-TTS）。
     ///
     /// 回复决策在 `@MainActor` 上同步读取；真正的健康检查在后台 actor 里推进，
     /// 这里只是最近一次结果的快照（服务崩溃后最多 5 秒内被监控置为 false）。
@@ -644,19 +754,25 @@ actor CosyVoiceRuntime {
     // MARK: 生命周期
 
     /// 启动服务（幂等：已在运行直接返回；并发调用复用同一个启动任务）。
+    ///
+    /// `device` 会写入启动参数（`--device`）与环境变量（`COSYVOICE_DEVICE`）；
+    /// 若端口上已有服务且不是 Qwen3-TTS，会明确报错而不是悄悄复用旧引擎。
     func start(
         endpoint: URL,
+        device: VoiceComputeDevice = .gpu,
         timeout: TimeInterval = CosyVoiceRuntime.startupTimeout
     ) async throws -> CosyVoiceHealth {
         if state.isRunning, currentEndpoint == endpoint,
            let health = state.health {
-            return health
+            return try validatedHealth(health)
         }
         if let startTask {
-            return try await startTask.value
+            let health = try await startTask.value
+            return try validatedHealth(health)
         }
         let task = Task<CosyVoiceHealth, Error> {
-            try await self.performStart(endpoint: endpoint, timeout: timeout)
+            try await self.performStart(
+                endpoint: endpoint, device: device, timeout: timeout)
         }
         startTask = task
         defer { startTask = nil }
@@ -677,7 +793,7 @@ actor CosyVoiceRuntime {
         ownsProcess = false
         CosyVoiceProcessRegistry.clear(role: .service)
         if wasOwned, let current {
-            appendLog("停止 CosyVoice3 服务（pid \(current.pid)）")
+            appendLog("停止本地语音服务（\(currentDevice.rawValue)，pid \(current.pid)）")
             current.terminate()
             var waited: TimeInterval = 0
             while current.isRunning, waited < Self.stopGraceSeconds {
@@ -700,11 +816,19 @@ actor CosyVoiceRuntime {
     }
 
     /// 只探测、不启动（回复路径用：1.5s 内给出「运行中/加载中/未运行/端口异常」）。
+    ///
+    /// 运行中的服务必须是 Qwen3-TTS；旧版 CosyVoice3 服务残留（engine 为空或
+    /// `cosyvoice3`）时进入 `.failed` 并清掉就绪缓存，回复路径据此明确降级文字。
     func quickStatus(endpoint: URL) async -> CosyVoiceServiceState {
         let result = await probe(endpoint: endpoint)
         switch result {
         case .running(let health):
-            applyRunning(health: health, endpoint: endpoint, owned: ownsProcess)
+            do {
+                let matched = try validatedHealth(health)
+                applyRunning(health: matched, endpoint: endpoint, owned: ownsProcess)
+            } catch {
+                // validatedHealth 已把 state/cache 置为失败，这里直接返回。
+            }
             return state
         case .loading(let message):
             if !state.isRunning {
@@ -726,7 +850,11 @@ actor CosyVoiceRuntime {
     }
 
     /// 设置页的「重新检测」：探测并更新状态；已安装但未运行时保持 stopped。
-    func refresh(endpoint: URL) async -> CosyVoiceRuntimeSnapshot {
+    func refresh(
+        endpoint: URL,
+        device: VoiceComputeDevice = .gpu
+    ) async -> CosyVoiceRuntimeSnapshot {
+        currentDevice = device
         _ = await quickStatus(endpoint: endpoint)
         return snapshot()
     }
@@ -735,26 +863,30 @@ actor CosyVoiceRuntime {
 
     private func performStart(
         endpoint: URL,
+        device: VoiceComputeDevice,
         timeout: TimeInterval
     ) async throws -> CosyVoiceHealth {
         guard CosyVoiceInstallation.isInstalled(home: home) else {
             state = .stopped
+            appendLog("Qwen3-TTS 尚未安装，无法启动本地服务")
             throw CosyVoiceError.notInstalled
         }
         currentEndpoint = endpoint
+        currentDevice = device
         expectedTermination = false
         lastExitStatus = nil
 
-        // 1) 已有服务（可能是上次 App 遗留/用户手动启动）：直接复用。
-        // 2) 正在加载：等它 ready，不重复起进程（避免端口冲突）。
+        // 1) 已有服务（可能是上次 App 遗留/用户手动启动）：校验是 Qwen3-TTS 后复用。
+        // 2) 正在加载：等它 ready，不重复起进程（避免端口冲突）；ready 后再校验引擎。
         switch await probe(endpoint: endpoint) {
         case .running(let health):
-            appendLog("检测到已运行的 CosyVoice3 服务，直接复用")
-            applyRunning(health: health, endpoint: endpoint, owned: false)
+            let matched = try validatedHealth(health)
+            appendLog("检测到已运行的 Qwen3-TTS 服务，直接复用")
+            applyRunning(health: matched, endpoint: endpoint, owned: false)
             startMonitor(endpoint: endpoint)
-            return health
+            return matched
         case .loading(let message):
-            appendLog("检测到 CosyVoice3 服务正在加载，等待就绪：\(message)")
+            appendLog("检测到本地服务正在加载，等待就绪：\(message)")
             state = .starting(message.isEmpty ? "服务加载模型中…" : message)
             CosyVoiceRuntimeCache.setReady(false)
             let outcome = await CosyVoiceHealthPolling.waitUntilReady(
@@ -765,7 +897,7 @@ actor CosyVoiceRuntime {
             )
             return try finishStartup(
                 outcome, endpoint: endpoint, processStarted: false,
-                timeout: timeout
+                device: device, timeout: timeout
             )
         case .notRunning:
             break // 端口空闲，继续启动进程。
@@ -785,10 +917,14 @@ actor CosyVoiceRuntime {
         let port = endpoint.port ?? Self.defaultPort
         let host = endpoint.host ?? "127.0.0.1"
         // `--home` 优先于 env：venv/模型/音色/标记都落在 App 指定的安装目录。
-        let arguments = ["--home", home.path, "--port", String(port), "--host", host]
-        let environment = CosyVoiceInstallation.scriptEnvironment(home: home, endpoint: endpoint)
+        let arguments = [
+            "--home", home.path, "--port", String(port), "--host", host,
+            "--device", device.rawValue,
+        ]
+        let environment = CosyVoiceInstallation.scriptEnvironment(
+            home: home, endpoint: endpoint, device: device)
         appendLog("启动服务：\(script.lastPathComponent) \(arguments.joined(separator: " "))")
-        state = .starting("正在启动本地服务…")
+        state = .starting("正在启动本地语音服务（\(device.label)）…")
         CosyVoiceRuntimeCache.setReady(false)
 
         let launched: any CosyVoiceLaunchedProcess
@@ -808,7 +944,7 @@ actor CosyVoiceRuntime {
             state = .failed(error.errorDescription ?? "启动失败")
             throw error
         } catch {
-            let reason = "无法启动 CosyVoice3 服务：\(error.localizedDescription)"
+            let reason = "无法启动本地语音服务：\(error.localizedDescription)"
             state = .failed(reason)
             throw CosyVoiceError.serviceUnavailable(reason)
         }
@@ -825,7 +961,7 @@ actor CosyVoiceRuntime {
         )
         return try finishStartup(
             outcome, endpoint: endpoint, processStarted: true,
-            timeout: timeout
+            device: device, timeout: timeout
         )
     }
 
@@ -833,14 +969,23 @@ actor CosyVoiceRuntime {
         _ outcome: CosyVoiceHealthPolling.Outcome,
         endpoint: URL,
         processStarted: Bool,
+        device: VoiceComputeDevice,
         timeout: TimeInterval
     ) throws -> CosyVoiceHealth {
         switch outcome {
         case .ready(let health):
-            applyRunning(health: health, endpoint: endpoint, owned: processStarted)
+            let matched: CosyVoiceHealth
+            do {
+                matched = try validatedHealth(health)
+            } catch {
+                if processStarted { teardownSpawnedProcess() }
+                throw error
+            }
+            applyRunning(health: matched, endpoint: endpoint, owned: processStarted)
             startMonitor(endpoint: endpoint)
-            appendLog("服务就绪：model=\(health.model ?? "?") device=\(health.device ?? "?")")
-            return health
+            appendLog("服务就绪：engine=\(matched.engine ?? "?")"
+                + " model=\(matched.model ?? "?") device=\(matched.computeDeviceLabel ?? device.rawValue)")
+            return matched
         case .cancelled:
             teardownSpawnedProcess()
             state = .stopped
@@ -855,7 +1000,7 @@ actor CosyVoiceRuntime {
         case .timedOut:
             teardownSpawnedProcess()
             let lastLog = logLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-            let message = "服务启动超时（\(Int(timeout)) 秒）"
+            let message = "Qwen3-TTS 服务启动超时（\(Int(timeout)) 秒）"
                 + (lastLog.map { "；最后日志：\($0)" } ?? "")
             state = .failed(message)
             CosyVoiceRuntimeCache.setReady(false)
@@ -867,7 +1012,7 @@ actor CosyVoiceRuntime {
     private func explainStartupFailure(_ detail: String) -> String {
         var message = detail
         if detail.contains("EADDRINUSE") || detail.contains("address already in use") {
-            message = "端口已被其他程序占用，请在设置里修改 CosyVoice3 服务端口"
+            message = "端口已被其他程序占用，请在设置里修改本地语音服务端口"
                 + "（原始错误：\(detail)）"
         }
         if let status = lastExitStatus, !detail.contains("退出码") {
@@ -877,6 +1022,7 @@ actor CosyVoiceRuntime {
            !message.contains(lastLog) {
             message += "；最后日志：\(lastLog)"
         }
+        appendLog("启动失败：\(message)")
         return message
     }
 
@@ -898,6 +1044,29 @@ actor CosyVoiceRuntime {
     }
 
     // MARK: 状态推进
+
+    /// 采用已有健康结果前校验引擎：唯一受支持的是 Qwen3-TTS（`engine=qwen3tts`）。
+    ///
+    /// - 旧版服务（engine 缺失/为空）或 `cosyvoice3` 残留 → 明确报错并提示退出旧版/重启，
+    ///   不悄悄复用（状态置 failed、清掉就绪缓存）；
+    /// - 其他非预期引擎 → 同样拒绝，避免版本错配时用错模型。
+    private func validatedHealth(_ health: CosyVoiceHealth) throws -> CosyVoiceHealth {
+        let raw = (health.engine ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if health.isQwen3TTSEngine {
+            return health
+        }
+        let reason: String
+        if raw.isEmpty || raw == "cosyvoice3" {
+            reason = CosyVoiceServiceContract.legacyServiceHint
+        } else {
+            reason = "本地服务上报的引擎「\(raw)」不是 Qwen3-TTS；"
+                + "请先停止本地语音服务或重启 App"
+        }
+        state = .failed(reason)
+        CosyVoiceRuntimeCache.setReady(false)
+        appendLog("拒绝复用本地服务：\(reason)")
+        throw CosyVoiceError.serviceUnavailable(reason)
+    }
 
     private func applyRunning(
         health: CosyVoiceHealth,
@@ -963,6 +1132,13 @@ actor CosyVoiceRuntime {
         }
         switch await probe(endpoint: endpoint) {
         case .running(let health):
+            guard health.isQwen3TTSEngine else {
+                // 端口上的服务被换成了旧版/其他引擎：立刻失效，避免继续用它合成。
+                let reason = CosyVoiceServiceContract.legacyServiceHint
+                state = .failed(reason)
+                CosyVoiceRuntimeCache.setReady(false)
+                return false
+            }
             state = .running(health)
             CosyVoiceRuntimeCache.setReady(true)
             return true
@@ -1025,6 +1201,10 @@ actor CosyVoiceRuntime {
 // MARK: - 健康快照缓存
 
 /// `nonisolated` 只读快照：回复决策在 MainActor 同步读取「服务是否就绪」。
+///
+/// 2026-11-03 起只有 Qwen3-TTS 单模型：缓存为 true 意味着「已安装 + 服务就绪 +
+/// `/health.engine == qwen3tts`」三者同时成立（由 `CosyVoiceRuntime` 校验后写入），
+/// 旧版 CosyVoice3 服务不会被置为就绪。
 enum CosyVoiceRuntimeCache {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var ready = false

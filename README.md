@@ -40,7 +40,7 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
   聊天记录清理在具体会话内操作（只删本地消息，不动记忆卡/全量记录），不开放微信 `/记忆` 指令。
   详见 [`docs/memory.md`](docs/memory.md)
 - **多微信账号数据隔离**：聊天记录、记忆卡（角色目录）、会话设置、机器人配置、人格、定时任务与新媒体
-  按当前微信账号自动切换；AI 模型、Hook、OneBot、Keychain、CosyVoice3 安装与音色、文件日志全局共享。
+  按当前微信账号自动切换；AI 模型、Hook、OneBot、Keychain、本地 TTS 安装与音色、文件日志全局共享。
   升级旧版时旧单库/旧媒体只复制保留、不删除；运行中换号会停止机器人，需手动重新启动。
   详见 [`docs/accounts.md`](docs/accounts.md)
 - **拟人化延迟**、回复进度倒计时、防睡眠、定时消息、实时会话看板、会话重命名/置顶/删除聊天（仅本机）、运行日志
@@ -52,11 +52,11 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
   （AI 模型页配置，可单独指定视觉通道/模型）对近期入站图片生成文字描述，作为回复上下文，
   描述显示在图片下方；引用图片时会把被引用原图的内容描述带入本轮回复
 - **语音转写（本地）**：收到的语音消息经 Apple 本地 Speech 框架（SpeechAnalyzer）转成文字，
-  气泡展示/进上下文与记忆，可逐项关闭；**语音回复（本地 TTS）**：唯一引擎为 CosyVoice3
-  （本地大模型旁路 Fun-CosyVoice3-0.5B，需用户显式安装约 8GB；**App 不内置任何音色**），
-  可在「管理音色」导入 1–5 条参考音（每条 5–30s、合计 ≤30s；多条参考文本需同时填写或
-  同时留空）新增/编辑/删除/试听，支持语速、语音时长/概率/对等/短回复设置；
-  CosyVoice3 未安装、服务未启动或合成失败时本条改发文字；
+  气泡展示/进上下文与记忆，可逐项关闭；**语音回复（本地 TTS）**唯一模型为 Qwen3-TTS-1.7B
+  （Apple MLX，约 4.7GB；默认 GPU，可切 CPU（实验性、极慢））；**App 不内置任何音色**，
+  可在「管理音色」导入 1–5 段参考音（常见格式均可，每段 ≥1s、合计 ≤30s，超长自动截取；
+  参考文本默认自动转写、可修改），新增/编辑/删除/试听，支持语音时长/概率/对等/短回复设置；
+  模型未安装、服务未启动、旧版服务仍在或合成失败/超时时本条改发文字；
   已确定改发语音时默认跳过拟人化延迟（可关闭）；语音设置位于「机器人」页。
   > 4.2.0.5 已真机打通语音**下载/转写与发送**；出站使用官方 SILK SDK 的 24k WeChat 兼容编码。
   > 首次启用/微信重启后需手动发一条文字 + 一条语音捕获句柄，bridge 重启自动恢复；
@@ -72,14 +72,14 @@ human-like replies with DeepSeek / any OpenAI-compatible model.
 
 | 模块 | 状态 |
 | --- | --- |
-| SwiftUI App / Swift 核心 | ✅ 525 项测试（2 项按环境跳过：真实 CosyVoice3 服务 E2E）；4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 文本真机 E2E |
+| SwiftUI App / Swift 核心 | ✅ 546 项测试（2 项按环境跳过：真实本地 TTS 服务 E2E；含 GPU/CPU 与参考音导入）；4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 文本真机 E2E |
 | OneBot bridge（Go） | ✅ 构建 / 鉴权 / 真机附加 / 8 个 `_test.go` · 63 顶层 + 97 子测试通过 |
 | 首启向导 / 安装 | ✅ CLT 检测与安装引导、微信版本 / Hook 预检、备份约 665MB（磁盘需 ≥2.5GB） |
 | 微信 4.1.12.53 | ✅ legacy 收发 + 出站发送 |
 | 微信 4.1.15.55 | ✅ Message finalizer 接收 + R3 文本发送（首次需在本机微信手动发一条消息捕获句柄） |
 | 微信 4.2.0.5 | ✅ 真机验证（2026-10-22/23）：私聊/自消息入站、通讯录、R3 文本发送（含 bridge 重启句柄恢复）、**图片获取**（自然分片优先/按需触发 + 解密，HEVC 走缩略图）；群聊 @ / 拍一拍沿用既有逻辑未单独复测 |
 | 微信 4.2.0.9 | ✅ 适配并完成文本真机验证（2026-10-27）：新增 `hook/versions/4_2_0_9_mac.json`、版本门禁与脚本默认目标；Gadget 注入/重签、通讯录解密、入站事件、R3 文本发送均通过；语音发送与媒体/群聊 @ 未复测 |
-| 微信 4.2.0.12 | ✅ 适配并完成真机验证（2026-11-02）：新增 `hook/versions/4_2_0_12_mac.json`，版本门禁、安装/管理脚本默认目标、R3 版本列表与 `run_bridge.sh` 默认版本文件同步更新；Gadget 注入/重签（保留 sandbox）、gadget 27042、基址解析、Message finalizer、classA/service vptr、slot13、通讯录（29 联系人 / 1 群）、入站（私聊/群聊文本、图片、语音、appmsg、拍一拍）与 **R3 文本发送**（slot13 返回 0 / worker result=1）均通过；语音发送与图片获取下载未复测 |
+| 微信 4.2.0.12 | ✅ 适配并完成真机验证（2026-11-02）：新增 `hook/versions/4_2_0_12_mac.json`，版本门禁、安装/管理脚本默认目标、R3 版本列表与 `run_bridge.sh` 默认版本文件同步更新；Gadget 注入/重签（保留 sandbox）、gadget 27042、基址解析、Message finalizer、classA/service vptr、slot13、通讯录（联系人与群聊）、入站（私聊/群聊文本、图片、语音、appmsg、拍一拍）与 **R3 文本发送**（slot13 返回 0 / worker result=1）均通过；语音发送与图片获取下载未复测 |
 
 环境：Apple Silicon、macOS 26+；微信须为 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365)
 之一，默认位于 `/Applications/WeChat.app` 且当前用户可写；**安装 Hook 需 Xcode Command Line Tools**
@@ -97,8 +97,8 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 ### 快速开始
 
-- **普通用户**：下载 [`WeChat-AI-2.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip.sha256)），
+- **普通用户**：下载 [`WeChat-AI-3.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip.sha256)），
   按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -157,7 +157,7 @@ App 内可在 设置 → Hook → 还原官方微信 一键还原（还原前先
 ### 目录结构
 
 ```
-app/        SwiftUI App（SwiftPM）+ 525 项测试
+app/        SwiftUI App（SwiftPM）+ 546 项测试
 bridge/     Go OneBot 桥接（GPL-3.0 衍生，改动见 NOTICE）；silkenc/ SILK 编码，testdata/ 测试样本
 hook/       script.js（唯一事实来源）与版本地址表
 tools/      Hook 安装、备份、还原
@@ -180,9 +180,9 @@ bash scripts/package_release.sh     # Releases 用 zip + sha256
 make release                        # 同上：构建 → 打包 → 签名校验 → sha256
 ```
 
-发布产物为 `dist/WeChat-AI-2.1.1.zip`（约 65MB）与 `.sha256`。打包脚本会自动
+发布产物为 `dist/WeChat-AI-3.0.0.zip`（约 65MB）与 `.sha256`。打包脚本会自动
 `codesign --verify --strict`；`spctl -a -vv` 对 ad-hoc 未公证包预期返回 `rejected`（属正常），
-分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-2.1.1.zip.sha256` 校验。
+分发前在 `dist/` 内用 `shasum -a 256 -c WeChat-AI-3.0.0.zip.sha256` 校验。
 
 改了 `hook/script.js` 记得跑 `bash scripts/sync_hook_script.sh`。接口 / 行为变更先改 `docs/` 再改代码。
 GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、副本一致、无构建产物）。
@@ -197,7 +197,8 @@ GitHub Actions 只跑 Linux 可完成的检查（文档链接、脚本语法、�
 
 - **语音功能**：入站下载/转写与出站发送均已真机验证；出站用官方 SILK SDK 的 24k WeChat 兼容编码。
   首次启用或微信重启后需手动发一条文字 + 一条语音捕获句柄；bridge 启动 60 秒内 CdnManager 未就绪时会降级。
-  语音回复唯一引擎 CosyVoice3 需用户显式安装约 8GB（未安装/服务未启动/合成失败时本条改发文字）；
+  语音回复唯一模型为 Qwen3-TTS-1.7B（约 4.7GB），需用户显式安装；默认 GPU，CPU 模式极慢、
+  通常超时改发文字（未安装/服务未启动/旧版服务仍在/合成失败时本条改发文字，不做跨模型回退）；
   系统中文语音资源可能需在系统设置下载。
   详见 [`docs/voice.md`](docs/voice.md)。
 - **权限**：首次读取微信容器会触发「App 数据」授权，拒绝则图片/语音相关功能与 `image_path` 检测失败；
@@ -252,7 +253,7 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
   no WeChat `/memory` command. See [`docs/memory.md`](docs/memory.md)
 - **Multi-account data isolation**: chats, memory cards (character directories), conversation
   settings, bot config, personas, schedules and new media automatically follow the current WeChat
-  account, while AI models, hook, OneBot, Keychain, the CosyVoice3 install and voices, and file logs stay global.
+  account, while AI models, hook, OneBot, Keychain, the local TTS install and voices, and file logs stay global.
   Upgrading copies the legacy database/media without deleting them; a running bot stops on account
   switch and must be restarted manually. See [`docs/accounts.md`](docs/accounts.md)
 - **Human-like delay**, reply progress countdown, sleep prevention, scheduled messages, live
@@ -269,13 +270,13 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
   brings the referenced image's description into the current reply.
 - **Voice transcription (local)**: incoming voice messages are transcribed on-device with Apple's
   Speech framework (SpeechAnalyzer) for bubbles/context/memory, each part toggleable; **voice replies
-  (local TTS)** use CosyVoice3 as the only engine (local LLM sidecar, Fun-CosyVoice3-0.5B, ~8 GB
-  install the user must explicitly perform; **the app ships no voices**). Add 1–5 of your own
-  reference clips (5–30s each, ≤30s combined; multiple reference texts must be all filled or all
-  empty) in "Manage Voices" to create/edit/delete/preview a voice; speed, duration/probability/
-  mirroring are configurable. If CosyVoice3 is not installed, its local service is not running, or
-  synthesis fails, that reply is sent as text instead. Voice replies skip the humanize delay by
-  default (toggleable in voice settings).
+  (local TTS)** use Qwen3-TTS-1.7B as the only model (Apple MLX, ~4.7 GB; GPU by default, CPU
+  experimental and very slow); **the app ships no voices**. Add 1–5 of your own reference clips (any
+  decodable format, ≥1s each, ≤30s combined with automatic trimming; reference text is auto-transcribed
+  by default and editable) in "Manage Voices" to create/edit/delete/preview a voice; duration/
+  probability/mirroring are configurable. If the model is not installed, its local service is not
+  running, a legacy service is still running, or synthesis fails/times out, that reply is sent as
+  text instead. Voice replies skip the humanize delay by default (toggleable in voice settings).
   > Voice download/transcription and sending are verified on WeChat 4.2.0.5. Outbound uses the official SILK SDK
   > with WeChat-compatible 24k encoding. Handle capture is documented in [`docs/voice.md`](docs/voice.md).
 - **4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 native text sending** (toggle in Settings, auto-queues without a send handle);
@@ -292,7 +293,7 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
 
 | Component | Status |
 | --- | --- |
-| SwiftUI app / Swift core | ✅ 525 tests (2 environment-gated skips: live CosyVoice3 service E2E); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 |
+| SwiftUI app / Swift core | ✅ 546 tests (2 environment-gated skips: live local-TTS service E2E; includes GPU/CPU + reference-import coverage); text E2E on 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 |
 | OneBot bridge (Go) | ✅ builds / auth / device attach / 8 `_test.go` files · 63 top-level + 97 subtests passing |
 | First-run wizard / install | ✅ CLT detection and install guidance, WeChat version / hook preflight, ~665MB backup (needs ≥2.5GB disk) |
 | WeChat 4.1.12.53 | ✅ legacy send + receive |
@@ -320,8 +321,8 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-2.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v2.1.1/WeChat-AI-2.1.1.zip.sha256))
+  [`WeChat-AI-3.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.0.0/WeChat-AI-3.0.0.zip.sha256))
   and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
@@ -386,7 +387,7 @@ remain in the known-supported list and install directly (their version files are
 ### Repository Layout
 
 ```
-app/        SwiftUI app (SwiftPM) + 525 tests
+app/        SwiftUI app (SwiftPM) + 546 tests
 bridge/     Go OneBot bridge (GPL-3.0 derivative, changes listed in NOTICE); silkenc/ official SILK encoder, testdata/
 hook/       script.js (single source of truth) and version address tables
 tools/      hook install, backup and restore
@@ -409,10 +410,10 @@ bash scripts/package_release.sh     # release zip + sha256
 make release                        # same: build → package → signature check → sha256
 ```
 
-The release artifacts are `dist/WeChat-AI-2.1.1.zip` (~65MB) and `.sha256`. Packaging runs
+The release artifacts are `dist/WeChat-AI-3.0.0.zip` (~65MB) and `.sha256`. Packaging runs
 `codesign --verify --strict`; `spctl -a -vv` reports `rejected` for an ad-hoc, non-notarized bundle
 (that is expected). Verify before publishing with
-`cd dist && shasum -a 256 -c WeChat-AI-2.1.1.zip.sha256`.
+`cd dist && shasum -a 256 -c WeChat-AI-3.0.0.zip.sha256`.
 
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`. Change `docs/` before code
 for interface or behaviour changes. GitHub Actions only runs Linux-friendly checks (docs links,
@@ -430,9 +431,11 @@ script syntax, copy equality, no build artifacts).
 
 - **Voice features**: inbound download/transcription and outbound sending are verified; outbound uses the
   official SILK SDK with WeChat-compatible 24k encoding. Handle capture and the 60s bridge warmup are documented
-  in [`docs/voice.md`](docs/voice.md). Voice replies use CosyVoice3 as the only engine and require a
-  user-initiated ~8 GB install (if it is not installed, its service is not running, or synthesis fails,
-  that reply is sent as text); system Chinese voice assets may need downloading in System Settings.
+  in [`docs/voice.md`](docs/voice.md). Voice replies use Qwen3-TTS-1.7B as the only model (~4.7 GB),
+  requiring a user-initiated install; GPU is the default, CPU is experimental and usually times out
+  (if the model is not installed, its service is not running, a legacy service is still running, or
+  synthesis fails, that reply is sent as text — no cross-model fallback); system Chinese voice assets
+  may need downloading in System Settings.
 - **Permissions**: the first read of WeChat's container triggers the "App Data" permission — denying it
   breaks image/voice features and `image_path` detection. Patching the WeChat bundle may require "App
   Management". The app never asks for microphone, speech-recognition or automation access.

@@ -6,6 +6,28 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-11-04
+
+### 变更
+
+- **语音模型收敛为 Qwen3-TTS-1.7B（2026-11-04，破坏性）**：移除 CosyVoice3 引擎、安装与 UI 选择器；
+  Qwen3-TTS-1.7B（Apple MLX）成为唯一语音模型。运行环境改为 `venv-qwen3tts`，模型
+  `Qwen3-TTS-12Hz-1.7B-Base-bf16`（约 4.2GB）+ 依赖约 0.5GB，合计约 4.7GB；安装/运行脚本不再有
+  `--engine`，不再 clone 仓库或安装 torch。旧配置 `voiceEngine` 解码时忽略；旧 CosyVoice3 文件
+  （模型/repo/旧 venv/标记）不再使用，设置页检测到残留时提供「清理旧版语音文件」入口（保留音色）。
+  服务契约升至 v2.0.0，`/health` 只报 `engine=qwen3tts` 与实际 `device`。
+- **运行设备 GPU/CPU（2026-11-04）**：语音设置新增「运行设备」选择，默认 GPU（MLX Metal，热态
+  RTF≈0.54–0.78）；CPU 为 MLX CPU 后端，实测 1.04s 音频合成约 644s（RTF≈619），仅建议排障/
+  无 GPU 环境使用，服务端自动跳过 CPU 预热，App 180s 合成超时后按既有策略改发文字。
+- **参考音导入简化（2026-11-03）**：去掉扩展名白名单（wav/mp3/m4a/aac/aiff/flac 等可解码即可）；
+  单段只需 ≥1 秒，超长音频按剩余总预算自动截取（合并 prompt 仍 ≤30 秒）；导入/更换后默认自动
+  转写参考文本（可关、可改），多条文本不再要求「全填/全空」，保存前自动补齐、仍缺失则按
+  cross-lingual 落盘；参考文本越准确克隆越像。新增 `ReferenceImportTests`（12 项）。详见
+  [`docs/voice.md`](docs/voice.md)、[`docs/cosyvoice.md`](docs/cosyvoice.md) §4。
+- 文档全面同步单模型/GPU-CPU/546 项测试基线；`devtools/cosyvoice/` 删除 CosyVoice3 专用的
+  patch/bench/perf 工具。实测：`swift test` 546 项（544 通过 / 2 跳过）、Python sidecar 72 项、
+  GPU 真实 E2E 与 CPU ready/慢速数据见 [`docs/cosyvoice.md`](docs/cosyvoice.md) §11。
+
 ## [2.1.1] — 2026-11-03
 
 ### 变更
@@ -880,7 +902,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.0.0...HEAD
 [1.3.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.3.0
 [1.4.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.4.0
 [1.5.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.0
@@ -896,6 +918,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 [2.0.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.2
 [2.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.0
 [2.1.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.1
+[3.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.0.0
 [1.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.0.0
 [1.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.1.0
 [1.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.0

@@ -2,12 +2,12 @@ import AVFoundation
 import Foundation
 import Observation
 
-/// 语音试听（2026-10-29，随语音引擎收敛为 CosyVoice3 重写）。
+/// 语音试听（2026-11-03 随语音模型收敛为 Qwen3-TTS-1.7B）。
 ///
-/// 直接调用本机 CosyVoice3 HTTP 服务合成一句示例文本，再用 `AVAudioPlayer`
+/// 直接调用本机语音服务合成一句示例文本，再用 `AVAudioPlayer`
 /// 在本机播放：不发往微信、不上传音频或文本。
 ///
-/// 全局只保留一个播放器（由 `AppStore` 持有），切换音色/语速/服务地址、
+/// 全局只保留一个播放器（由 `AppStore` 持有），切换音色/运行设备/服务地址、
 /// 离开页面或再点一次即停止，避免重复试听与跨页面残留播放。
 @MainActor
 @Observable
@@ -147,7 +147,7 @@ enum VoicePreviewError: Error, LocalizedError, Equatable {
         case .voiceNotSelected:
             return "试听前请先选择音色"
         case .cosyVoiceAudioUnavailable:
-            return "CosyVoice3 试听音频写入失败"
+            return "语音试听音频写入失败"
         }
     }
 }

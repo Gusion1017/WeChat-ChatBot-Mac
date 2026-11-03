@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - 参考音频与参考文本（多条）
 //
-// CosyVoice3 的 zero-shot 接口一次只接受一条参考音 + 一段参考文本。为了支持
+// Qwen3-TTS 的 ICL 克隆一次只接受一条参考音 + 一段参考文本。为了支持
 // 「一个音色多段参考音」，App 在保存时把多条参考音频按顺序拼接成一条合并 prompt
 // （`prompt.wav` / `prompt.txt`，片段之间插入 250ms 静音），服务端仍按单条 prompt
 // 合成；原始片段分别保存在 `<id>/refs/ref-N.wav|txt`，供编辑/导出/回放使用。
@@ -51,16 +51,18 @@ enum CosyVoiceReferenceInput: Sendable {
 }
 
 /// 多参考音频的纯规则（条数/时长/合并），UI 与 Store 共用，便于单测。
+///
+/// 2026-11：简化导入体验——格式不再按扩展名白名单限制（能解码即可），单条只保留
+/// 1 秒下限，超长音频由 UI 按剩余总预算自动截取，不再单条报「太长」。
 enum CosyVoiceReferenceSpec {
     /// 单个音色最多保存的参考音频条数。
     static let maxCount = 5
-    /// 每条参考音频的最短/最长时长（秒）。
-    static let minClipDuration: TimeInterval = 5
-    static let maxClipDuration: TimeInterval = 30
+    /// 每条参考音频的最短时长（秒）。单条没有上限：超出总预算时导入会自动截取。
+    static let minClipDuration: TimeInterval = 1
     /// 合并后 prompt 的最长总时长（秒）。
-    /// CosyVoice3 的 speech tokenizer 明确拒绝超过 30 秒的参考音
-    /// （`do not support extract speech token for audio longer than 30s`），
-    /// 所以合并 prompt 必须 ≤30s，不能沿用更长的上传时长。
+    /// 30s 是历史 CosyVoice3 speech tokenizer 的硬限制；Qwen3 本身没有该限制，
+    /// 但音色与旧音色共享，保留 ≤30s 以兼容历史数据与已合并 prompt。
+    /// App 导入时按剩余预算自动截取，保存时再做最终兜底。
     static let maxTotalDuration: TimeInterval = 30
     /// 片段之间插入的静音（秒）。
     static let gapSeconds: TimeInterval = 0.25
@@ -100,7 +102,28 @@ enum CosyVoiceReferenceSpec {
         return result
     }
 
-    /// 文本一致性：全部为空（cross-lingual）或全部填写（zero-shot）。
+    /// 在已有合并时长之后**追加**一条片段时的剩余预算（秒）。
+    ///
+    /// 追加片段会多插入一段 `gapSeconds` 静音，所以当前已有音频时要把静音预留出来；
+    /// 返回 0 表示总长已用尽，UI 应提示先删除/缩短参考音而不是继续导入。
+    static func remainingBudget(current: TimeInterval) -> TimeInterval {
+        guard current > 0 else { return maxTotalDuration }
+        return max(0, maxTotalDuration - current - gapSeconds)
+    }
+
+    /// 片段在给定预算内可保留的时长（秒）：不裁剪能用整段，超出预算只保留前面部分。
+    static func fittedDuration(
+        _ duration: TimeInterval,
+        budget: TimeInterval = maxTotalDuration
+    ) -> TimeInterval {
+        guard duration.isFinite, duration > 0, budget.isFinite, budget > 0 else { return 0 }
+        return min(duration, budget)
+    }
+
+    /// 文本一致性（仅用于旧 UI 提示，**不再是保存阻断条件**）：
+    /// 全部为空（cross-lingual）或全部填写（zero-shot）。
+    ///
+    /// 现在允许部分片段没有文本：Store 会用非空文本合并，UI 在保存前尽量自动补齐。
     static func hasConsistentTexts(_ texts: [String], crossLingual: Bool) -> Bool {
         if crossLingual { return true }
         let flags = texts.map {

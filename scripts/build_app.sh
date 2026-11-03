@@ -86,7 +86,7 @@ cp "$ROOT_DIR/tools/manage_wechat.sh" "$RES/tools/manage_wechat.sh"
 cp "$ROOT_DIR/tools/install_gadget.sh" "$RES/tools/install_gadget.sh"
 chmod +x "$RES/tools/manage_wechat.sh" "$RES/tools/install_gadget.sh"
 
-# CosyVoice3 本地旁路：只带脚本，不带 Python 依赖/模型（首次使用由 App 触发下载）。
+# 本地 TTS（Qwen3-TTS-1.7B / MLX）：只带脚本，不带 Python 依赖/模型（首次使用由 App 触发下载）。
 # App 通过 Contents/Resources/cosyvoice/ 定位 install/run 脚本与 server.py。
 mkdir -p "$RES/cosyvoice"
 for script in install_cosyvoice.sh run_cosyvoice.sh; do
@@ -94,12 +94,12 @@ for script in install_cosyvoice.sh run_cosyvoice.sh; do
     cp "$ROOT_DIR/scripts/$script" "$RES/cosyvoice/$script"
     chmod +x "$RES/cosyvoice/$script"
   else
-    say "WARNING: scripts/$script missing; CosyVoice3 install/start will be unavailable in the bundle"
+    say "WARNING: scripts/$script missing; local TTS install/start will be unavailable in the bundle"
   fi
 done
-# 只带运行时需要的 server/patch；**不带** 任何参考音或私有音色生成脚本，
-# 也不带 perf/bench。App 包不内置任何音色参考音/voices.json。
-for f in server.py patch_repo.py; do
+# 只带运行时需要的 server；**不带** 任何参考音或私有音色生成脚本。
+# App 包不内置任何音色参考音/voices.json。
+for f in server.py; do
   if [ -f "$ROOT_DIR/devtools/cosyvoice/$f" ]; then
     cp "$ROOT_DIR/devtools/cosyvoice/$f" "$RES/cosyvoice/$f"
   fi

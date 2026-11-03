@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# CosyVoice3 本地旁路 —— 幂等安装脚本（macOS arm64 优先，Linux 亦可）。
+# 本地旁路 TTS —— Qwen3-TTS-1.7B（Apple MLX）幂等安装脚本（macOS arm64 优先）。
 #
-# 分工：
-#   1. Python 3.10 venv（uv 优先，conda/python3.10 兜底）
-#   2. clone FunAudioLLM/CosyVoice（含 third_party/Matcha-TTS submodule）
-#   3. 打 macOS 补丁（modelscope/pyworld 惰性导入）并安装推理依赖
-#   4. 下载 Fun-CosyVoice3-0.5B-2512 最小推理权重（约 5.4GB）
-#   5. 音色：**不内置任何音色**，只创建空 voices/ + 空 voices.json，
-#      由用户在 App 音色管理里自行添加
-#   6. 校验（venv/模型）并写 .installed 标记（安装成功 ≠ 有音色）
+# 历史命名：文件名保持 `install_cosyvoice.sh`（App 打包与调用路径是固定契约），
+# 但 v2.0.0 起只安装 Qwen3-TTS-1.7B，CosyVoice3 已移除，不再有 --engine。
+#
+# 安装内容（home 默认 _local/cosyvoice，打包 App 为 Application Support 下的 cosyvoice）：
+#   <home>/venv-qwen3tts/  Python 3.10 venv
+#       → mlx-audio==0.6.4 + huggingface_hub + fastapi/uvicorn/pydantic（不装 torch、不 clone 仓库）
+#   <home>/models/Qwen3-TTS-12Hz-1.7B-Base-bf16/
+#       → huggingface_hub.snapshot_download（mlx-community 版，约 4.2GB / 14 文件）
+#   <home>/voices/         空音色目录 + 空 voices.json（不内置任何音色，由 App 内添加）
+#   <home>/.installed-qwen3tts  安装 marker
 #
 # 输出契约（App 逐行解析）：每步一行 `PROGRESS <0.00-1.00> <中文说明>`（stdout）。
 # 人类可读的诊断写 stderr；失败时 stderr 有明确原因 + 非 0 退出码。
 #
 # 用法：
 #   scripts/install_cosyvoice.sh [选项]
-#     --home DIR        安装根目录（App 生产路径；推导 model/venv/refs/repo）
-#     --model-dir DIR   --venv DIR   --refs DIR   --repo DIR
+#     --home DIR        安装根目录（App 生产路径；推导 venv/model/refs）
+#     --model-dir DIR   --venv DIR   --refs DIR
 #     --skip-model      --skip-deps  --dry-run  --force
-#   （同名环境变量：COSYVOICE_MODEL_DIR / COSYVOICE_VENV / COSYVOICE_REFS /
-#     COSYVOICE_REPO / COSYVOICE_LOCAL_DIR）
+#   （同名环境变量：COSYVOICE_HOME / COSYVOICE_MODEL_DIR / COSYVOICE_VENV /
+#     COSYVOICE_REFS / COSYVOICE_LOCAL_DIR）
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,9 +49,14 @@ HOME_DIR_ARG=""
 VENV_ARG=""
 MODEL_DIR_ARG=""
 REFS_ARG=""
-CV_REPO_ARG=""
-MODEL_ID="FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
-REPO_URL="https://github.com/FunAudioLLM/CosyVoice"
+
+QWEN3_MODEL_NAME="Qwen3-TTS-12Hz-1.7B-Base-bf16"
+QWEN3_MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+# 实测通过：mlx-audio 0.6.4（requires-python >=3.10）
+QWEN3_PIP_SPEC="mlx-audio==0.6.4"
+# 服务端（FastAPI + uvicorn）是独立依赖：本安装不装 torch 栈。
+QWEN3_WEB_DEPS=("fastapi==0.115.6" "uvicorn==0.30.0" "pydantic==2.7.0")
+QWEN3_VENV_DIR_NAME="venv-qwen3tts"
 
 SKIP_MODEL=0
 SKIP_DEPS=0
@@ -82,7 +89,7 @@ run_step() {
 }
 
 usage() {
-  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 { if ($0 ~ /^#/) { sub(/^# ?/, ""); print } else { exit } }' "${BASH_SOURCE[0]}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -91,7 +98,6 @@ while [[ $# -gt 0 ]]; do
     --model-dir) MODEL_DIR_ARG="${2:?}"; shift 2 ;;
     --venv) VENV_ARG="${2:?}"; shift 2 ;;
     --refs) REFS_ARG="${2:?}"; shift 2 ;;
-    --repo) CV_REPO_ARG="${2:?}"; shift 2 ;;
     --skip-model) SKIP_MODEL=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -102,12 +108,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 LOCAL_DIR="${HOME_DIR_ARG:-${COSYVOICE_HOME:-${COSYVOICE_LOCAL_DIR:-$REPO_ROOT/_local/cosyvoice}}}"
-VENV="${VENV_ARG:-${COSYVOICE_VENV:-$LOCAL_DIR/venv}}"
-MODEL_DIR="${MODEL_DIR_ARG:-${COSYVOICE_MODEL_DIR:-$LOCAL_DIR/models/Fun-CosyVoice3-0.5B-2512}}"
+VENV="${VENV_ARG:-${COSYVOICE_VENV:-$LOCAL_DIR/$QWEN3_VENV_DIR_NAME}}"
+MODEL_DIR="${MODEL_DIR_ARG:-${COSYVOICE_MODEL_DIR:-$LOCAL_DIR/models/$QWEN3_MODEL_NAME}}"
 REFS="${REFS_ARG:-${COSYVOICE_REFS:-$LOCAL_DIR/voices}}"
-CV_REPO="${CV_REPO_ARG:-${COSYVOICE_REPO:-$LOCAL_DIR/repo}}"
-MARKER="$LOCAL_DIR/.installed"
+MARKER="$LOCAL_DIR/.installed-qwen3tts"
 PY="$VENV/bin/python"
+ENGINE_LABEL="Qwen3-TTS-1.7B（MLX）"
 CV_DEVTOOLS="${COSYVOICE_SERVER_DIR:-$REPO_ROOT/devtools/cosyvoice}"
 # 打包版 App：脚本与 server.py 同目录（Contents/Resources/cosyvoice/），
 # 手动在 bundle 里运行时也能找到，不依赖 App 注入 COSYVOICE_SERVER_DIR。
@@ -116,34 +122,24 @@ if [[ ! -f "$CV_DEVTOOLS/server.py" && -f "$SCRIPT_DIR/server.py" ]]; then
 fi
 export COSYVOICE_SERVER_DIR="$CV_DEVTOOLS"
 
-# server.py / patch_repo.py 是安装与运行必需。
-for tool in server.py patch_repo.py; do
-  [[ -f "$CV_DEVTOOLS/$tool" ]] || die "找不到 ${tool}（COSYVOICE_SERVER_DIR=${CV_DEVTOOLS}）"
-done
+[[ -f "$CV_DEVTOOLS/server.py" ]] || die "找不到 server.py（COSYVOICE_SERVER_DIR=${CV_DEVTOOLS}）"
 
 # --------------------------------------------------------------------------- #
 # 0. 环境检查
 # --------------------------------------------------------------------------- #
 progress 0.00 "检查安装环境"
 say "=============================================================="
-say " CosyVoice3 本地旁路安装"
+say " ${ENGINE_LABEL} 本地旁路安装（Qwen3-TTS 单引擎）"
 say "   仓库根   : $REPO_ROOT"
 say "   venv     : $VENV"
 say "   模型目录 : $MODEL_DIR"
 say "   音色目录 : $REFS"
-say "   CosyVoice: $CV_REPO"
+say "   安装标记 : $MARKER"
 say "=============================================================="
 
 [[ -d "$REPO_ROOT" ]] || die "仓库根不存在：$REPO_ROOT"
 
-FFMPEG_BIN="$(find_tool ffmpeg /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg || true)"
-[[ -n "$FFMPEG_BIN" ]] || die "找不到 ffmpeg。请先安装：brew install ffmpeg（或放到 PATH）"
-export FFMPEG_BIN
-export PATH="$(dirname "$FFMPEG_BIN"):$PATH"
-
-GIT_BIN="$(find_tool git /usr/bin/git /opt/homebrew/bin/git || true)"
-[[ -n "$GIT_BIN" ]] || die "找不到 git（macOS 自带 /usr/bin/git；若缺失请安装 Xcode CLT）"
-
+# 需要能创建/复用 Python 3.10 venv（mlx-audio requires-python >=3.10）
 UV_BIN="$(find_tool uv /opt/homebrew/bin/uv /usr/local/bin/uv || true)"
 PY310="$(find_tool python3.10 /opt/homebrew/bin/python3.10 /usr/local/bin/python3.10 || true)"
 CONDA_BIN="$(find_tool conda /opt/anaconda3/bin/conda /opt/homebrew/bin/conda || true)"
@@ -156,194 +152,164 @@ fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
   say "   --- 最终解析路径（App 会用这些路径判定已安装）---"
+  say "   ENGINE    = qwen3tts ($ENGINE_LABEL)"
   say "   LOCAL_DIR = $LOCAL_DIR"
   say "   VENV      = $VENV"
   say "   MODEL_DIR = $MODEL_DIR"
   say "   REFS      = $REFS"
-  say "   CV_REPO   = $CV_REPO"
   say "   MARKER    = $MARKER"
   say "   SERVER_DIR= $CV_DEVTOOLS"
   say "   PY        = $PY"
   say "   ---------------------------------------------"
-  progress 0.05 "[dry-run] 将创建 venv：${VENV}（Python 3.10）"
-  progress 0.15 "[dry-run] 将 clone $REPO_URL -> $CV_REPO"
-  progress 0.20 "[dry-run] 将安装推理依赖（约 2GB，跳过 gradio/tensorboard/deepspeed/modelscope/pyworld）"
-  [[ $SKIP_MODEL -eq 1 ]] && progress 0.55 "[dry-run] --skip-model：跳过下载" \
-                           || progress 0.55 "[dry-run] 将下载 ${MODEL_ID}（约 5.4GB）-> $MODEL_DIR"
+  progress 0.05 "[dry-run] 将复用/创建 venv：${VENV}（Python ≥3.10，优先 3.10）"
+  if [[ $SKIP_DEPS -eq 1 ]]; then
+    progress 0.15 "[dry-run] --skip-deps：跳过 ${QWEN3_PIP_SPEC} 安装"
+  else
+    progress 0.15 "[dry-run] 将在独立 venv 安装 ${QWEN3_PIP_SPEC} + huggingface_hub + fastapi/uvicorn/pydantic（不装 torch，不 clone 仓库）"
+  fi
+  if [[ $SKIP_MODEL -eq 1 ]]; then
+    progress 0.40 "[dry-run] --skip-model：跳过模型下载"
+  else
+    progress 0.40 "[dry-run] 将用 snapshot_download 下载 ${QWEN3_MODEL_ID}（约 4.2GB）-> $MODEL_DIR"
+  fi
   progress 0.85 "[dry-run] 将创建空音色目录（不内置音色）-> $REFS"
   progress 1.00 "演练完成（未做任何修改）"
   exit 0
 fi
 
+# --------------------------------------------------------------------------- #
+# 模型完整性 / 已安装判定
+# --------------------------------------------------------------------------- #
+qwen_model_complete() {
+  [[ -f "$MODEL_DIR/config.json" ]] || return 1
+  local f size
+  for f in "$MODEL_DIR"/*.safetensors; do
+    [[ -f "$f" ]] || continue
+    size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)
+    [[ "$size" -gt 1000000 ]] && return 0
+  done
+  return 1
+}
+
+qwen_installed_ok() {
+  [[ -x "$PY" ]] || return 1
+  qwen_model_complete || return 1
+  # deps 被删掉时也应视为「未安装」，让用户重跑脚本修复
+  "$PY" -c 'import mlx_audio, fastapi, uvicorn' >/dev/null 2>&1 || return 1
+  return 0
+}
+
+if [[ $FORCE -eq 0 && -f "$MARKER" && -x "$PY" ]] && qwen_installed_ok; then
+  progress 1.00 "已安装（$MARKER 校验通过），无需重装"
+  say "已安装且校验通过（Qwen3-TTS）。需要重装请加 --force。"
+  exit 0
+fi
 if [[ $FORCE -eq 0 && -f "$MARKER" && -x "$PY" ]]; then
-  if "$PY" - "$MARKER" "$MODEL_DIR" "$REFS" <<'PY' >/dev/null 2>&1
-import json, pathlib, sys
-marker, model_dir, refs = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-# 「已安装」= venv 可执行 + 模型齐全；音色不是必需（普通用户安装后为空）
-data = json.loads(marker.read_text()) if marker.is_file() else {}
-need = ["llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v3.onnx", "campplus.onnx", "cosyvoice3.yaml"]
-if not all((model_dir / n).is_file() for n in need):
-    sys.exit(1)
-PY
-  then
-    progress 1.00 "已安装（$MARKER 校验通过），无需重装"
-    say "已安装且校验通过。需要重装请加 --force。"
-    exit 0
-  fi
-  say "已有 .installed 但校验不通过，继续修复式安装。"
+  say "已有 $MARKER 但校验不通过，继续修复式安装。"
 fi
 
 mkdir -p "$LOCAL_DIR" "$(dirname "$MODEL_DIR")" "$REFS" "$LOCAL_DIR/logs"
 
 # --------------------------------------------------------------------------- #
-# 1. venv
+# 1. venv（复用 ≥3.10 的已有 venv；否则创建 3.10）
 # --------------------------------------------------------------------------- #
-progress 0.03 "准备 Python 3.10 虚拟环境"
-if [[ -x "$PY" ]] && "$PY" -c 'import sys; assert sys.version_info[:2] == (3, 10)' 2>/dev/null; then
+progress 0.03 "准备 Python 虚拟环境"
+if [[ -x "$PY" ]]; then
+  PY_OK="$("$PY" -c 'import sys; print(1 if sys.version_info >= (3, 10) else 0)' 2>/dev/null || echo 0)"
+else
+  PY_OK=0
+fi
+if [[ "$PY_OK" == "1" ]]; then
   say "复用已有 venv：$VENV ($("$PY" -V 2>&1))"
 else
+  if [[ -x "$PY" ]]; then
+    # 不自动删除用户目录：版本不满足时交给用户显式处理（或 --venv 指向新目录）
+    die "已有 venv 的 Python 版本不满足要求（需 ≥3.10，当前 $("$PY" -V 2>&1)）：$VENV
+请备份/删除该 venv 后重跑，或用 --venv 指定新目录"
+  fi
   if [[ -n "$UV_BIN" ]]; then
     "$UV_BIN" venv --python 3.10 "$VENV" || die "uv venv 创建失败（${VENV}）"
-  else
+  elif [[ -n "$PY310" ]]; then
     "$PY310" -m venv "$VENV" || die "python3.10 -m venv 创建失败（${VENV}）"
+  else
+    "$CONDA_BIN" create -y -p "$VENV" python=3.10 || die "conda 创建 python 3.10 环境失败（${VENV}）"
   fi
 fi
 [[ -x "$PY" ]] || die "venv 里没有 python：$PY"
 say "Python: $("$PY" -V 2>&1)"
 
 # --------------------------------------------------------------------------- #
-# 2. CosyVoice repo
-# --------------------------------------------------------------------------- #
-progress 0.08 "获取 CosyVoice 仓库（含 Matcha-TTS 子模块）"
-if [[ -d "$CV_REPO/.git" ]]; then
-  say "复用已有仓库：$CV_REPO"
-  if [[ ! -f "$CV_REPO/third_party/Matcha-TTS/matcha/utils/audio.py" ]]; then
-    say "子模块缺失，补齐 third_party/Matcha-TTS …"
-    "$GIT_BIN" -C "$CV_REPO" submodule update --init --recursive || die "子模块更新失败"
-  fi
-else
-  run_step "$GIT_BIN" clone --recursive --depth 1 "$REPO_URL" "$CV_REPO" || die "git clone 失败（网络？）"
-fi
-
-progress 0.12 "给仓库打 macOS 兼容补丁（modelscope/pyworld 惰性导入）"
-"$PY" "$CV_DEVTOOLS/patch_repo.py" --repo "$CV_REPO" \
-  || die "仓库补丁失败（上游结构可能已变，见 devtools/cosyvoice/patch_repo.py）"
-
-# --------------------------------------------------------------------------- #
-# 3. 依赖
+# 2. 依赖（mlx-audio；不装 torch、不 clone 仓库、不打补丁）
 # --------------------------------------------------------------------------- #
 if [[ $SKIP_DEPS -eq 1 ]]; then
-  progress 0.18 "--skip-deps：跳过依赖安装"
+  progress 0.10 "--skip-deps：跳过 ${QWEN3_PIP_SPEC} 安装"
 else
-  progress 0.16 "安装推理依赖（约 2GB，首次约 3–10 分钟）"
-  PIP=("$PY" -m pip)
-  if [[ -n "$UV_BIN" ]]; then PIP=("$UV_BIN" pip); fi
-  if [[ "${PIP[0]}" == *uv ]]; then
-    PIP_CMD=("${PIP[0]}" pip install --python "$PY")
+  progress 0.08 "安装 mlx-audio（MLX 推理，不装 torch；首次约 1–3 分钟）"
+  # uv venv 默认不带 pip：优先用 `uv pip install --python <venv>`；没有 uv 才用 venv 自带 pip。
+  if [[ -n "$UV_BIN" ]]; then
+    run_step "$UV_BIN" pip install --python "$PY" --upgrade \
+      "$QWEN3_PIP_SPEC" "huggingface_hub" "${QWEN3_WEB_DEPS[@]}" \
+      || die "mlx-audio 安装失败（见上方 pip 输出）"
   else
-    PIP_CMD=("$PY" -m pip install)
+    run_step "$PY" -m pip install --upgrade \
+      "$QWEN3_PIP_SPEC" "huggingface_hub" "${QWEN3_WEB_DEPS[@]}" \
+      || die "mlx-audio 安装失败（见上方 pip 输出）"
   fi
-
-  CORE=(
-    "torch==2.3.1" "torchaudio==2.3.1" "numpy==1.26.4"
-    "onnxruntime==1.18.0" "transformers==4.51.3" "x-transformers==2.11.24" "conformer==0.3.2"
-    "diffusers==0.29.0" "lightning==2.2.4" "librosa==0.10.2" "soundfile==0.12.1" "inflect==7.3.1"
-    "matplotlib==3.7.5" "networkx==3.1" "tqdm" "rich==13.7.1" "pyyaml" "hyperpyyaml==1.2.3"
-    "omegaconf==2.3.0" "hydra-core==1.3.2"
-    "fastapi==0.115.6" "uvicorn==0.30.0" "pydantic==2.7.0" "protobuf==4.25" "onnx==1.16.0"
-    "grpcio==1.57.0" "grpcio-tools==1.57.0" "pyarrow==18.1.0" "scipy"
-    "gdown==5.1.0" "wget==3.2" "setuptools<81" "edge-tts"
-  )
-  # 说明：不装 gradio / tensorboard / deepspeed / tensorrt / modelscope / pyworld / ttsfrd
-  #      （gradio、tensorboard 只服务官方 webui；deepspeed/tensorrt 是 CUDA/Linux 专用；
-  #        modelscope/pyworld 用 patch_repo.py 惰性化；ttsfrd 是可选文本前端）
-  run_step "${PIP_CMD[@]}" "${CORE[@]}" || die "核心依赖安装失败（见上方 pip 输出）"
-  progress 0.34 "安装 openai-whisper（sdist 编译，需 setuptools<81）"
-  run_step "${PIP_CMD[@]}" --no-build-isolation "openai-whisper==20231117" \
-    || die "openai-whisper 安装失败（CosyVoice 前端日志梅尔谱依赖它）"
-  progress 0.42 "安装 kaldifst（wetext 文本前端依赖，可选）"
-  run_step "${PIP_CMD[@]}" "kaldifst" || say "WARN: kaldifst 安装失败，跳过 wetext（文字归一化退化为内置）"
-  # wetext 0.0.4 需要 modelscope 在 import 时提供 snapshot_download；我们不用 modelscope，
-  # 因此默认不装 wetext，文本前端用仓库自带 fallback（数字读法可能不如 wetext 精确）。
-  "$PY" - <<'PY' >/dev/null 2>&1 || true
-import torch, torchaudio, transformers, onnxruntime, whisper
-PY
-  progress 0.45 "依赖安装完成"
+  progress 0.30 "mlx-audio 安装完成"
 fi
 
 # --------------------------------------------------------------------------- #
-# 4. 模型
+# 3. 模型（Qwen3-TTS-12Hz-1.7B-Base-bf16）
 # --------------------------------------------------------------------------- #
-MODEL_FILES=(
-  "config.json" "configuration.json" "cosyvoice3.yaml"
-  "campplus.onnx" "flow.pt" "hift.pt" "llm.pt" "speech_tokenizer_v3.onnx"
-  "CosyVoice-BlankEN/config.json" "CosyVoice-BlankEN/generation_config.json"
-  "CosyVoice-BlankEN/merges.txt" "CosyVoice-BlankEN/model.safetensors"
-  "CosyVoice-BlankEN/tokenizer_config.json" "CosyVoice-BlankEN/vocab.json"
-)
-
-model_complete() {
-  local f
-  for f in "${MODEL_FILES[@]}"; do
-    [[ -f "$MODEL_DIR/$f" ]] || return 1
-  done
-  # llm.pt/flow.pt 只下载到一半时大小会远小于阈值
-  [[ $(stat -f%z "$MODEL_DIR/llm.pt" 2>/dev/null || stat -c%s "$MODEL_DIR/llm.pt" 2>/dev/null || echo 0) -gt 1500000000 ]] || return 1
-  [[ $(stat -f%z "$MODEL_DIR/flow.pt" 2>/dev/null || stat -c%s "$MODEL_DIR/flow.pt" 2>/dev/null || echo 0) -gt 1000000000 ]] || return 1
-  return 0
-}
-
 if [[ $SKIP_MODEL -eq 1 ]]; then
-  progress 0.55 "--skip-model：跳过模型下载"
-elif model_complete; then
-  progress 0.55 "模型已存在且完整：$MODEL_DIR"
+  progress 0.40 "--skip-model：跳过模型下载"
+elif qwen_model_complete; then
+  progress 0.40 "模型已存在且完整：$MODEL_DIR"
 else
-  progress 0.55 "下载模型 ${MODEL_ID}（约 5.4GB，跳过 llm.rl.pt / batch onnx / TRT onnx）"
-  HF_ARGS=("$MODEL_ID" "--local-dir" "$MODEL_DIR" "${MODEL_FILES[@]}")
-  HF_CMD=()
-  HF_BIN="$(find_tool hf /opt/homebrew/bin/hf /usr/local/bin/hf /opt/anaconda3/bin/hf || true)"
-  HFCLI_BIN="$(find_tool huggingface-cli /opt/homebrew/bin/huggingface-cli /usr/local/bin/huggingface-cli /opt/anaconda3/bin/huggingface-cli || true)"
-  if [[ -n "$HF_BIN" ]]; then
-    HF_CMD=("$HF_BIN" download)
-  elif [[ -n "$HFCLI_BIN" ]]; then
-    HF_CMD=("$HFCLI_BIN" download)
-  elif [[ -n "$UV_BIN" ]]; then
-    HF_CMD=("$UV_BIN" tool run --from huggingface_hub hf download)
-  else
-    die "找不到 hf / huggingface-cli / uv，无法下载模型。可手动把模型放到 $MODEL_DIR"
-  fi
-
+  progress 0.40 "下载模型 ${QWEN3_MODEL_ID}（约 4.2GB / 14 文件）"
+  # 支持镜像：huggingface_hub 自动读取 HF_ENDPOINT（如 https://hf-mirror.com）。
+  say "   HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}（镜像可设 HF_ENDPOINT）"
+  "$PY" -c 'import huggingface_hub' >/dev/null 2>&1 \
+    || die "venv 里缺少 huggingface_hub，无法下载模型。先运行本脚本（勿加 --skip-deps）或 $PY -m pip install -U huggingface_hub"
   mkdir -p "$MODEL_DIR"
-  "${HF_CMD[@]}" "${HF_ARGS[@]}" &
+  "$PY" - "$QWEN3_MODEL_ID" "$MODEL_DIR" <<'PY' &
+import sys
+
+from huggingface_hub import snapshot_download
+
+repo_id, local_dir = sys.argv[1], sys.argv[2]
+snapshot_download(repo_id=repo_id, local_dir=local_dir)
+print(f"下载完成：{repo_id} -> {local_dir}", file=sys.stderr)
+PY
   CURRENT_PID=$!
-  # 轮询下载体积，输出 0.55 -> 0.83 的进度（总量按已见 5.6GB 估算）
-  TARGET_BYTES=5600000000
+  # 轮询下载体积，输出 0.40 -> 0.80 的进度（实测模型约 4.2GB：3.6GB 权重 + 0.65GB tokenizer）
+  TARGET_BYTES=4200000000
   while kill -0 "$CURRENT_PID" 2>/dev/null; do
     sleep 3
     done_bytes=$(du -sk "$MODEL_DIR" 2>/dev/null | awk '{print $1 * 1024}')
     [[ -z "${done_bytes:-}" ]] && done_bytes=0
     pct=$(( done_bytes * 100 / TARGET_BYTES ))
     [[ $pct -gt 100 ]] && pct=100
-    # 0.55 + 0.28 * pct%
-    step=$(awk -v p="$pct" 'BEGIN{printf "%.2f", 0.55 + 0.28 * p / 100}')
-    progress "$step" "下载模型 ${pct}%（$(awk -v b="$done_bytes" 'BEGIN{printf "%.2f", b/1073741824}') GB / ~5.4GB）"
+    # 0.40 + 0.40 * pct%
+    step=$(awk -v p="$pct" 'BEGIN{printf "%.2f", 0.40 + 0.40 * p / 100}')
+    progress "$step" "下载模型 ${pct}%（$(awk -v b="$done_bytes" 'BEGIN{printf "%.2f", b/1073741824}') GB / ~4.2GB）"
   done
   wait "$CURRENT_PID"
   rc=$?
   CURRENT_PID=""
   [[ $rc -eq 0 ]] || die "模型下载失败（exit ${rc}），可直接重跑本脚本续传"
-  model_complete || die "模型下载完成但文件不全：${MODEL_DIR}（请重跑）"
-  progress 0.83 "模型下载完成"
+  qwen_model_complete || die "模型下载完成但文件不全：${MODEL_DIR}（请重跑）"
+  progress 0.80 "模型下载完成"
 fi
 
 # --------------------------------------------------------------------------- #
-# 5. 音色（不内置；用户在 App 音色管理里添加）
+# 4. 音色（不内置；用户在 App 音色管理里添加）
 # --------------------------------------------------------------------------- #
 mkdir -p "$REFS"
 export COSYVOICE_REPO_ROOT="$REPO_ROOT"
 progress 0.86 "创建空音色目录（不内置音色，由用户在 App 内添加）"
 if [[ ! -f "$REFS/voices.json" ]]; then
-  printf '{\n  "version": 1,\n  "voices": []\n}\n' > "$REFS/voices.json"
+  printf '{\n  "version": 2,\n  "voices": []\n}\n' > "$REFS/voices.json"
   say "已写空清单：$REFS/voices.json"
 else
   say "已存在音色清单，保留不动：$REFS/voices.json"
@@ -353,21 +319,26 @@ if [[ -d "$REFS/girl" || -d "$REFS/loli" || -d "$REFS/onee" ]]; then
 fi
 
 # --------------------------------------------------------------------------- #
-# 6. 校验 + 标记
+# 5. 校验 + 标记
 # --------------------------------------------------------------------------- #
-progress 0.94 "校验安装结果（venv/模型；音色可为空）"
-"$PY" - "$REPO_ROOT" "$VENV" "$MODEL_DIR" "$REFS" <<'PY' || die "安装校验失败（见上）"
+progress 0.94 "校验安装结果（venv/模型/依赖；音色可为空）"
+"$PY" - "$VENV" "$MODEL_DIR" "$REFS" <<'PY' || die "安装校验失败（见上）"
 import json, pathlib, sys
-repo_root, venv, model_dir, refs = (pathlib.Path(x) for x in sys.argv[1:5])
+
+venv, model_dir, refs = (pathlib.Path(x) for x in sys.argv[1:4])
 errors = []
-need_model = ["llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v3.onnx",
-              "campplus.onnx", "cosyvoice3.yaml"]
-for name in need_model:
-    p = model_dir / name
-    if not p.is_file():
-        errors.append(f"模型文件缺失: {p}")
 if not (venv / "bin" / "python").is_file():
     errors.append(f"venv python 缺失: {venv / 'bin' / 'python'}")
+if not (model_dir / "config.json").is_file():
+    errors.append(f"模型 config.json 缺失: {model_dir / 'config.json'}")
+if not any(p.is_file() for p in model_dir.glob("*.safetensors")):
+    errors.append(f"模型缺少 *.safetensors: {model_dir}")
+try:
+    import mlx_audio  # noqa: F401
+    import fastapi  # noqa: F401
+    import uvicorn  # noqa: F401
+except Exception as exc:  # noqa: BLE001
+    errors.append(f"Qwen3-TTS 运行依赖无法导入（{type(exc).__name__}: {exc}）")
 if errors:
     print("校验失败：", file=sys.stderr)
     for e in errors:
@@ -382,12 +353,13 @@ if manifest.is_file():
         voice_ids = [item["id"] for item in data.get("voices", [])]
     except Exception as exc:
         print(f"WARN: 音色清单解析失败（不影响安装，可在 App 内重建）：{exc}", file=sys.stderr)
-print(f"校验通过：venv/模型齐全；音色 {len(voice_ids)} 个 {voice_ids}", file=sys.stderr)
+print(f"校验通过：engine=qwen3tts，venv/模型/依赖齐全；音色 {len(voice_ids)} 个 {voice_ids}", file=sys.stderr)
 PY
 
 progress 0.97 "写入安装标记"
 "$PY" - "$MARKER" "$MODEL_DIR" "$VENV" "$REFS" <<'PY'
 import datetime, json, pathlib, sys
+
 marker, model_dir, venv, refs = (pathlib.Path(x) for x in sys.argv[1:5])
 voice_ids = []
 manifest = refs / "voices.json"
@@ -397,7 +369,8 @@ if manifest.is_file():
     except Exception:
         voice_ids = []
 data = {
-    "version": 1,
+    "version": 2,
+    "engine": "qwen3tts",
     "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     "model": model_dir.name,
     "model_dir": str(model_dir),
@@ -405,8 +378,10 @@ data = {
     "voices_dir": str(refs),
     # 安装成功 ≠ 有音色：普通用户安装后为空，由 App 内添加
     "voices": voice_ids,
-    "python": "3.10",
+    "python": f"{sys.version_info.major}.{sys.version_info.minor}",
     "platform": sys.platform,
+    "deps": ["mlx-audio==0.6.4", "huggingface_hub", "fastapi==0.115.6",
+             "uvicorn==0.30.0", "pydantic==2.7.0"],
 }
 tmp = marker.with_suffix(".tmp")
 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -416,7 +391,7 @@ PY
 
 progress 1.00 "安装完成，可运行 scripts/run_cosyvoice.sh 启动服务"
 say ""
-say "安装完成。启动：scripts/run_cosyvoice.sh --wait-health"
+say "安装完成（Qwen3-TTS-1.7B / MLX）。启动：scripts/run_cosyvoice.sh --wait-health"
 say "标记文件：$MARKER"
 say "音色：未内置。请在 App 音色管理中添加后调用 POST /voices/reload。"
 exit 0

@@ -1102,6 +1102,53 @@ enum VoiceOverLimit: String, Codable, CaseIterable, Hashable, Identifiable, Send
     }
 }
 
+/// 本地语音合成运行设备（2026-11-03，语音收敛为 Qwen3-TTS-1.7B 单模型）。
+///
+/// `rawValue` 是跨进程契约：与启动脚本的 `--device`、环境变量 `COSYVOICE_DEVICE`
+/// 以及服务 `/health.device` 完全一致，**不要改名**：
+/// - `gpu`：MLX 走 Apple GPU（默认，速度最快）；
+/// - `cpu`：MLX CPU 后端（极慢，实验性；仅建议排障或无 GPU 环境使用）。
+enum VoiceComputeDevice: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    case gpu
+    case cpu
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gpu: L("GPU（MLX，推荐）")
+        // 实测（Lead，真实模型）：MLX CPU 后端 warmup 一句「你好。」约 244 秒，
+        // 后续合成更慢；不能简单标「较慢」，必须如实提示极慢/实验性。
+        case .cpu: L("CPU（极慢，实验性）")
+        }
+    }
+
+    /// 设置页「运行设备」行的一句说明。
+    var shortDescription: String {
+        switch self {
+        case .gpu: L("使用 Apple GPU（MLX）合成，速度最快（默认）")
+        case .cpu: L("MLX CPU 后端，短句可能数分钟，仅建议排障或无 GPU 环境使用；合成可能超时并改发文字")
+        }
+    }
+
+    /// segmented 选择器的悬停说明。
+    var help: String {
+        switch self {
+        case .gpu: L("默认：MLX 走 Apple GPU，GPU 预热与合成最快")
+        case .cpu: L("MLX CPU 后端，短句可能数分钟，仅建议排障或无 GPU 环境使用；合成可能超时并改发文字")
+        }
+    }
+
+    /// 解析跨进程 raw 值：缺键/非法值回退默认 `gpu`。
+    static func resolved(_ raw: String?) -> VoiceComputeDevice {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let device = VoiceComputeDevice(rawValue: raw.lowercased()) else {
+            return .gpu
+        }
+        return device
+    }
+}
+
 /// 语音功能设置（`BotSettings.voice` 的可选值，2026-10-26）。
 ///
 /// 全部字段都有默认值，且通过自定义 Codable 容忍缺键/未知枚举值：
@@ -1132,16 +1179,21 @@ struct VoiceSettings: Codable, Hashable {
     var maxVoiceSeconds: Int = 30
     /// 超过时长上限时的处理方式。
     var overLimit: VoiceOverLimit = .text
-    // MARK: CosyVoice3 本地服务（唯一 TTS 引擎）
+    // MARK: 本地语音服务（Qwen3-TTS-1.7B 单模型，2026-11-03 收敛）
 
-    /// CosyVoice3 音色 ID（来自本机 voices.json / 服务端 `/voices`）。
+    /// 运行设备：GPU（MLX，默认）或 CPU；旧配置缺键/非法值时回退 GPU。
+    /// 切换时设置页会先停服务，再按自动启动策略拉起。
+    var voiceComputeDevice: VoiceComputeDevice = .gpu
+
+    /// 当前音色 ID（来自本机 voices.json / 服务端 `/voices`）。
     /// **不设默认音色**：App 不内置任何音色，空字符串表示「未选择音色」。
     var cosyVoiceVoiceID: String = ""
     /// 本地服务地址（默认 `http://127.0.0.1:5051`；改端口时同步改这里）。
     var cosyVoiceEndpoint: String = "http://127.0.0.1:5051"
     /// 允许语音回复时自动拉起本地服务（默认开启）。
     var cosyVoiceAutoStart: Bool = true
-    /// CosyVoice3 语速（0.5–2.0，默认 1.0）。
+    /// Qwen3-TTS 不支持语速：仅保留给内部 `VoiceSelection` 的兼容字段，
+    /// UI 不再展示（固定 1.0；旧配置里的值仍可解码，避免破坏既有测试/配置）。
     var cosyVoiceSpeed: Double = 1.0
 
     // MARK: 生效值
@@ -1162,15 +1214,15 @@ struct VoiceSettings: Codable, Hashable {
         return min(max(replyProbability, 0), 1)
     }
 
-    /// 生效的 CosyVoice3 音色 ID：空白保持空（未选择音色），不自动回退到 girl。
+    /// 生效的 Qwen3-TTS 音色 ID：空白保持空（未选择音色），不自动回退到 girl。
     var effectiveCosyVoiceVoiceID: String {
         CosyVoiceVoiceCatalog.resolvedVoiceID(cosyVoiceVoiceID)
     }
 
-    /// 是否已经选择了可用的 CosyVoice3 音色。
+    /// 是否已经选择了可用的音色。
     var hasCosyVoiceVoice: Bool { !effectiveCosyVoiceVoiceID.isEmpty }
 
-    /// 生效的 CosyVoice3 语速（0.5...2.0，默认 1.0）。
+    /// 生效的语速（内部兼容字段，Qwen3-TTS 不支持语速；UI 不展示）。
     var effectiveCosyVoiceSpeed: Double {
         guard cosyVoiceSpeed.isFinite else { return 1.0 }
         return min(max(cosyVoiceSpeed, 0.5), 2.0)
@@ -1181,7 +1233,7 @@ struct VoiceSettings: Codable, Hashable {
         CosyVoiceClient.normalizedEndpoint(cosyVoiceEndpoint) != nil
     }
 
-    /// 生效的 CosyVoice3 服务地址：非法/空白回退默认 `127.0.0.1:5051`。
+    /// 生效的本地语音服务地址：非法/空白回退默认 `127.0.0.1:5051`。
     var effectiveCosyVoiceEndpoint: URL {
         CosyVoiceClient.normalizedEndpoint(cosyVoiceEndpoint) ?? CosyVoiceClient.defaultEndpoint
     }
@@ -1202,6 +1254,7 @@ extension VoiceSettings {
         case shortReplyMaxChars
         case maxVoiceSeconds
         case overLimit
+        case voiceComputeDevice
         case cosyVoiceVoiceID
         case cosyVoiceEndpoint
         case cosyVoiceAutoStart
@@ -1235,8 +1288,12 @@ extension VoiceSettings {
         // 未知 raw value 回退到默认，避免手改配置导致整份 config 解码失败。
         overLimit = (try container.decodeIfPresent(String.self, forKey: .overLimit))
             .flatMap { VoiceOverLimit(rawValue: $0) } ?? defaults.overLimit
-        // CosyVoice3 是唯一 TTS 引擎：旧配置里的 engine/kokoroSpeakerID/kokoroSpeed/
-        // cloneID/modelDownloadConsent 已移除，解码时直接忽略（不再写入）。
+        // 运行设备：缺键（旧配置）/ 非法 raw 值一律回退 GPU。
+        // 已删除的旧 `voiceEngine` 键不在 CodingKeys 里，解码时自动忽略、不再写回。
+        voiceComputeDevice = VoiceComputeDevice.resolved(
+            try container.decodeIfPresent(String.self, forKey: .voiceComputeDevice))
+        // 旧的 engine/kokoroSpeakerID/kokoroSpeed/cloneID/modelDownloadConsent 键已移除，
+        // 解码时直接忽略（不再写入）。
         // 旧配置没有 cosyVoice* 键时全部走默认值（空音色 / 127.0.0.1:5051 / 自动启动 / 1.0）。
         cosyVoiceVoiceID = try container.decodeIfPresent(String.self, forKey: .cosyVoiceVoiceID)
             ?? defaults.cosyVoiceVoiceID
@@ -1268,6 +1325,7 @@ extension VoiceSettings {
         try container.encode(effectiveShortReplyMaxChars, forKey: .shortReplyMaxChars)
         try container.encode(effectiveMaxVoiceSeconds, forKey: .maxVoiceSeconds)
         try container.encode(overLimit.rawValue, forKey: .overLimit)
+        try container.encode(voiceComputeDevice.rawValue, forKey: .voiceComputeDevice)
         try container.encode(effectiveCosyVoiceVoiceID, forKey: .cosyVoiceVoiceID)
         try container.encode(CosyVoiceClient.normalizedEndpoint(cosyVoiceEndpoint)?.absoluteString
             ?? cosyVoiceEndpoint, forKey: .cosyVoiceEndpoint)

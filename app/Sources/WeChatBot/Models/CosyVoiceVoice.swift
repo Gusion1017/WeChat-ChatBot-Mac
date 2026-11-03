@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - 音色
 
-/// CosyVoice3 的一套参考音色（与 `devtools/cosyvoice/CONTRACT.md` 的 `/voices` 对齐）。
+/// 一套本机参考音色（与 `devtools/cosyvoice/CONTRACT.md` 的 `/voices` 对齐）。
 ///
 /// 服务端是音色的事实来源（用户之后可以换参考音/加音色），本地只保留三套默认音色
 /// 用于「服务尚未启动/未安装」时的稳定展示。解码全部字段可选，坏条目不会让整包失败。
@@ -13,7 +13,7 @@ struct CosyVoiceVoice: Identifiable, Codable, Hashable, Sendable {
     var description: String
     /// 推理方式：`zero_shot`（带参考文本）或 `cross_lingual`（只用参考音）。
     var mode: String?
-    /// 仅限个人使用（产品约束：CosyVoice3 音色一律 true，不提供关闭开关）。
+    /// 仅限个人使用（产品约束：本机参考音一律 true，不提供关闭开关）。
     var personalUseOnly: Bool
     /// 是否为内置音色（girl/loli/onee）。
     var builtin: Bool
@@ -246,6 +246,18 @@ enum CosyVoiceVoiceCatalog {
 
 // MARK: - /health
 
+/// 本机语音服务的引擎契约（2026-11-03 收敛）。
+///
+/// App 只接受 Qwen3-TTS 单模型；`/health.engine` 必须是 `qwen3tts`。
+/// 端口上残留旧版 CosyVoice3 服务（engine 为空或 `cosyvoice3`）时**不要复用**：
+/// 启动器报错、回复路径明确降级文字并提示用户退出旧版/重启 App。
+enum CosyVoiceServiceContract {
+    /// 唯一受支持的引擎 raw 值（与 sidecar `/health.engine` 对齐）。
+    static let expectedEngineRawValue = "qwen3tts"
+    /// 旧版服务残留时的统一提示文案（启动失败/回复降级/设置页共用）。
+    static let legacyServiceHint = "旧版 CosyVoice3 服务仍在运行，请先退出旧版/重启 App"
+}
+
 /// `GET /health` 回包。加载中服务返回 503 + `{"ok":false,"loading":true,...}`，
 /// 此时 `client.health()` 抛 `CosyVoiceError.serviceLoading`，但解析逻辑仍复用本结构。
 struct CosyVoiceHealth: Codable, Hashable, Sendable {
@@ -257,6 +269,8 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
     var voices: [String] = []
     var voicesDetail: [CosyVoiceVoice] = []
     var device: String?
+    /// 服务端当前引擎 raw 值（唯一合法值为 `qwen3tts`）；旧版服务缺键时为 nil。
+    var engine: String?
     var rtfEstimate: Double?
     var progress: String?
     var error: String?
@@ -270,6 +284,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
         voices: [String] = [],
         voicesDetail: [CosyVoiceVoice] = [],
         device: String? = nil,
+        engine: String? = nil,
         rtfEstimate: Double? = nil,
         progress: String? = nil,
         error: String? = nil
@@ -282,6 +297,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
         self.voices = voices
         self.voicesDetail = voicesDetail
         self.device = device
+        self.engine = engine
         self.rtfEstimate = rtfEstimate
         self.progress = progress
         self.error = error
@@ -297,6 +313,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
         case voices
         case voicesDetail = "voices_detail"
         case device
+        case engine
         case rtfEstimate = "rtf_estimate"
         case progress
         case error
@@ -317,6 +334,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
         voicesDetail = ((try? container.decodeIfPresent([CosyVoiceVoice].self, forKey: .voicesDetail))
             ?? nil) ?? []
         device = (try? container.decodeIfPresent(String.self, forKey: .device)) ?? nil
+        engine = (try? container.decodeIfPresent(String.self, forKey: .engine)) ?? nil
         if let rtf = try? container.decodeIfPresent(Double.self, forKey: .rtfEstimate),
            rtf.isFinite, rtf > 0 {
             rtfEstimate = rtf
@@ -337,6 +355,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
         try container.encode(voices, forKey: .voices)
         try container.encode(voicesDetail, forKey: .voicesDetail)
         try container.encodeIfPresent(device, forKey: .device)
+        try container.encodeIfPresent(engine, forKey: .engine)
         try container.encodeIfPresent(rtfEstimate, forKey: .rtfEstimate)
         try container.encodeIfPresent(progress, forKey: .progress)
         try container.encodeIfPresent(error, forKey: .error)
@@ -344,6 +363,28 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
 
     /// 服务就绪 = 明确 ready 且 ok。
     var isReady: Bool { ok && ready }
+
+    /// 运行中的服务是否确实是 Qwen3-TTS（唯一受支持的引擎）。
+    ///
+    /// 旧版服务缺 `engine` 字段、或仍上报 `cosyvoice3`，都视为不兼容：
+    /// 启动器会拒绝复用，回复路径明确降级文字（不悄悄用错引擎合成）。
+    var isQwen3TTSEngine: Bool {
+        guard let raw = engine?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return raw == CosyVoiceServiceContract.expectedEngineRawValue
+    }
+
+    /// 运行设备展示文案（新服务上报 `gpu`/`cpu`；未知值原样大写）。
+    var computeDeviceLabel: String? {
+        guard let raw = device?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        switch raw.lowercased() {
+        case "gpu": return "GPU"
+        case "cpu": return "CPU"
+        default: return raw.uppercased()
+        }
+    }
 
     /// 对外错误文案（ok=false 时）。
     var failureReason: String? {
@@ -363,7 +404,7 @@ struct CosyVoiceHealth: Codable, Hashable, Sendable {
 
 // MARK: - 服务状态（UI/日志共用）
 
-/// CosyVoice3 本地服务的运行状态。
+/// 本机语音服务（Qwen3-TTS-1.7B）的运行状态。
 enum CosyVoiceServiceState: Equatable, Sendable {
     /// 尚未检测。
     case unknown
@@ -403,11 +444,11 @@ enum CosyVoiceServiceState: Equatable, Sendable {
     }
 }
 
-/// 出站语音引擎可用性（纯函数，便于单测）。
+/// 出站语音可用性（纯函数，便于单测）。
 ///
-/// CosyVoice3 是唯一 TTS 引擎，因此只有「可合成」与「改发文字」两种结果：
-/// 未安装、服务未就绪、没有选择音色时一律直接改发文字，不再跨引擎回退。
-enum VoiceEngineAvailability {
+/// Qwen3-TTS-1.7B 是唯一 TTS 模型，因此只有「可合成」与「改发文字」两种结果：
+/// 未安装、服务未就绪、没有选择音色时一律直接改发文字，不再跨模型回退。
+enum VoiceAvailability {
     /// 本次回复能否尝试语音合成。
     static func canSynthesize(
         cosyVoiceInstalled: Bool,

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - State
 
-/// CosyVoice3 运行环境/模型的本地安装状态。
+/// Qwen3-TTS 运行环境/模型的本地安装状态。
 enum CosyVoiceInstallState: Equatable, Sendable {
     /// 尚未检测。
     case unknown
@@ -51,7 +51,7 @@ struct CosyVoiceInstallSnapshot: Sendable, Equatable {
     /// 安装根目录（展示给用户：`_local/cosyvoice` 或 Application Support）。
     var homePath: String
     var logTail: [String]
-    /// 预计下载体积（依赖 + 模型）。
+    /// 预计下载体积（依赖 + 模型，Qwen3-TTS 约 4.7GB）。
     var estimatedBytes: Int64
     var updatedAt: Date
 
@@ -78,17 +78,17 @@ enum CosyVoiceInstallError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .consentRequired:
-            return "需要先确认 CosyVoice3 的下载体积"
+            return "需要先确认本地语音引擎的下载体积"
         case .alreadyInstalling:
-            return "CosyVoice3 正在安装中"
+            return "本地语音引擎正在安装中"
         case .scriptMissing(let reason):
-            return "无法安装 CosyVoice3：\(reason)"
+            return "无法安装本地语音引擎：\(reason)"
         case .cancelled:
-            return "CosyVoice3 安装已取消"
+            return "本地语音引擎安装已取消"
         case .failed(let reason):
-            return "CosyVoice3 安装失败：\(reason)"
+            return "本地语音引擎安装失败：\(reason)"
         case .deleteFailed(let reason):
-            return "删除 CosyVoice3 安装失败：\(reason)"
+            return "删除本地语音引擎安装失败：\(reason)"
         }
     }
 }
@@ -138,23 +138,24 @@ enum CosyVoiceProgressParser {
 
 // MARK: - Installer
 
-/// CosyVoice3 运行环境/模型的安装器（actor）。
+/// 本地语音模型运行环境/模型的安装器（actor）。
 ///
 /// 设计边界：
 /// - 只负责跑 `scripts/install_cosyvoice.sh` 并解析 `PROGRESS` 行；
 /// - 体积提示由 UI 负责（首次确认后再调用 `install(consent: true)`）；
 /// - 状态机：`unknown → notInstalled → installing → installed/failed`；
 /// - 取消 = 对子进程发 SIGTERM（脚本收到后尽快退出，已下载内容保留）；
-/// - 删除 = 删除整个安装目录（venv/repo/模型/参考音），调用方应先停服务。
+/// - 删除 = 只删 Qwen3 模型目录 + 标记 + venv；共享 `voices/` 保留；
+/// - 旧版 CosyVoice3 残留由 `legacyCosyVoice3Bytes()` / `deleteLegacyCosyVoice3()` 单独清理。
 actor CosyVoiceInstaller {
     static let shared = CosyVoiceInstaller()
 
-    /// 依赖（Python venv + torch 等）约 2–3GB，按 2.5GB 估算。
-    static let estimatedDependencyBytes: Int64 = 5 * 512 * 1024 * 1024
-    /// 模型（Fun-CosyVoice3-0.5B-2512）约 5–7GB，按 6GB 估算。
-    static let estimatedModelBytes: Int64 = 6 * 1024 * 1024 * 1024
-    /// 合计约 8GB（设置页展示「约 7–8GB」）。
-    static let estimatedTotalBytes: Int64 = estimatedDependencyBytes + estimatedModelBytes
+    /// Qwen3-TTS MLX 模型约 4.2GB（bf16 1.7B：3.6GB 权重 + 0.65GB speech tokenizer）。
+    static let estimatedModelBytes: Int64 = Int64(4.2 * 1024 * 1024 * 1024)
+    /// 依赖（mlx-audio/fastapi/uvicorn 等）约 0.5GB。
+    static let estimatedDependencyBytes: Int64 = 500 * 1024 * 1024
+    /// Qwen3-TTS 合计约 4.7GB（运行时 MLX 峰值内存约 10GB，首次合成需预热）。
+    static let estimatedTotalBytes: Int64 = estimatedModelBytes + estimatedDependencyBytes
     static let maxLogLines = 200
     static let cancelGraceSeconds: TimeInterval = 5
 
@@ -188,6 +189,7 @@ actor CosyVoiceInstaller {
         CosyVoiceInstallation.isInstalled(home: CosyVoiceInstallation.home)
     }
 
+    /// 安装状态快照。
     func snapshot() -> CosyVoiceInstallSnapshot {
         CosyVoiceInstallSnapshot(
             state: state,
@@ -198,8 +200,9 @@ actor CosyVoiceInstaller {
         )
     }
 
-    /// 从文件系统重新推导状态（打开设置页/删除后调用）。
+    /// 从文件系统重新推导安装状态（打开设置页/切换设备/删除后调用）。
     func refresh() -> CosyVoiceInstallSnapshot {
+        // 安装中不改状态机；UI 在安装期间会禁用相关操作。
         guard !state.isInstalling else { return snapshot() }
         let installed = CosyVoiceInstallation.isInstalled(home: home)
         state = installed
@@ -212,7 +215,8 @@ actor CosyVoiceInstaller {
 
     /// 运行安装脚本直到结束。
     ///
-    /// - `consent` 必须为 true（UI 先展示「约 7GB、依赖 + 模型」确认框）。
+    /// - `consent` 必须为 true（UI 先展示「约 4.7GB、依赖 + 模型」确认框）。
+    /// - 脚本只传 `--home`（单模型 Qwen3-TTS；venv/模型/标记都由 home 推导）。
     /// - 成功：`state = .installed`；失败/取消抛 `CosyVoiceInstallError`。
     func install(consent: Bool) async throws {
         guard consent else { throw CosyVoiceInstallError.consentRequired }
@@ -230,7 +234,7 @@ actor CosyVoiceInstaller {
         cancelled = false
         pendingExitStatus = nil
         logLines.removeAll()
-        state = .installing(progress: 0, message: "准备安装…")
+        state = .installing(progress: 0, message: "准备安装 Qwen3-TTS-1.7B…")
         defer {
             activeInstall = false
             process = nil
@@ -238,12 +242,13 @@ actor CosyVoiceInstaller {
         }
 
         appendLog("安装脚本：\(script.path)")
+        appendLog("模型：Qwen3-TTS-1.7B（约 4.7GB）")
         let environment = CosyVoiceInstallation.scriptEnvironment(home: home)
         let launched: any CosyVoiceLaunchedProcess
         do {
             launched = try launcher.launch(
                 script: script,
-                // 安装脚本用 --home 定位 venv/模型/音色/标记文件（默认仓库 _local/cosyvoice）。
+                // 安装脚本用 --home 定位 venv/models/voices/marker（单模型，无 --engine）。
                 arguments: ["--home", home.path],
                 environment: environment,
                 onLine: { [weak self] line in
@@ -279,7 +284,7 @@ actor CosyVoiceInstaller {
                 throw CosyVoiceInstallError.failed(reason)
             }
             state = .installed(installedAt: Self.markerDate(home: home))
-            appendLog("安装完成")
+            appendLog("Qwen3-TTS 安装完成")
             return
         }
         let reason = lastMeaningfulLog()
@@ -305,27 +310,47 @@ actor CosyVoiceInstaller {
 
     // MARK: 删除
 
-    /// 删除本地安装（整个 home：venv/repo/模型/参考音）。
+    /// 删除 Qwen3-TTS 本地安装。
     ///
-    /// 调用方应先 `CosyVoiceRuntime.stop()`；删除后需重新下载约 7GB。
+    /// - 只删模型目录 + 安装标记 + venv；共享的 `voices/`（用户参考音）保留；
+    /// - 旧版 CosyVoice3 残留不在这里处理（见 `deleteLegacyCosyVoice3`）。
+    /// 调用方应先 `CosyVoiceRuntime.stop()`。
     func deleteLocalInstall() throws {
         guard !activeInstall, !state.isInstalling else {
             throw CosyVoiceInstallError.failed("安装进行中，请先取消")
         }
-        guard CosyVoiceInstallation.isSafeToDelete(home) else {
+        guard CosyVoiceInstallation.isSafeToRemoveInstallFiles(home: home) else {
             throw CosyVoiceInstallError.deleteFailed(
                 "安装目录不在允许删除的范围内：\(home.path)")
         }
-        let fileManager = FileManager.default
         do {
-            if fileManager.fileExists(atPath: home.path) {
-                try fileManager.removeItem(at: home)
-            }
+            try CosyVoiceInstallation.removeInstallFiles(home: home)
         } catch {
             throw CosyVoiceInstallError.deleteFailed(error.localizedDescription)
         }
         logLines.removeAll()
         state = .notInstalled
+    }
+
+    // MARK: 旧版 CosyVoice3 清理
+
+    /// 旧版 CosyVoice3 残留占用的字节数（UI 展示「清理…（约 xGB）」）。
+    func legacyCosyVoice3Bytes() -> Int64 {
+        CosyVoiceInstallation.legacyCosyVoice3Bytes(home: home)
+    }
+
+    /// 删除旧版 CosyVoice3 残留（`.installed`/`repo`/旧模型/`venv`），保留 voices 与 Qwen3。
+    /// 调用方应先 `CosyVoiceRuntime.stop()`。
+    func deleteLegacyCosyVoice3() throws {
+        guard !activeInstall, !state.isInstalling else {
+            throw CosyVoiceInstallError.failed("安装进行中，请先取消")
+        }
+        guard CosyVoiceInstallation.isSafeToRemoveInstallFiles(home: home) else {
+            throw CosyVoiceInstallError.deleteFailed(
+                "安装目录不在允许删除的范围内：\(home.path)")
+        }
+        try CosyVoiceInstallation.deleteLegacyCosyVoice3(home: home)
+        appendLog("已清理旧版 CosyVoice3 残留文件（音色与 Qwen3-TTS 安装保留）")
     }
 
     // MARK: 内部

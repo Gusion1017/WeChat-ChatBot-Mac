@@ -1232,7 +1232,6 @@
 /* Voice panel v1.4.1 (2026-10-27): engine/voice/model/preview, slimmer layout. */
 "语音引擎与音色" = "Voice Engine & Voice";
 /* Voice engine (2026-10-29): CosyVoice3 is the only TTS engine. */
-"CosyVoice3 是本机离线语音引擎：运行环境与模型需单独安装（约 8GB），语音合成全部在本机完成、不联网。发布版 App 内置 CosyVoice3 安装/启动脚本；若脚本缺失，可用 WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT 指定路径。App 不内置任何音色：音色仅保存在本机，需在「管理音色…」中添加。" = "CosyVoice3 is the on-device offline voice engine: its runtime and model (about 8 GB) are installed separately, and all speech synthesis runs locally without network access. The packaged app bundles the CosyVoice3 install/start scripts; if they are missing, point WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT at them. The app ships no voices: voices are stored locally only, so add one under “Manage Voices…”.";
 "开启语音回复时，启动 App 或打开本页会拉起本地服务" = "While voice replies are enabled, launching the app or opening this page starts the local service";
 "音色" = "Voice";
 "试听" = "Preview";
@@ -1397,7 +1396,6 @@
 "默认通道在「AI 模型 → 默认通道」设置" = "Set the default channel in AI Models → Default Channel";
 
 /* CosyVoice3 local engine (2026-10-27): service lifecycle, install progress, voices, endpoint. */
-"本地大模型（Fun-CosyVoice3-0.5B），需下载约 8GB；首次启动与合成较慢（非实时，适合高质量语音）" = "Local large model (Fun-CosyVoice3-0.5B). About 8 GB to download; startup and synthesis are slow (not real-time; suited to high-quality voice)";
 "本地服务" = "Local Service";
 "启动中" = "Starting";
 "运行环境与模型" = "Runtime & Model";
@@ -1409,18 +1407,10 @@
 "服务地址" = "Service URL";
 "默认 http://127.0.0.1:5051；仅允许本机回环地址，改端口后需重启本地服务" = "Default http://127.0.0.1:5051; loopback only. Restart the local service after changing the port";
 "仅允许本机回环地址，例如 http://127.0.0.1:5051" = "Loopback addresses only, e.g. http://127.0.0.1:5051";
-"先安装 CosyVoice3" = "Install CosyVoice3 first";
 "先启动本地服务" = "Start the local service first";
-"请先安装 CosyVoice3 运行环境与模型" = "Install the CosyVoice3 runtime and model first";
-"CosyVoice3 服务已启动" = "CosyVoice3 service started";
-"CosyVoice3 已安装" = "CosyVoice3 installed";
 "已取消安装" = "Installation cancelled";
-"已删除 CosyVoice3" = "CosyVoice3 deleted";
 "服务地址无效：仅允许本机回环地址，例如 http://127.0.0.1:5051" = "Invalid service URL: loopback addresses only, e.g. http://127.0.0.1:5051";
-"下载并安装 CosyVoice3" = "Download & Install CosyVoice3";
 "同意并安装" = "Agree & Install";
-"将下载 CosyVoice3 运行环境（依赖约 2–3GB）与模型（约 5–7GB），合计约 8GB，保存在本机。安装可能持续数十分钟，可随时取消；取消后已下载内容会保留。" = "This downloads the CosyVoice3 runtime (about 2–3 GB of dependencies) and model (about 5–7 GB), roughly 8 GB in total, to this Mac. Installation can take tens of minutes and can be cancelled at any time; downloaded data is kept for the next attempt.";
-"删除 CosyVoice3？" = "Delete CosyVoice3?";
 "会删除运行环境、模型与参考音（约 8GB），需要时可重新安装。已生成的语音文件不受影响。" = "This removes the runtime, model and reference voices (about 8 GB). You can reinstall later. Generated voice files are unaffected.";
 "启动失败：%@" = "Failed to start: %@";
 "未运行 · %@（首次启动需加载模型，约 20–60 秒）" = "Not running · %@ (the first launch loads the model, about 20–60 s)";
@@ -1429,10 +1419,7 @@
 "未安装 · 合计约 %@（依赖约 2–3GB + 模型约 5–7GB）" = "Not installed · about %@ in total (≈2–3 GB dependencies + ≈5–7 GB model)";
 "音色 %@ 来自本地服务" = "Voice %@ provided by the local service";
 "快捷档位 1.0× / 1.25× / 1.5×（默认 1.25×），也可拖动滑杆微调" = "Presets 1.0× / 1.25× / 1.5× (default 1.25×); drag the slider to fine-tune";
-"0.5×–2.0×，仅对 CosyVoice3 生效" = "0.5×–2.0×, applies to CosyVoice3 only";
 "自定义 %@" = "Custom %@";
-"CosyVoice3 运行环境与模型" = "CosyVoice3 runtime & model";
-"先安装 CosyVoice3 后才能试听" = "Install CosyVoice3 before previewing";
 "先启动本地服务后可试听" = "Start the local service to preview";
 "安装日志：暂无输出" = "Install log: no output yet";
 
@@ -1441,7 +1428,6 @@
 "cross-lingual（无参考文本）" = "cross-lingual (no reference text)";
 "会删除该音色的参考音频、参考文本与清单条目，无法恢复；内置音色不可删除。" = "This deletes the voice's reference audio, reference text, and manifest entry. It cannot be undone. Built-in voices cannot be deleted.";
 "保存修改" = "Save Changes";
-"先安装 CosyVoice3 运行环境与模型" = "Install the CosyVoice3 runtime and model first";
 "先选择参考音频" = "Choose reference audio first";
 "内置" = "Built-in";
 "内置音色不可删除" = "Built-in voices cannot be deleted";
@@ -1459,7 +1445,6 @@
 "已删除音色" = "Voice deleted";
 "建议填写与音频逐字对应的参考文本；留空或开启 cross-lingual 时只使用参考音，音色相似度可能略低。自动转写失败可手动填写。" = "Enter reference text that matches the audio word for word. If left blank or cross-lingual is enabled, only the reference audio is used and similarity may be slightly lower. Type it manually if transcription fails.";
 "支持 wav / m4a / aiff；5–30 秒、单人说话、清晰无背景音乐。" = "Supports wav / m4a / aiff; 5–30 s, single speaker, clear audio without background music.";
-"新增 CosyVoice3 音色" = "Add CosyVoice3 Voice";
 "新增音色…" = "Add Voice…";
 "无法读取所选音频：%@" = "Could not read the selected audio: %@";
 "时长未知" = "Unknown duration";
@@ -1467,15 +1452,12 @@
 "服务未运行或缺少参考音频" = "Service is not running or reference audio is missing";
 "服务未运行：改动将在下次启动服务后生效" = "Service not running: changes take effect the next time it starts";
 "服务音色已重新加载" = "Service voices reloaded";
-"查看/新增/编辑/删除 CosyVoice3 音色" = "View, add, edit, or delete CosyVoice3 voices";
 "正在读取本机音色库…" = "Reading the local voice library…";
 "没有识别到语音内容，请手动填写参考文本。" = "No speech was recognized; enter the reference text manually.";
 "添加音色" = "Add Voice";
 "用系统本地语音识别转写参考音频" = "Transcribe the reference audio with on-device speech recognition";
 "简介（可选）" = "Description (optional)";
-"管理 CosyVoice3 音色" = "Manage CosyVoice3 Voices";
 "管理音色…" = "Manage Voices…";
-"编辑 CosyVoice3 音色" = "Edit CosyVoice3 Voice";
 "自动转写" = "Auto-transcribe";
 "自动转写失败：%@；可手动填写参考文本。" = "Auto-transcription failed: %@; you can enter the reference text manually.";
 "让本地服务重新读取 voices.json（新增/编辑后自动执行）" = "Make the local service re-read voices.json (done automatically after add/edit)";
@@ -1495,9 +1477,7 @@
 "先添加一个音色" = "Add a voice first";
 "请先在「管理音色…」中添加一个音色" = "Add a voice in “Manage Voices…” first";
 "添加音色…" = "Add Voice…";
-"启动本地 CosyVoice3 服务" = "Start the local CosyVoice3 service";
 "还没有任何音色" = "No voices yet";
-"App 不内置任何音色。添加 1–5 条 5–30 秒的参考音频后，就可以用本机 CosyVoice3 合成语音。" = "The app ships with no voices. Add 1–5 clips of 5–30 s reference audio to synthesize speech locally with CosyVoice3.";
 "App 不内置任何音色，音色仅保存在本机。" = "The app ships with no voices; voices stay on this Mac.";
 "App 不内置任何音色；内置音色只允许改名称/简介，自定义音色可编辑或删除。空音色时无法启动服务。" = "The app ships with no voices. Built-in voices can only be renamed/described; custom voices can be edited or deleted. The service cannot start without a voice.";
 
@@ -1923,3 +1903,36 @@
 "综合权重；置顶记忆不衰减" = "Combined weight; pinned memories do not decay";
 "清理聊天记录" = "Clean Up Chat History";
 "删除当前会话在本地 SQLite 中保存的聊天记录。微信端消息、记忆卡与全量记录都不受影响。" = "Deletes the chat history stored in the local SQLite database for this conversation. Messages in WeChat, memory cards, and the interaction archive are unaffected.";
+
+/* Voice: single model (Qwen3-TTS-1.7B) + compute device (2026-11-04). */
+"Qwen3-TTS-1.7B" = "Qwen3-TTS-1.7B";
+"运行设备" = "Compute Device";
+"GPU（MLX，推荐）" = "GPU (MLX, recommended)";
+"CPU（极慢，实验性）" = "CPU (very slow, experimental)";
+"使用 Apple GPU（MLX）合成，速度最快（默认）" = "Synthesize on the Apple GPU (MLX) for the fastest speed (default).";
+"MLX CPU 后端，短句可能数分钟，仅建议排障或无 GPU 环境使用；合成可能超时并改发文字" = "MLX CPU backend: a short sentence may take minutes. Use only for troubleshooting or GPU-less environments; synthesis may time out and fall back to text.";
+"默认：MLX 走 Apple GPU，GPU 预热与合成最快" = "Default: MLX uses the Apple GPU; warm-up and synthesis are fastest.";
+"下载并安装 Qwen3-TTS-1.7B" = "Download and Install Qwen3-TTS-1.7B";
+"删除 Qwen3-TTS-1.7B？" = "Delete Qwen3-TTS-1.7B?";
+"Qwen3-TTS-1.7B 已安装" = "Qwen3-TTS-1.7B installed";
+"已删除 Qwen3-TTS-1.7B" = "Qwen3-TTS-1.7B deleted";
+"先安装 Qwen3-TTS-1.7B" = "Install Qwen3-TTS-1.7B first";
+"先安装 Qwen3-TTS-1.7B 后才能试听" = "Install Qwen3-TTS-1.7B before previewing";
+"先安装 Qwen3-TTS-1.7B 运行环境与模型" = "Install the Qwen3-TTS-1.7B runtime and model first";
+"请先安装 Qwen3-TTS-1.7B 运行环境与模型" = "Install the Qwen3-TTS-1.7B runtime and model first";
+"启动 Qwen3-TTS 本地服务" = "Start Qwen3-TTS local service";
+"停止 Qwen3-TTS 本地服务" = "Stop Qwen3-TTS local service";
+"Qwen3-TTS 本地服务已启动" = "Qwen3-TTS local service started";
+"查看/新增/编辑/删除本机音色" = "View, add, edit, or delete local voices";
+"不可用：%@" = "Unavailable: %@";
+"已安装 · Qwen3-TTS-1.7B · %@" = "Installed · Qwen3-TTS-1.7B · %@";
+"已安装 · Qwen3-TTS-1.7B · %@ · %@" = "Installed · Qwen3-TTS-1.7B · %@ · %@";
+"未安装 · Qwen3-TTS-1.7B · %@" = "Not installed · Qwen3-TTS-1.7B · %@";
+"合计约 %@（MLX 模型约 4.2GB + 依赖约 0.5GB；运行时内存约 10GB）" = "About %@ total (MLX model ~4.2 GB + dependencies ~0.5 GB; ~10 GB runtime memory)";
+"将下载 Qwen3-TTS-1.7B 的 MLX 模型（约 4.2GB）与依赖（约 0.5GB），合计约 4.7GB，保存在本机。运行时内存约 10GB，首次合成会预热约 10 秒；冷启动加载约 20 秒。默认使用 GPU（MLX）；CPU 后端极慢（短句可能数分钟），仅建议排障或无 GPU 环境使用，合成可能超时并改发文字。安装可能持续数十分钟，可随时取消，取消后已下载内容会保留。" = "This downloads the Qwen3-TTS-1.7B MLX model (~4.2 GB) and dependencies (~0.5 GB), about 4.7 GB total, to this Mac. Runtime memory is about 10 GB; the first synthesis warms up for about 10 seconds and cold start takes about 20 seconds. GPU (MLX) is used by default; the CPU backend is very slow (a short sentence may take minutes) and is intended only for troubleshooting or GPU-less environments — synthesis may time out and fall back to text. Installation can take tens of minutes and can be cancelled at any time; downloaded data is kept.";
+"会删除 Qwen3-TTS-1.7B 的模型、运行环境（venv）与安装标记（约 %@）；共享音色/参考音会保留，需要时可重新安装。已生成的语音文件不受影响。" = "This deletes the Qwen3-TTS-1.7B model, runtime (venv), and install marker (about %@). Shared voices/reference audio are kept, and you can reinstall later; generated audio files are unaffected.";
+"清理" = "Clean Up";
+"清理 CosyVoice3 旧文件？" = "Clean up legacy voice files?";
+"已清理 CosyVoice3 旧文件" = "Legacy voice files cleaned up";
+"旧版不再使用；清理后不影响当前音色与 Qwen3-TTS 安装" = "No longer used; cleanup keeps current voices and the Qwen3-TTS install.";
+"将删除旧版 CosyVoice3 的模型、源码仓库、venv 与安装标记（约 %@）。" = "This removes the legacy CosyVoice3 model, source repo, venv, and install marker (about %@).";

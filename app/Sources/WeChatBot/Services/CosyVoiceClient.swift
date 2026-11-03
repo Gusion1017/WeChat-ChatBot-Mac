@@ -2,7 +2,10 @@ import Foundation
 
 // MARK: - Errors
 
-/// CosyVoice3 本地服务客户端的错误（全部带可读中文，供日志与设置页展示）。
+/// 本地语音服务客户端的错误（全部带可读中文，供日志与设置页展示）。
+///
+/// 本机语音服务（Qwen3-TTS-1.7B）的 HTTP 协议与错误类型；错误前缀不写死模型名，
+/// 由调用方在上下文里补充「Qwen3-TTS」等说明。
 enum CosyVoiceError: Error, LocalizedError, Equatable {
     /// 未安装（缺运行环境/模型/音色）。
     case notInstalled
@@ -30,27 +33,27 @@ enum CosyVoiceError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notInstalled:
-            return "CosyVoice3 尚未安装"
+            return "本地语音引擎尚未安装"
         case .invalidRequest(let reason):
-            return "CosyVoice3 请求无效：\(reason)"
+            return "本地语音请求无效：\(reason)"
         case .invalidEndpoint(let raw):
-            return "CosyVoice3 服务地址无效：\(raw)"
+            return "本地语音服务地址无效：\(raw)"
         case .serviceNotRunning(let reason):
-            return "CosyVoice3 本地服务未运行：\(reason)"
+            return "本地语音服务未运行：\(reason)"
         case .serviceLoading(let reason):
-            return "CosyVoice3 正在加载模型：\(reason)"
+            return "本地语音服务正在加载模型：\(reason)"
         case .serviceUnavailable(let reason):
-            return "CosyVoice3 服务不可用：\(reason)"
+            return "本地语音服务不可用：\(reason)"
         case .httpError(let status, let message):
-            return "CosyVoice3 服务返回错误（HTTP \(status)）：\(message)"
+            return "本地语音服务返回错误（HTTP \(status)）：\(message)"
         case .invalidResponse(let reason):
-            return "CosyVoice3 响应无法解析：\(reason)"
+            return "本地语音服务响应无法解析：\(reason)"
         case .audioDecodeFailed(let reason):
-            return "CosyVoice3 音频无法使用：\(reason)"
+            return "本地语音音频无法使用：\(reason)"
         case .outputWriteFailed(let reason):
-            return "CosyVoice3 音频写入失败：\(reason)"
+            return "本地语音音频写入失败：\(reason)"
         case .cancelled:
-            return "CosyVoice3 合成已取消"
+            return "本地语音合成已取消"
         }
     }
 
@@ -86,7 +89,7 @@ enum CosyVoiceError: Error, LocalizedError, Equatable {
 
 // MARK: - 原始合成结果（与 VoiceSynthesisService 的调用面）
 
-/// 一次 CosyVoice3 合成的原始输出：24 kHz 单声道 float PCM（-1...1）。
+/// 一次本地语音合成的原始输出：24 kHz 单声道 float PCM（-1...1）。
 ///
 /// `VoiceSynthesisService` 负责后续统一处理（时长/截断/写 WAV），这里只保证
 /// 「文本 → 本机 HTTP 服务 → PCM 采样」这段链路正确。
@@ -134,7 +137,7 @@ struct CosyVoiceURLSessionTransport: CosyVoiceHTTPTransport {
 
 // MARK: - Client
 
-/// CosyVoice3 本地 HTTP 服务客户端（`devtools/cosyvoice/CONTRACT.md`）。
+/// 本机语音服务（Qwen3-TTS-1.7B）HTTP 客户端（`devtools/cosyvoice/CONTRACT.md`）。
 ///
 /// 设计边界：
 /// - **actor**：串行化请求与配置读写；模型常驻服务进程，HTTP 本身无状态；
@@ -146,7 +149,7 @@ struct CosyVoiceURLSessionTransport: CosyVoiceHTTPTransport {
 actor CosyVoiceClient {
     /// 服务默认地址（`127.0.0.1:5051`）。
     static let defaultEndpoint = URL(string: "http://127.0.0.1:5051")!
-    /// 模型原生采样率（CosyVoice3 固定 24k）。
+    /// 模型原生采样率（Qwen3-TTS 固定 24k）。
     static let defaultSampleRate = 24_000
     /// 服务端限制的最大文本长度（超过会被服务拒绝；App 正常已截断到 500 内）。
     static let maxTextCharacters = 500
@@ -376,7 +379,7 @@ actor CosyVoiceClient {
         let resolvedVoiceID = CosyVoiceVoiceCatalog.resolvedVoiceID(voiceID)
         // 不能把空选择交给服务端（服务端会默认 girl，违反「App 不内置音色」）。
         guard !resolvedVoiceID.isEmpty else {
-            throw CosyVoiceError.invalidRequest("未选择 CosyVoice3 音色")
+            throw CosyVoiceError.invalidRequest("未选择语音音色")
         }
         let clampedSpeed = speed.isFinite ? min(max(speed, 0.5), 2.0) : 1.0
         let request = try Self.ttsRequest(
@@ -424,7 +427,7 @@ actor CosyVoiceClient {
 
     // MARK: 请求构造（纯函数，便于单测）
 
-    /// CosyVoice3 只接受**本机回环**地址：文本不出设备是产品承诺，
+    /// 本机语音服务只接受**本机回环**地址：文本不出设备是产品承诺，
     /// 允许远程 host 会把聊天文本发到用户填写的任意服务器。
     static func isLoopbackHost(_ host: String) -> Bool {
         let value = host.lowercased()

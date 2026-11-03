@@ -1,11 +1,10 @@
 import AppKit
-import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - 音色管理
 
-/// CosyVoice3 音色管理器：内置三音色 + 用户新增音色（试听/使用/编辑/删除）。
+/// 本机音色管理器：内置三音色 + 用户新增音色（试听/使用/编辑/删除）。
 ///
 /// 音色来源：本机 voices.json / 服务端 `/voices`；App 不内置任何音色。
 struct CosyVoiceVoiceManagerSheet: View {
@@ -82,7 +81,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 .foregroundStyle(Theme.violet)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(L("管理 CosyVoice3 音色"))
+                    Text(L("管理本机音色"))
                         .font(.title3.weight(.semibold))
                 }
                 Text(L("App 不内置任何音色，音色仅保存在本机。"))
@@ -176,7 +175,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 .foregroundStyle(.tertiary)
             Text(L("还没有任何音色"))
                 .font(.callout.weight(.medium))
-            Text(L("App 不内置任何音色。添加 1–5 条 5–30 秒的参考音频后，就可以用本机 CosyVoice3 合成语音。"))
+            Text(L("App 不内置任何音色。添加 1–5 段清晰人声（每段至少 1 秒、合计 ≤30 秒，超长会自动截取）后，就可以用本机 Qwen3-TTS 合成语音。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -459,10 +458,7 @@ struct CosyVoiceVoiceManagerSheet: View {
     // MARK: 展示辅助
 
     private func selection(for voice: CosyVoiceManagedVoice) -> VoiceSelection {
-        VoiceSelection(
-            cosyVoiceVoiceID: voice.id,
-            speed: voiceSettings.effectiveCosyVoiceSpeed
-        )
+        VoiceSelection(cosyVoiceVoiceID: voice.id)
     }
 
     private func durationLabel(_ voice: CosyVoiceManagedVoice) -> String {
@@ -502,8 +498,10 @@ enum CosyVoiceVoiceEditorContext: Identifiable {
 
 /// 新增/编辑自定义音色；内置音色只展示参考音频/文本（只读），仅允许改名称/简介。
 ///
-/// 一个音色可保存 1–5 条参考音频（每条 5–30 秒）。保存时 App 把多条按顺序合并成
-/// 一条 prompt（片段间 0.25s 静音），服务端仍按单条 prompt 合成；原始片段存 `refs/`。
+/// 一个音色可保存 1–5 条参考音频（每条至少 1 秒，合并总长 ≤30 秒；超长导入自动截取）。
+/// 保存时 App 把多条按顺序合并成一条 prompt（片段间 0.25s 静音），服务端仍按单条 prompt
+/// 合成；原始片段存 `refs/`。文本可自动转写，部分缺失时保存前尽量补齐、仍缺失则按
+/// cross-lingual 使用。
 ///
 /// 操作方式：新增时不再预置空片段，直接「拖入 / 多选导入」；已导入的片段可上下移动、
 /// 更换、删除、逐条或批量自动转写。参考文本使用原生 `ReferenceTextEditor`，避免
@@ -527,6 +525,8 @@ struct CosyVoiceVoiceEditorSheet: View {
     @State private var transcribingClipID: String?
     @State private var isTranscribingAll = false
     @State private var isDropTargeted = false
+    /// 导入/更换音频后是否立即用系统本地语音识别转写参考文本（默认开，仅表单内状态）。
+    @State private var autoTranscribeOnImport = true
 
     private let voiceStore = CosyVoiceVoiceStore.shared
 
@@ -587,10 +587,11 @@ struct CosyVoiceVoiceEditorSheet: View {
         }
     }
 
-    private struct EditorAudioError: LocalizedError {
-        let message: String
-        init(_ message: String) { self.message = message }
-        var errorDescription: String? { message }
+    /// 导入预处理结果：临时 WAV + 实际时长 + 是否因总预算被截取。
+    private struct PreparedImport {
+        var clip: EditorReferenceClip
+        var duration: TimeInterval
+        var trimmed: Bool
     }
 
     private enum ImportTarget: Equatable {
@@ -616,20 +617,13 @@ struct CosyVoiceVoiceEditorSheet: View {
     private var pendingTextCount: Int {
         clips.filter { $0.hasAudio && !$0.hasText }.count
     }
-    private var emptyTextCount: Int {
-        clips.filter { !$0.hasText }.count
-    }
-    private var hasMixedTexts: Bool {
-        guard !crossLingual else { return false }
-        return emptyTextCount > 0 && emptyTextCount < clips.count
+    private var hasAnyReferenceText: Bool {
+        clips.contains(where: \.hasText)
     }
     private var totalDuration: TimeInterval {
         let durations = clips.compactMap(\.duration)
         guard !clips.isEmpty, durations.count == clips.count else { return 0 }
         return CosyVoiceReferenceSpec.combinedDuration(durations)
-    }
-    private var totalTooLong: Bool {
-        totalDuration > CosyVoiceReferenceSpec.maxTotalDuration
     }
     private var canSave: Bool {
         guard !isSaving, !trimmedName.isEmpty else { return false }
@@ -637,8 +631,6 @@ struct CosyVoiceVoiceEditorSheet: View {
         guard !clips.isEmpty, clips.count <= maxReferenceCount else { return false }
         guard clips.allSatisfy(\.hasAudio) else { return false }
         guard !isBusyTranscribing else { return false }
-        guard !hasMixedTexts else { return false }
-        guard !totalTooLong else { return false }
         return true
     }
     private var canImport: Bool {
@@ -654,11 +646,10 @@ struct CosyVoiceVoiceEditorSheet: View {
         if clips.isEmpty { return L("请至少添加一条参考音频") }
         if clips.contains(where: { !$0.hasAudio }) { return L("请为每条参考音频选择音频文件。") }
         if isBusyTranscribing { return L("正在转写参考文本，请稍候。") }
-        if hasMixedTexts { return L("多条参考音频的参考文本需要同时填写或同时留空。") }
-        if totalTooLong {
-            return Lf(
-                "参考音频总时长 %.1f 秒，超过上限 %.0f 秒。",
-                totalDuration, CosyVoiceReferenceSpec.maxTotalDuration)
+        if pendingTextCount > 0 {
+            return hasAnyReferenceText
+                ? L("保存前会自动转写缺失的参考文本；仍为空则按 cross-lingual 使用。")
+                : L("参考文本为空时按 cross-lingual 使用（相似度会下降）；可点「自动转写全部」补齐。")
         }
         return ""
     }
@@ -706,7 +697,7 @@ struct CosyVoiceVoiceEditorSheet: View {
         .frame(width: 580, height: 700)
         .fileImporter(
             isPresented: $importerPresented,
-            allowedContentTypes: [.wav, .mpeg4Audio, .aiff],
+            allowedContentTypes: [.audio],
             allowsMultipleSelection: true
         ) { result in
             switch result {
@@ -731,11 +722,11 @@ struct CosyVoiceVoiceEditorSheet: View {
                 .font(.system(size: 24))
                 .foregroundStyle(Theme.violet)
             VStack(alignment: .leading, spacing: 2) {
-                Text(isAdding ? L("新增 CosyVoice3 音色") : L("编辑 CosyVoice3 音色"))
+                Text(isAdding ? L("新增音色") : L("编辑音色"))
                     .font(.title3.weight(.semibold))
                 Text(isBuiltin
                     ? L("内置音色只允许修改名称和简介；参考音频/参考文本与官方参考音严格对应，不可替换。")
-                    : L("支持 1–5 条参考音频，可拖入或一次多选；保存时按顺序合并成一个 prompt（总长 ≤30 秒）。"))
+                    : L("支持 1–5 段参考音频，可拖入或一次多选；每段至少 1 秒，合计 ≤30 秒，超长会自动截取；保存时按顺序合并成一个 prompt。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -765,9 +756,9 @@ struct CosyVoiceVoiceEditorSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if totalDuration > 0 {
-                    Text(Lf("合并约 %.1f 秒", totalDuration))
+                    Text(Lf("合并约 %.1f / %.0f 秒", totalDuration, CosyVoiceReferenceSpec.maxTotalDuration))
                         .font(.caption2)
-                        .foregroundStyle(totalTooLong ? Theme.danger : Color.secondary)
+                        .foregroundStyle(.secondary)
                 }
             }
             if clips.isEmpty {
@@ -783,24 +774,17 @@ struct CosyVoiceVoiceEditorSheet: View {
                         .foregroundStyle(Theme.violet)
                 }
             }
-            if hasMixedTexts {
+            if pendingTextCount > 0, !crossLingual {
                 Label(
-                    Lf("还有 %d 条参考文本为空：多条参考音频需要同时填写或同时留空。", emptyTextCount),
-                    systemImage: "exclamationmark.triangle.fill")
+                    hasAnyReferenceText
+                        ? Lf("还有 %d 条参考文本为空：保存时会自动转写；仍为空则按 cross-lingual 使用。", pendingTextCount)
+                        : Lf("%d 条参考文本为空：保存时按 cross-lingual 使用（相似度会下降）；可点「自动转写全部」补齐。", pendingTextCount),
+                    systemImage: "info.circle")
                     .font(.caption2)
-                    .foregroundStyle(Theme.warning)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if totalTooLong {
-                Label(
-                    Lf("参考音频总时长 %.1f 秒，超过上限 %.0f 秒。",
-                        totalDuration, CosyVoiceReferenceSpec.maxTotalDuration),
-                    systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text(L("支持 wav / m4a / aiff；每条 5–30 秒、单人说话、清晰无背景音乐。多条按顺序合并；总长 ≤30 秒。"))
+            Text(L("加一段 1–30 秒清晰人声即可；更长会自动截取；文本可自动识别并修改；支持 wav / mp3 / m4a / flac 等常见格式。参考文本越准确，克隆越像；留空也能合成，但相似度会下降。"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -823,7 +807,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 .foregroundStyle(isDropTargeted ? Theme.violet : Color.secondary)
             Text(L("拖入或选择参考音频"))
                 .font(.callout.weight(.medium))
-            Text(Lf("一次可选择多条，最多 %d 条；每条 5–30 秒。", maxReferenceCount))
+            Text(Lf("一次可选择多条，最多 %d 条；每段至少 1 秒，超长会自动截取。", maxReferenceCount))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -876,6 +860,14 @@ struct CosyVoiceVoiceEditorSheet: View {
             .help(pendingTextCount == 0
                 ? L("所有参考文本都已填写")
                 : Lf("自动转写 %d 条尚未填写文本的参考音频", pendingTextCount))
+            Toggle(isOn: $autoTranscribeOnImport) {
+                Text(L("导入后自动转写"))
+                    .font(.caption2)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .disabled(isSaving || isBusyTranscribing)
+            .help(L("导入或更换音频后自动识别参考文本；识别失败仍可手动填写"))
             Spacer()
             if isBusyTranscribing {
                 Text(L("正在转写参考文本…"))
@@ -983,7 +975,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 if value.text.isEmpty {
                     Text(crossLingual
                         ? L("cross-lingual 开启时此文本不参与合成")
-                        : L("与这条音频逐字对应的参考文本"))
+                        : L("与这条音频逐字对应的参考文本（可自动识别，也可手动填写）"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 12)
@@ -1027,8 +1019,8 @@ struct CosyVoiceVoiceEditorSheet: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             Text(crossLingual
-                ? L("已开启 cross-lingual：保存后参考文本不参与合成；开始手动输入文本会自动关闭它。")
-                : L("建议为每条参考音填写逐字对应的参考文本；多条必须同时填写或同时留空。全部留空时自动使用 cross-lingual，只克隆音色。自动转写失败可手动填写。"))
+                ? L("已开启 cross-lingual：保存后参考文本不参与合成，只用参考音（相似度会下降）；开始手动输入文本会自动关闭它。")
+                : L("建议为每条参考音填写逐字对应的参考文本；导入后会自动识别，也可手动修改。文本越准确、克隆越像；全部留空也能合成，但相似度会下降（自动使用 cross-lingual）。"))
                 .font(.caption2)
                 .foregroundStyle(crossLingual ? Theme.warning : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1127,76 +1119,132 @@ struct CosyVoiceVoiceEditorSheet: View {
 
     private func importForAppend(_ urls: [URL]) {
         guard !isSaving, transcribingClipID == nil, !isTranscribingAll else { return }
-        let remaining = max(0, maxReferenceCount - clips.count)
-        guard remaining > 0 else {
+        let remainingCount = max(0, maxReferenceCount - clips.count)
+        guard remainingCount > 0 else {
             errorText = Lf("最多保存 %d 条参考音频。", maxReferenceCount)
             return
         }
-        let audioURLs = urls.filter(Self.isSupportedAudio)
-        let unsupported = urls.count - audioURLs.count
+        guard !urls.isEmpty else { return }
         var failures: [String] = []
-        for url in audioURLs.prefix(remaining) {
+        var trimmedDurations: [TimeInterval] = []
+        var addedIDs: [String] = []
+        var stoppedForBudget = false
+        for url in urls {
+            guard addedIDs.count < remainingCount else { break }
+            let budget = CosyVoiceReferenceSpec.remainingBudget(current: totalDuration)
+            guard budget >= CosyVoiceReferenceSpec.minClipDuration - 0.05 else {
+                stoppedForBudget = !clips.isEmpty
+                break
+            }
             do {
-                try appendClip(url)
+                let prepared = try prepareImportedClip(url, maxDuration: budget)
+                clips.append(prepared.clip)
+                addedIDs.append(prepared.clip.id)
+                if prepared.trimmed {
+                    trimmedDurations.append(prepared.duration)
+                }
             } catch {
                 failures.append("\(url.lastPathComponent)：\(Self.describe(error))")
             }
         }
         if !failures.isEmpty {
             errorText = Lf("以下音频未能加入：%@", failures.joined(separator: "；"))
-        } else if audioURLs.count > remaining {
+        } else if stoppedForBudget {
+            errorText = L("参考音总长已达 30 秒，请先删除或缩短参考音。")
+        } else if addedIDs.count < urls.count {
             errorText = Lf("最多保存 %d 条参考音频，多余的已忽略。", maxReferenceCount)
-        } else if unsupported > 0 {
-            errorText = Lf("已忽略 %d 个非 wav / m4a / aiff 文件", unsupported)
         } else {
             errorText = nil
         }
+        if !trimmedDurations.isEmpty {
+            toast.show(trimmedToast(trimmedDurations), tone: .info)
+        }
+        transcribeImportedClips(addedIDs)
     }
 
     private func importForReplace(_ urls: [URL], clipID: String) {
         guard !isSaving, !isBusyTranscribing else { return }
-        guard let url = urls.first(where: Self.isSupportedAudio) else {
-            errorText = L("请选择 wav / m4a / aiff 音频文件。")
+        guard let url = urls.first else {
+            errorText = L("请选择音频文件。")
             return
         }
         replaceAudio(clipID: clipID, with: url)
     }
 
-    private func appendClip(_ url: URL) throws {
-        let temp = try copyToTemporary(url)
-        if let reason = Self.audioValidationMessage(url: temp) {
-            try? FileManager.default.removeItem(at: temp)
-            throw EditorAudioError(reason)
-        }
-        clips.append(EditorReferenceClip(
+    /// 读入用户音频 → 按剩余总预算自动截取 → 写成 24k 临时 WAV（保存走现有 `.newAudio` 流程）。
+    private func prepareImportedClip(
+        _ url: URL,
+        maxDuration: TimeInterval
+    ) throws -> PreparedImport {
+        let prepared = try CosyVoiceVoiceStore.fittedReferenceAudio(
+            url: url, maxDuration: maxDuration)
+        let temp = try CosyVoiceVoiceStore.writeTemporaryWAV(prepared.samples)
+        let trimmed = (prepared.originalDuration ?? prepared.duration)
+            > prepared.duration + 0.05
+        let clip = EditorReferenceClip(
             existingPath: nil,
             newAudioURL: temp,
             text: "",
-            duration: Self.audioDuration(url: temp),
+            duration: prepared.duration,
             displayName: url.lastPathComponent
-        ))
+        )
+        return PreparedImport(clip: clip, duration: prepared.duration, trimmed: trimmed)
+    }
+
+    /// 导入成功后自动转写新片段；失败只提示、不阻断导入。
+    private func transcribeImportedClips(_ ids: [String]) {
+        guard autoTranscribeOnImport, !ids.isEmpty else { return }
+        Task { @MainActor in
+            for id in ids {
+                guard clips.contains(where: { $0.id == id }) else { continue }
+                await transcribeClip(id: id)
+            }
+        }
+    }
+
+    private func trimmedToast(_ durations: [TimeInterval]) -> String {
+        if durations.count == 1 {
+            return Lf("已自动截取到 %.1f 秒", durations[0])
+        }
+        let total = durations.reduce(0, +)
+        return Lf("已自动截取 %d 段音频（合计 %.1f 秒，合并总长 ≤30 秒）",
+                  durations.count, total)
     }
 
     private func replaceAudio(clipID: String, with url: URL) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        let otherDurations = clips.enumerated()
+            .filter { $0.offset != index }
+            .compactMap { $0.element.duration }
+        // 替换不改变条数：扣掉其余片段与间隙静音，剩余额度就是这条的预算。
+        let fixedDuration = CosyVoiceReferenceSpec.combinedDuration(
+            otherDurations + [0])
+        let budget = CosyVoiceReferenceSpec.maxTotalDuration - fixedDuration
+        guard budget >= CosyVoiceReferenceSpec.minClipDuration - 0.05 else {
+            errorText = L("参考音总长已达 30 秒，请先删除或缩短参考音。")
+            return
+        }
         do {
-            let temp = try copyToTemporary(url)
-            if let reason = Self.audioValidationMessage(url: temp) {
-                try? FileManager.default.removeItem(at: temp)
-                throw EditorAudioError(reason)
-            }
+            let prepared = try prepareImportedClip(url, maxDuration: budget)
             if let old = clips[index].newAudioURL, isTemporary(old) {
                 try? FileManager.default.removeItem(at: old)
             }
-            clips[index].newAudioURL = temp
+            clips[index].newAudioURL = prepared.clip.newAudioURL
             clips[index].existingPath = nil
-            clips[index].displayName = url.lastPathComponent
-            clips[index].duration = Self.audioDuration(url: temp)
-            // 音频换了，旧文本不再与音频逐字对应：清空并让用户重新填写/转写。
+            clips[index].displayName = prepared.clip.displayName
+            clips[index].duration = prepared.duration
+            // 音频换了，旧文本不再与音频逐字对应：清空后自动转写或等用户填写。
             clips[index].text = ""
             clips[index].revision += 1
             errorText = nil
-            toast.show(L("已更换音频，请重新填写或转写参考文本"), tone: .info)
+            if prepared.trimmed {
+                toast.show(Lf("已自动截取到 %.1f 秒", prepared.duration), tone: .info)
+            } else if !autoTranscribeOnImport {
+                toast.show(L("已更换音频，请重新填写或转写参考文本"), tone: .info)
+            }
+            if autoTranscribeOnImport {
+                transcribeImportedClips([clips[index].id])
+            }
         } catch {
             errorText = Lf("无法读取所选音频：%@", Self.describe(error))
         }
@@ -1278,24 +1326,31 @@ struct CosyVoiceVoiceEditorSheet: View {
         guard canSave else { return }
         let name = trimmedName
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let crossLingual = crossLingual
+        let requestedCrossLingual = crossLingual
         let context = context
         if !isBuiltin {
-            guard CosyVoiceReferenceSpec.hasConsistentTexts(
-                clips.map(\.text), crossLingual: crossLingual) else {
-                errorText = L("多条参考音频的参考文本需要同时填写或同时留空；也可以全部留空使用 cross-lingual。")
-                return
-            }
             guard !clips.contains(where: { !$0.hasAudio }) else {
                 errorText = L("请为每条参考音频选择音频文件。")
                 return
             }
         }
-        let inputs = makeInputs()
+        // 全部留空 = 用户有意 cross-lingual；部分留空才在保存前尝试自动补齐。
+        let hadAnyTextInitially = clips.contains(where: \.hasText)
+        let fillTargets = (!isBuiltin && !requestedCrossLingual && hadAnyTextInitially)
+            ? clips.filter { $0.hasAudio && !$0.hasText }.map(\.id)
+            : []
         isSaving = true
         errorText = nil
         Task {
             defer { isSaving = false }
+            for id in fillTargets {
+                if Task.isCancelled { break }
+                await transcribeClip(id: id)
+            }
+            let pendingTexts = clips.filter { $0.hasAudio && !$0.hasText }.count
+            // 仍有缺失时按 cross-lingual 保存，保证 prompt.txt 与合并 prompt.wav 对得上。
+            let effectiveCrossLingual = requestedCrossLingual || pendingTexts > 0
+            let inputs = makeInputs()
             do {
                 switch context {
                 case .add:
@@ -1307,7 +1362,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                         name: name,
                         references: inputs,
                         description: description,
-                        crossLingual: crossLingual
+                        crossLingual: effectiveCrossLingual
                     )
                     store.settings.bot.voiceSettings.cosyVoiceVoiceID = voice.id
                     store.persist()
@@ -1322,7 +1377,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                             name: name,
                             description: description,
                             references: inputs,
-                            crossLingual: crossLingual
+                            crossLingual: effectiveCrossLingual
                         )
                     } else {
                         // 只改名称/简介/模式：不重写音频，旧单参考音色也不必迁移到 refs/。
@@ -1330,10 +1385,15 @@ struct CosyVoiceVoiceEditorSheet: View {
                             id: voice.id,
                             name: name,
                             description: description,
-                            crossLingual: crossLingual
+                            crossLingual: effectiveCrossLingual
                         )
                     }
                     toast.show(L("音色已保存"), tone: .success)
+                }
+                if pendingTexts > 0, hadAnyTextInitially {
+                    toast.show(
+                        Lf("有 %d 段参考音缺少文本，已按 cross-lingual 使用", pendingTexts),
+                        tone: .info)
                 }
                 onSaved()
                 dismiss()
@@ -1395,45 +1455,8 @@ struct CosyVoiceVoiceEditorSheet: View {
         }
     }
 
-    private func copyToTemporary(_ url: URL) throws -> URL {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let ext = url.pathExtension.lowercased()
-        guard Self.isSupportedAudio(url) else {
-            throw EditorAudioError(L("不支持 .\(ext.isEmpty ? "未知" : ext) 格式；请使用 wav / m4a / aiff"))
-        }
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "cosyvoice-voice-\(UUID().uuidString).\(ext)")
-        try FileManager.default.copyItem(at: url, to: temp)
-        return temp
-    }
-
     private func isTemporary(_ url: URL) -> Bool {
         url.path.hasPrefix(FileManager.default.temporaryDirectory.path)
-    }
-
-    private static func isSupportedAudio(_ url: URL) -> Bool {
-        ["wav", "m4a", "aiff", "aif"].contains(url.pathExtension.lowercased())
-    }
-
-    private static func audioValidationMessage(url: URL) -> String? {
-        guard let duration = audioDuration(url: url) else {
-            return L("无法读取该音频文件")
-        }
-        if duration < CosyVoiceReferenceSpec.minClipDuration - 0.05 {
-            return Lf("音频太短（%.1f 秒），需要 5–30 秒", duration)
-        }
-        if duration > CosyVoiceReferenceSpec.maxClipDuration + 0.05 {
-            return Lf("音频太长（%.1f 秒），需要 5–30 秒", duration)
-        }
-        return nil
-    }
-
-    private static func audioDuration(url: URL) -> TimeInterval? {
-        guard let file = try? AVAudioFile(forReading: url),
-              file.processingFormat.sampleRate > 0 else { return nil }
-        return Double(file.length) / file.processingFormat.sampleRate
     }
 
     private static func fileName(of path: String?, fallback: String) -> String {

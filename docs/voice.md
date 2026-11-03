@@ -15,15 +15,16 @@
 | 入站音频获取 | `POST /fetch_voice`：`triggerDownload(fileType=15)` → AES-ECB → SILK 校验 → 落盘 `.silk` + 16k WAV | ✅ 2026-10-26 真机验证：3 条真实语音全部成功（含 3.8s/7.0s/4.2s），fileType **15 (0x0F)** 是关键 |
 | 语音转写 | `VoiceTranscriptionService`（SpeechAnalyzer / SpeechTranscriber，zh_CN，本地、离线） | ✅ 真机端到端验证：入站 WAV 正常转写；系统语音资源可由 App 内按钮直接下载 |
 | 语音气泡/记忆/引用 | 转写落库、气泡展示、可关闭、进上下文/长期记忆、引用语音带转写 | ✅ 单测覆盖；真机待音频链路 |
-| 出站 TTS | **CosyVoice3 是唯一引擎**：本地 Python 旁路（Fun-CosyVoice3-0.5B-2512，24 kHz，零样本克隆），App 通过回环 HTTP 调用；文本清洗后一次请求合成 | ✅ 单测 + 本机样本；需用户显式安装（约 8GB），非实时（见 §6） |
-| 出站发送 | App 传 CosyVoice3 原生 24k WAV（兼容旧 16k WAV/裸 PCM）→ bridge 按 WAV 头识别采样率（16k 才重采样）→ **官方 SILK SDK（-tencent）编码** → CDN 上传 → R3 `uploadvoice` 任务（0x7F / WxSendVoiceMsg） | ✅ 2026-10-26 真机：TTS 5s 语音正常播放；关键是从 go-silk 换成官方 24k SILK 编码 |
+| 出站 TTS | **唯一模型 Qwen3-TTS-1.7B**（Apple MLX，`Qwen3-TTS-12Hz-1.7B-Base-bf16`，24 kHz，ICL 零样本克隆）；默认 GPU，可切 CPU（实验性）；App 通过回环 HTTP 调用；文本清洗后一次请求合成 | ✅ 单测 + 本机样本 + 真实服务 E2E；需用户显式安装（约 4.7GB），GPU 非实时（见 §6） |
+| 出站发送 | App 传 TTS 原生 24k WAV（兼容旧 16k WAV/裸 PCM）→ bridge 按 WAV 头识别采样率（16k 才重采样）→ **官方 SILK SDK（-tencent）编码** → CDN 上传 → R3 `uploadvoice` 任务（0x7F / WxSendVoiceMsg） | ✅ 2026-10-26 真机：TTS 5s 语音正常播放；关键是从 go-silk 换成官方 24k SILK 编码 |
 | 语音长度设置 | 全局设置，默认上限 30s（5–60），超限改文字或按句截断 | ✅ 设置与单测 |
 | 语音回复策略 | 全局开关、概率、对等、仅短回复（全局设置） | ✅ 决策纯函数 + 单测 |
 
 > 一句话：**入站转写与出站语音发送都已真机打通。**
 > 入站关键是语音下载 `fileType=15`；出站关键是官方 SILK SDK 的 24k WeChat 兼容编码 +
 > `uploadvoice` 任务（header/voiceFileId 已按真实请求对齐）。
-> 出站 TTS 只保留 CosyVoice3（本地 Python 旁路）；未安装、服务未启动或合成失败时，本条改发文字。
+> 出站 TTS 走本机 Qwen3-TTS-1.7B（GPU/CPU 可选）；模型未安装、服务未启动、旧版服务仍在或合成失败/超时时，
+> 本条改发文字（不做跨模型自动回退）。
 > 中文语音资源缺失时，「机器人 → 语音」提供“下载中文语音资源”按钮；下载后无需重启系统即可转写。
 
 ## 2. 数据流
@@ -43,12 +44,12 @@
 ### 出站（说）
 
 ```
-AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3 就绪）
+AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS 就绪）
  → 已确定语音：跳过拟人化随机延迟（「语音回复免拟人化延迟」，默认开）
- → VoiceSynthesisService（CosyVoice3，HTTP 127.0.0.1:5051）→ 24k WAV
+ → VoiceSynthesisService（Qwen3-TTS-1.7B，GPU/CPU，HTTP 127.0.0.1:5051）→ 24k WAV
  → POST /send_voice {"user_id"/"group_id","pcm16k","duration_ms"}
  → bridge 官方 SILK SDK（`bridge/silkenc`）编码 24k Tencent SILK → uploadvoice → send_voice
- → 任一环节失败（CosyVoice3 未安装/服务未启动/合成失败/voice_send_unsupported）→ 本条改发文字，不重试语音
+ → 任一环节失败（引擎未安装/服务未启动/运行引擎与设置不一致/合成失败/voice_send_unsupported）→ 本条改发文字，不重试语音
 ```
 
 ### 提示词里的语音标注与出站清洗（2026-10-26）
@@ -103,33 +104,37 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3
 ## 4. 设置
 
 > 语音设置面板只位于「机器人 → 语音」，复用共用组件 `VoiceSettingsPanel`；设置页不再提供「语音」分类。
-> **会话详情菜单不提供语音设置**：转写、语音回复、概率、对等、仅短回复、音色与语速均为全局设置。
+> **会话详情菜单不提供语音设置**：转写、语音回复、概率、对等、仅短回复、音色与运行设备均为全局设置。
 
 > 语音发送复用「R3 原生发送」开关。首次启用后，App 会要求捕获文本/语音句柄、显示启动倒计时；
 > 未就绪或发送失败时自动降级文字。首次启用后，请先在本机微信手动发一条文字 + 一条语音捕获句柄。
 > 开启「允许语音回复」时立即检测句柄并弹出捕获引导；bridge 启动后若已开启语音回复但句柄缺失，
 > 也会自动提示一次（同一 App 会话最多一次）。
 
-### 4.1 界面（2026-10-29 收敛为 CosyVoice3）
+### 4.1 界面（2026-11-04 单模型）
 
 - **语音转写**：三个开关 + 「转写资源」行；资源未安装时在行内直接「下载」，不再额外占一块提醒。
 - **语音回复**：默认只显示总开关；开启后才展开概率、对等、短回复阈值、最长时长、超限处理
   与「语音回复免拟人化延迟」。
-- **语音引擎与音色**：只剩 CosyVoice3 一组行（引擎选择器已移除，CosyVoice3 是唯一 TTS 引擎）：
+- **语音引擎与音色**（Qwen3-TTS-1.7B 单模型）：
+  - 运行设备：`GPU（MLX，推荐）` / `CPU（极慢，实验性）`；切换时停旧服务→保存→按自动启动策略拉起；
   - 本地服务：状态（运行中/启动中/未运行/异常/未检测）+ 「启动」/「停止」+「重新检测」；
-  - 运行环境与模型：安装/重新安装/删除，合计约 8GB（运行环境约 2–3GB + 模型约 5–7GB）；
-    首次安装弹确认框，安装中可取消、失败可重试；
+    subtitle 显示 `Qwen3-TTS-1.7B · GPU/CPU · endpoint · model`；
+  - 运行环境与模型：安装/重新安装/删除（约 4.7GB）；首次安装弹确认框，安装中可取消、失败可重试；
+    删除只清模型/venv/标记，保留共享音色；
   - 音色：本机音色菜单 + 「管理音色…」（无音色时显示「添加音色…」）；**App 不内置音色**，
-    普通用户安装后为空，导入 1–5 条参考音（每条 5–30s，合计 ≤30s）新增自定义音色、编辑/删除
-    （内置不可删）、自动转写参考文本与试听；多条参考文本需同时填写或同时留空（全空即
-    `cross_lingual`，只克隆音色）；自定义音色可导出 `.zip` 备份（含 `refs/` 原始片段，内置不可导出）；
-  - 语速：0.5×–2.0×（步进 0.05），默认 1.0×；
-  - 自动启动：开关；**仅当「允许语音回复」开启、本开关开启、CosyVoice3 已安装且有音色时**，
+    普通用户安装后为空，导入 1–5 段参考音（每段至少 1s，合计 ≤30s，超长自动截取）新增自定义
+    音色、编辑/删除（内置不可删）、自动转写参考文本与试听；导入/更换音频后默认自动转写
+    （可关），参考文本可修改，部分为空时保存前尽量补齐、仍缺失则按 `cross_lingual` 使用
+    （全空即只克隆音色）；**参考文本越准确克隆越像，留空也能合成但相似度会下降**；
+    自定义音色可导出 `.zip` 备份（含 `refs/` 原始片段，内置不可导出）；
+  - 自动启动：开关；**仅当「允许语音回复」开启、本开关开启、已安装且有音色时**，
     启动 App / 打开语音面板会拉起本地服务；面板内仍可手动「启动」；
   - 服务地址：默认 `http://127.0.0.1:5051`，只接受回环地址；
-- **试听**：直接调用同一个本地 CosyVoice3 HTTP 服务（同音色/语速/原生 24k WAV），本地 `AVAudioPlayer`
-  播放，不发往微信、不联网；切换音色/语速、离开页面或再次点按即停止。全局只保留一个播放器。
-  CosyVoice3 试听走本地 HTTP 服务，服务未启动或未选音色时先提示安装/启动。
+  - 旧版清理：检测到 CosyVoice3 残留时显示「清理旧版语音文件（约 xGB）」，只删旧模型/repo/venv/标记。
+- **试听**：直接调用本地 Qwen3-TTS HTTP 服务（同音色/原生 24k WAV），本地 `AVAudioPlayer`
+  播放，不发往微信、不联网；切换音色/运行设备、离开页面或再次点按即停止。全局只保留一个播放器。
+  服务未启动或未选音色时先提示安装/启动。
 - **语音发送状态**：只在开启「允许语音回复」时出现；去掉与状态摘要重复的两行句柄明细。
 - **句柄引导**：开启「允许语音回复」时先刷新 `/voice_status`，未就绪即弹 `VoiceHandleSetupSheet`；
   bridge 启动后若已开启语音回复且文本/语音句柄缺失，自动提示一次（同一 App 会话最多一次）。
@@ -142,15 +147,17 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3
 - 回复：`replyEnabled`（默认关）、`replyProbability`（0.3）、`mirrorIncomingVoice`、`shortReplyOnly`（开）、
   `shortReplyMaxChars`（80）、`maxVoiceSeconds`（30，5–60）、`overLimit`（text/truncate）、
   `skipHumanizeDelayForVoiceReply`（默认开）
-- CosyVoice3：`cosyVoiceVoiceID`（本机 `voices.json` 中的音色 id；未导入时为空）、
+- 本地 TTS：`voiceComputeDevice`（`gpu` 默认 / `cpu`；缺键/非法值回退 gpu）、
+  `cosyVoiceVoiceID`（本机 `voices.json` 中的音色 id；未导入时为空）、
   `cosyVoiceEndpoint`（默认 `http://127.0.0.1:5051`，仅回环）、
-  `cosyVoiceAutoStart`（默认 true）、`cosyVoiceSpeed`（0.5–2.0，默认 1.0）
+  `cosyVoiceAutoStart`（默认 true）；旧 `voiceEngine` 键解码时忽略、保存时不再写入；
+  `cosyVoiceSpeed` 无 UI、Qwen3 不支持（保留字段仅兼容旧配置）
 - 旧键 `engine` / `kokoroSpeakerID` / `kokoroSpeed` / `cloneID` / `modelDownloadConsent`
   在解码时被忽略，保存时不再写入（旧 `config.json` 仍可正常加载）。
 
 语音开关全部为全局设置（`BotSettings.voice.transcriptionEnabled` / `replyEnabled` 等）：
 关闭转写后不再发起新的语音下载与转写，已有转写仍可显示并参与上下文；关闭语音回复后只发文字。
-概率、对等、短回复、音色与语速同样由全局设置控制。
+概率、对等、短回复、音色与运行设备同样由全局设置控制。
 
 `skipHumanizeDelayForVoiceReply` 默认开启：`decideVoiceReply` 命中语音后直接进入 TTS 合成，
 不再叠加 `[minDelayMs, maxDelayMs]` 的随机等待（否则「合成耗时 + 拟人化延迟」会让用户等两次）；
@@ -158,48 +165,49 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3
 
 ## 5. 语音模型
 
-- **唯一 TTS 引擎是 CosyVoice3**：模型 `Fun-CosyVoice3-0.5B-2512` 与 Python 3.10 + PyTorch
-  运行环境由 App 内的独立安装器管理，保存在
-  `~/Library/Application Support/WeChatAI/cosyvoice/`（源码运行时为 `_local/cosyvoice/`），
-  与 App 分发包分离；安装细节见 [`cosyvoice.md`](cosyvoice.md)。
-- **安装需用户显式确认**：在「机器人 → 语音 → 语音引擎与音色 → 运行环境与模型」点「下载并安装…」，
-  确认框写明体积（合计约 8GB：运行环境约 2–3GB + 模型约 5–7GB）；安装中可取消，失败可重试，
-  已安装可删除。App 不再有「模型下载同意」（`modelDownloadConsent`）与「下载全部」，
-  也不再下载旧引擎的模型；旧 `~/Library/Application Support/WeChatAI/models/` 目录不再由 App 使用。
+- **唯一语音模型是 Qwen3-TTS-1.7B**（`Qwen3-TTS-12Hz-1.7B-Base-bf16`，Apple MLX，依赖
+  `mlx-audio`）。安装根目录 `~/Library/Application Support/WeChatAI/cosyvoice/`（源码运行时为
+  `_local/cosyvoice/`）；venv `venv-qwen3tts`、模型、`.installed-qwen3tts` 标记，`voices/` 保留；
+  安装细节见 [`cosyvoice.md`](cosyvoice.md)。
+- **安装需用户显式确认**：在「机器人 → 语音 → 语音引擎与音色 → 运行环境与模型」点
+  「下载并安装…」，确认框写明体积（约 4.7GB：模型 4.2GB + 依赖 0.5GB，运行时内存约 10GB）；
+  安装中可取消，失败可重试，已安装可删除。旧版 CosyVoice3 文件不再使用，设置页提供清理入口。
 - 资源体积：
   | 资源 | 体积 | 用途 |
   | --- | --- | --- |
-  | `Fun-CosyVoice3-0.5B-2512` | 约 5–7 GB | 唯一 TTS 引擎（本地 Python 旁路，零样本克隆） |
-  | CosyVoice 运行环境（Python 3.10 + PyTorch） | 约 2–3 GB | CosyVoice3 推理服务，随安装器独立部署 |
-- **音色**：App 不内置任何音色，安装后音色列表为空；在「管理音色…」导入 1–5 条单人参考
-  音频（每条 5–30s、合计 ≤30s；wav/m4a/aiff，不支持 mp3）新增自定义音色。参考音频可拖入或
-  一次多选批量导入，导入时即校验格式与时长；片段可上移/下移调整合并顺序。每条参考音频配一段
-  逐字对应的参考文本（可逐条或「自动转写全部」后修正），多条文本必须同时填写或同时留空；
-  全部留空即 `cross_lingual`（只克隆音色）。保存时 App 按顺序把多条音频拼接为一条 `prompt.wav`
-  （片段间 0.25s 静音）、各条文本用换行连接为 `prompt.txt`，原始片段保存在 `refs/`；服务端
-  仍按单条 prompt 合成。**CosyVoice3 的 speech tokenizer 硬限制参考音 ≤30 秒**（含间隔静音），
-  超过会合成失败，App 保存时会拦截；导入前可先裁掉首尾静音。旧单参考音色继续可用，音色只存本机。
-- **数字/日期/电话**：旧引擎依赖的 `rule_fsts`（`date-zh` / `phone-zh` / `number-zh`）随旧引擎
-  一并移除，不再有 FST 文件；CosyVoice3 侧的数字/日期读法实测正常。
+  | `Qwen3-TTS-12Hz-1.7B-Base-bf16` | 约 4.2 GB | 唯一语音模型（MLX，ICL 克隆） |
+  | 运行环境（`venv-qwen3tts`：mlx-audio + fastapi/uvicorn 等） | 约 0.5 GB | 推理与本地服务运行时 |
+- **音色**：App 不内置任何音色，安装后音色列表为空；在「管理音色…」导入 1–5 段单人参考
+  音频（每段至少 1s，合计 ≤30s；wav/mp3/m4a/aac/aiff/flac 等常见格式均可，只要能被解码）
+  新增自定义音色。参考音频可拖入或一次多选批量导入，导入时按剩余总长预算自动截取超长部分
+  并 toast 提示；片段可上移/下移调整合并顺序。每条参考音频配一段逐字对应的参考文本，导入/更换
+  音频后默认自动转写（可用「导入后自动转写」关闭），可手动修正；**参考文本越准确克隆越像，
+  留空也能合成但相似度会下降**。部分片段没有文本时保存前会先尝试自动补齐，仍失败则按
+  `cross_lingual` 保存（全部留空即只克隆音色）。保存时 App 按顺序
+  把多条音频拼接为一条 `prompt.wav`（片段间 0.25s 静音）、各条非空文本用换行连接为 `prompt.txt`，
+  原始片段保存在 `refs/`；服务端仍按单条 prompt 合成。**合并 prompt ≤30 秒**（含间隔静音，为兼容
+  历史音色保留的规则），正常导入已自动截取、保存时仍做最终兜底；旧单参考音色继续可用，音色只存本机。
+- **数字/日期/电话**：旧引擎的 `rule_fsts`（`date-zh` / `phone-zh` / `number-zh`）已随旧引擎移除；
+  当前 Qwen3 侧的数字/日期读法以实测为准。
   语音文本清洗仍在：Markdown/emoji/URL、`[语音 Ns]` 标注、`%` → 百分之、货币口语化等（见 §2）。
 - **系统中文语音资源**：转写依赖系统语音资源，部分机器需先在 系统设置 → 辅助功能 → 朗读内容
   下载中文语音；「机器人 → 语音」也提供「下载中文语音资源」按钮（调用 `AssetInventory`）。
   系统语音资源与上表 TTS 资源是两套独立资源。
-- 失败降级：CosyVoice3 未安装、运行环境/模型缺失、服务未启动、合成失败、发送句柄未就绪或
-  微信侧拒绝时，自动改发文字，不重试语音；不影响文本回复。可在「机器人 → 语音」重试安装或启动服务。
+- 失败降级：模型未安装、运行环境/模型缺失、服务未启动、旧版 CosyVoice3 服务仍占用端口、合成失败
+  或超时、发送句柄未就绪或微信侧拒绝时，自动改发文字，不重试语音；不影响文本回复。可在
+  「机器人 → 语音」重试安装/启动服务，或退出旧版后重启 App。
 - 模型、参考音频、转写与合成音频都只存本机，不上传、无遥测；详见 §8。
-- 许可：`Fun-CosyVoice3-0.5B-2512` 为 Apache-2.0（模型卡）；CosyVoice 上游代码与运行依赖
-  许可以各自仓库为准。
+- 许可：`Qwen3-TTS-12Hz-1.7B-Base` 为 Apache-2.0（模型卡）；通过 `mlx-audio`（MIT）加载。
 
 ## 6. 性能与限制
 
 - STT：9.2s → 0.23s；46.6s → 0.51s（RTF 0.011–0.043）；峰值内存约 22 MB；完全离线。
-- TTS（CosyVoice3，本地 Python 旁路，**非实时**）：启动到 `/health` ready 实测约 22s
-  （含 import、模型加载与预热）；常驻 RSS 约 8.65GB；20 字（约 4.5s 音频）热态 CPU 6 步
-  RTF≈1.83、4 步≈1.50（约 9.1s / 6.5s）；5–10s 语音在 CPU 6 步下通常 8–12s 出结果。
-  `COSYVOICE_FLOW_STEPS=4` 可换速度（质量略降）。详见 [`cosyvoice.md`](cosyvoice.md) §7。
+- TTS（Qwen3-TTS，GPU 默认，**非实时**）：冷加载约 17–30s、首次合成含 Metal 预热（约 +9s），
+  热态 23 字（约 4.7s 音频）≈2.6–2.9s（RTF≈0.54–0.78），MLX peak 约 9–10GB；
+  CPU 模式极慢（实测 1.04s 音频 ≈644s，RTF≈619），通常超时改发文字。详见
+  [`cosyvoice.md`](cosyvoice.md) §7。
 - 长回复会显著拉长合成时间：极端长文本（>300 字）仍建议用 `maxVoiceSeconds`/短回复策略限制。
-- 输出：CosyVoice3 原生 24k 单声道 16-bit WAV 直通（16k 输入才由 bridge 线性重采样），
+- 输出：Qwen3-TTS 原生 24k 单声道 16-bit WAV 直通（16k 输入才由 bridge 线性重采样），
   首尾 5 ms 淡入淡出避免 WAV 边界爆音。
 - SILK：5.2s/16k PCM → 9,921 B；编码约 0.04s、解码约 0.005s（pilk 实测）；bridge 静态链接官方 SILK SDK（`bridge/silkenc`），无 ffmpeg/pilk 运行时依赖。
 - 微信语音消息限制 60s；超限按设置改文字/截断。
@@ -261,7 +269,7 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3
 - 音频、转写、参考音频（含 `refs/` 原始片段与合并 prompt）只存本机；日志不打印转写原文、音频字节、aeskey、CDN key。
 - 转写展示/记忆可分别关闭；删除消息/会话时随本地存储清理。
 - 首次启用或微信重启后需捕获发送句柄；默认 `replyEnabled=false`，句柄/倒计时未就绪时失败自动降级文字。
-- CosyVoice3 安装与模型下载是用户显式确认后的网络请求，不上传任何用户数据。
+- 本地 TTS 引擎安装与模型下载是用户显式确认后的网络请求，不上传任何用户数据。
 
 ## 9. 代码位置
 
@@ -271,9 +279,10 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/CosyVoice3
 | Bridge | `bridge/voice.go`、`bridge/voice_test.go`、`bridge/incoming.go`、`bridge/http.go`、`bridge/main.go`、`bridge/param.go` |
 | STT | `app/Sources/WeChatBot/Services/VoiceTranscriptionService.swift`、`VoiceFetcher.swift` |
 | 回复决策 | `app/Sources/WeChatBot/Services/VoiceReplyDecision.swift` |
-| TTS | `app/Sources/WeChatBot/Services/VoiceSynthesisService.swift`、`VoiceSynthesisAudio.swift`、`VoiceSynthesisText.swift`（唯一引擎 CosyVoice3，HTTP 客户端见 CosyVoice3 行） |
-| 音色/试听 | `Services/VoicePreviewController.swift`（共享试听播放器，走本地 CosyVoice3 HTTP 服务） |
-| CosyVoice3 | `Services/CosyVoice{Client,Runtime,Installer}.swift`、`Models/CosyVoiceVoice.swift`、`Models/CosyVoiceReference.swift`、`Services/CosyVoiceVoiceStore.swift`、`Views/Components/CosyVoiceVoiceManagerSheet.swift`、`devtools/cosyvoice/`、`scripts/{install,run}_cosyvoice.sh`；详见 [`cosyvoice.md`](cosyvoice.md) |
+| TTS | `app/Sources/WeChatBot/Services/VoiceSynthesisService.swift`、`VoiceSynthesisAudio.swift`、`VoiceSynthesisText.swift`（Qwen3 单模型，HTTP 客户端见本地 TTS 行） |
+| 引擎选择 | `app/Sources/WeChatBot/Models/Models.swift`（`VoiceEngine`）、`Views/VoiceSettingsPanel.swift` |
+| 音色/试听 | `Services/VoicePreviewController.swift`（共享试听播放器，走当前引擎的本地 HTTP 服务） |
+| 本地 TTS | `Services/CosyVoice{Client,Runtime,Installer}.swift`、`Models/CosyVoiceVoice.swift`、`Models/CosyVoiceReference.swift`、`Services/CosyVoiceVoiceStore.swift`、`Views/Components/CosyVoiceVoiceManagerSheet.swift`、`devtools/cosyvoice/`、`scripts/{install,run}_cosyvoice.sh`；详见 [`cosyvoice.md`](cosyvoice.md) |
 | UI | `Views/VoiceSettingsPanel.swift`、`Views/Components/MessageBubble.swift`、`Views/ConversationsView.swift` |
 | 数据 | `Models/Models.swift`、`Services/MemoryStore.swift`、`Core/AppStore+Runtime.swift` |
 
@@ -284,6 +293,6 @@ bash scripts/check.sh --with-go        # 静态 + Swift 全量 + Go
 cd app && SWIFT_DISABLE_SANDBOX=1 swift test --scratch-path .build-lead
 ```
 
-当前：Swift 525 项执行（523 通过 / 2 项按环境跳过：真实 CosyVoice3 服务 E2E；含 CosyVoice 集成、语音合成/发送回归、记忆 v2）；
+当前：Swift 546 项执行（544 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；含 Qwen3 GPU/CPU、参考音导入、语音合成/发送回归、记忆 v2）；
 Go 8 个 `_test.go` / 63 顶层 + 97 子测试通过；release App 约 168MB（不再静态链接 sherpa-onnx，二进制约 17MB）。
 语音实现与测试细节见 `bridge/voice.go`、`bridge/voice_test.go`；入站/出站契约与限制见本文件与 [`bridge.md`](bridge.md)。

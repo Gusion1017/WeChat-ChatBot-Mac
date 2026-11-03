@@ -1,13 +1,15 @@
 import SwiftUI
 
-/// 语音设置面板（2026-10-29，语音引擎收敛为 CosyVoice3）。
+/// 语音设置面板（2026-11-03，语音收敛为 Qwen3-TTS-1.7B 单模型）。
 ///
-/// 唯一入口是「机器人 → 语音」。CosyVoice3 是唯一 TTS 引擎（本机 Python 旁路），
-/// 因此面板不再有引擎选择器、Kokoro 音色目录、ZipVoice 克隆档案或模型下载：
-/// - 本地服务：状态/启动/停止/重新检测；
-/// - 运行环境与模型：安装/重装/删除（约 8GB，需单独下载）；
+/// 唯一入口是「机器人 → 语音」。本机离线 TTS（MLX），模型与音色/参考音都保存在本机：
+/// - 运行设备：GPU（MLX，默认）/ CPU（极慢，实验性）；切换时停服务 → 保存 → 刷新 →
+///   按自动启动策略拉起；
+/// - 本地服务：状态/启动/停止/重新检测（显示 Qwen3-TTS · GPU/CPU · endpoint · model）；
+/// - 运行环境与模型：安装/重装/删除（下载约 4.7GB；删除保留共享音色）；
 /// - 音色：本机 `voices.json` 列表 +「管理音色…」（App 不内置任何音色）；
-/// - 语速、自动启动、服务地址；
+/// - 自动启动、服务地址；
+/// - 可选：清理旧版 CosyVoice3 残留文件（保留音色与 Qwen3-TTS 文件）；
 /// - 试听直接调用本机服务并用 `AVAudioPlayer` 播放，不发往微信；
 /// - 语音发送状态只在开启语音回复时展示。
 struct VoiceSettingsPanel: View {
@@ -19,7 +21,7 @@ struct VoiceSettingsPanel: View {
     @State private var isInstallingVoiceAsset = false
     @State private var voiceStatusTick = Date()
     @State private var voiceSetupPresented = false
-    // CosyVoice3：服务状态/安装状态用 1s 轮询刷新（actor 内不驱动 UI）。
+    // 本地语音服务：状态/安装状态用 1s 轮询刷新（actor 内不驱动 UI）。
     // App 不内置任何音色：列表只来自本机 voices.json / 服务端 /voices，空库显示「未添加音色」。
     @State private var cosyVoiceRuntime = CosyVoiceRuntimeSnapshot.initial
     @State private var cosyVoiceInstall = CosyVoiceInstallSnapshot.initial
@@ -28,6 +30,9 @@ struct VoiceSettingsPanel: View {
     @State private var cosyVoiceEndpointDraft = ""
     @State private var pendingCosyVoiceInstall = false
     @State private var pendingCosyVoiceDelete = false
+    @State private var pendingLegacyCleanup = false
+    @State private var legacyCleanupBytes: Int64 = 0
+    @State private var legacyCleanupChecked = false
     @State private var didAttemptCosyVoiceAutoStart = false
     @State private var voiceManagerPresented = false
 
@@ -37,7 +42,7 @@ struct VoiceSettingsPanel: View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
             transcriptionSection
             replySection
-            engineSection
+            localVoiceSection
             if voiceSettings.replyEnabled {
                 sendStatusSection
             }
@@ -60,34 +65,44 @@ struct VoiceSettingsPanel: View {
                 }
             }
         }
-        // 音色/语速/服务地址变化时立刻停掉旧试听，避免“听到的是上一个音色”。
+        // 音色/运行设备/服务地址变化时立刻停掉旧试听，避免“听到的是上一个音色”。
         .onChange(of: voiceSettings.cosyVoiceVoiceID) { _, _ in store.voicePreview.stop() }
-        .onChange(of: voiceSettings.cosyVoiceSpeed) { _, _ in store.voicePreview.stop() }
         .onChange(of: voiceSettings.cosyVoiceEndpoint) { _, _ in store.voicePreview.stop() }
+        .onChange(of: voiceSettings.voiceComputeDevice) { _, _ in store.voicePreview.stop() }
         .onDisappear { store.voicePreview.stop() }
         .sheet(isPresented: $voiceSetupPresented) {
             VoiceHandleSetupSheet()
                 .environment(store)
         }
         .confirmationDialog(
-            L("下载并安装 CosyVoice3"),
+            cosyVoiceInstallDialogTitle,
             isPresented: $pendingCosyVoiceInstall,
             titleVisibility: .visible
         ) {
             Button(L("同意并安装")) { startCosyVoiceInstall() }
             Button(L("取消"), role: .cancel) {}
         } message: {
-            Text(L("将下载 CosyVoice3 运行环境（依赖约 2–3GB）与模型（约 5–7GB），合计约 8GB，保存在本机。安装可能持续数十分钟，可随时取消；取消后已下载内容会保留。"))
+            Text(cosyVoiceInstallDialogMessage)
         }
         .confirmationDialog(
-            L("删除 CosyVoice3？"),
+            cosyVoiceDeleteDialogTitle,
             isPresented: $pendingCosyVoiceDelete,
             titleVisibility: .visible
         ) {
             Button(L("删除"), role: .destructive) { deleteCosyVoiceInstall() }
             Button(L("取消"), role: .cancel) {}
         } message: {
-            Text(L("会删除运行环境、模型与参考音（约 8GB），需要时可重新安装。已生成的语音文件不受影响。"))
+            Text(cosyVoiceDeleteDialogMessage)
+        }
+        .confirmationDialog(
+            legacyCleanupDialogTitle,
+            isPresented: $pendingLegacyCleanup,
+            titleVisibility: .visible
+        ) {
+            Button(L("清理"), role: .destructive) { cleanupLegacyCosyVoice3() }
+            Button(L("取消"), role: .cancel) {}
+        } message: {
+            Text(legacyCleanupDialogMessage)
         }
         .sheet(isPresented: $voiceManagerPresented, onDismiss: {
             Task { await refreshCosyVoiceState(loadVoices: true) }
@@ -334,52 +349,90 @@ struct VoiceSettingsPanel: View {
         }
     }
 
-    // MARK: - 引擎与音色
+    // MARK: - 本地语音（Qwen3-TTS-1.7B）
 
-    private var engineSection: some View {
+    private var localVoiceSection: some View {
         SettingsSection(
-            title: "语音引擎与音色",
-            footer: "CosyVoice3 是本机离线语音引擎：运行环境与模型需单独安装（约 8GB），语音合成全部在本机完成、不联网。发布版 App 内置 CosyVoice3 安装/启动脚本；若脚本缺失，可用 WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT 指定路径。App 不内置任何音色：音色仅保存在本机，需在「管理音色…」中添加。"
+            title: "本地语音（Qwen3-TTS-1.7B）",
+            footer: localVoiceSectionFooter
         ) {
+            cosyVoiceComputeDeviceRow
+            SettingsDivider()
             cosyVoiceServiceRow
             SettingsDivider()
             cosyVoiceInstallRow
             SettingsDivider()
             cosyVoiceVoiceRow
             SettingsDivider()
-            cosyVoiceSpeedRow
-            SettingsDivider()
             cosyVoiceAutoStartRow
             SettingsDivider()
             cosyVoiceEndpointRow
-        }
-    }
-
-    /// CosyVoice3 语速：0.5–2.0，默认 1.0。
-    private var cosyVoiceSpeedRow: some View {
-        SettingsRow(
-            title: "语速",
-            subtitle: "0.5×–2.0×，仅对 CosyVoice3 生效",
-            symbol: "speedometer",
-            tint: .secondary
-        ) {
-            HStack(spacing: 10) {
-                Slider(
-                    value: bind(\.bot.voiceSettings.cosyVoiceSpeed),
-                    in: 0.5...2.0,
-                    step: 0.05
-                )
-                .frame(width: 200)
-                .labelsHidden()
-                Text(String(format: "%.2f×", voiceSettings.effectiveCosyVoiceSpeed))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 48, alignment: .trailing)
+            if legacyCleanupBytes > 0 {
+                SettingsDivider()
+                legacyCleanupRow
             }
         }
     }
 
-    // MARK: - CosyVoice3（本地大模型旁路）
+    private var localVoiceSectionFooter: String {
+        "Qwen3-TTS-1.7B 是本机离线语音模型：运行环境与模型需单独安装（下载约 4.7GB，"
+            + "运行时内存约 10GB），语音合成全部在本机完成、不联网。默认使用 GPU（MLX）；"
+            + "CPU 后端极慢（短句可能数分钟），仅建议排障或无 GPU 环境使用，"
+            + "合成可能超时并改发文字。App 不内置任何音色：音色仅保存在本机，"
+            + "需在「管理音色…」中添加。发布版 App 内置安装/启动脚本；若脚本缺失，可用 "
+            + "WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT 指定路径。"
+    }
+
+    /// 运行设备（segmented；切换时停服务 → 保存 → 刷新 → 按策略自动启动）。
+    private var cosyVoiceComputeDeviceRow: some View {
+        SettingsRow(
+            title: "运行设备",
+            subtitle: voiceSettings.voiceComputeDevice.shortDescription,
+            symbol: "cpu",
+            tint: voiceSettings.voiceComputeDevice == .gpu ? .secondary : Theme.warning
+        ) {
+            Picker(L("运行设备"), selection: cosyVoiceComputeDeviceBinding) {
+                ForEach(VoiceComputeDevice.allCases) { device in
+                    Text(device.label).tag(device)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 300)
+            .disabled(cosyVoiceInstall.state.isInstalling)
+            .help(voiceSettings.voiceComputeDevice.help)
+        }
+    }
+
+    /// 检测到旧版 CosyVoice3 残留时的清理入口（可选；只删旧文件）。
+    private var legacyCleanupRow: some View {
+        SettingsRow(
+            title: "清理 CosyVoice3 旧文件",
+            subtitle: Lf(
+                "检测到旧版残留约 %@；只删除旧模型/仓库/venv/安装标记，音色与本机 Qwen3-TTS 文件保留",
+                sizeText(legacyCleanupBytes)),
+            symbol: "trash",
+            tint: Theme.warning
+        ) {
+            Button(L("清理…")) { pendingLegacyCleanup = true }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(cosyVoiceInstall.state.isInstalling || cosyVoiceRuntime.state.isStarting)
+                .help(L("旧版不再使用；清理后不影响当前音色与 Qwen3-TTS 安装"))
+        }
+    }
+
+    private var legacyCleanupDialogTitle: String {
+        L("清理 CosyVoice3 旧文件？")
+    }
+
+    private var legacyCleanupDialogMessage: String {
+        Lf("将删除旧版 CosyVoice3 的模型、源码仓库、venv 与安装标记（约 %@）。"
+            + "共享音色/参考音与本机 Qwen3-TTS 安装会保留，已生成的语音文件不受影响。",
+           sizeText(legacyCleanupBytes))
+    }
+
+    // MARK: - 本地语音服务
 
     private var cosyVoiceServiceRow: some View {
         SettingsRow(
@@ -402,6 +455,7 @@ struct VoiceSettingsPanel: View {
                         Button(L("停止")) { stopCosyVoiceService() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                            .help(L("停止 Qwen3-TTS 本地服务"))
                     } else {
                         Button(L("启动")) {
                             Task { await startCosyVoiceService(userInitiated: true) }
@@ -411,7 +465,7 @@ struct VoiceSettingsPanel: View {
                             .disabled(cosyVoiceRuntime.state.isStarting || cosyVoiceVoices.isEmpty)
                             .help(cosyVoiceVoices.isEmpty
                                 ? L("先添加一个音色")
-                                : L("启动本地 CosyVoice3 服务"))
+                                : L("启动 Qwen3-TTS 本地服务"))
                     }
                 }
                 Button {
@@ -454,26 +508,36 @@ struct VoiceSettingsPanel: View {
         }
     }
 
+    /// 运行中的设备展示名（服务上报优先，回退设置里的设备）。
+    private var runningDeviceLabel: String {
+        if case .running(let health) = cosyVoiceRuntime.state,
+           let label = health.computeDeviceLabel {
+            return label
+        }
+        return voiceSettings.voiceComputeDevice.rawValue.uppercased()
+    }
+
     private var cosyVoiceServiceSubtitle: String {
         switch cosyVoiceRuntime.state {
         case .running(let health):
-            var parts: [String] = []
             let endpoint = cosyVoiceRuntime.endpoint?.absoluteString
                 ?? voiceSettings.cosyVoiceEndpoint
-            parts.append(endpoint)
-            if let pid = cosyVoiceRuntime.pid { parts.append("pid \(pid)") }
+            var parts: [String] = [
+                L("Qwen3-TTS-1.7B"),
+                runningDeviceLabel,
+                endpoint,
+            ]
             if let model = health.model, !model.isEmpty { parts.append(model) }
-            if let device = health.device, !device.isEmpty {
-                parts.append(device.uppercased())
-            }
+            if let pid = cosyVoiceRuntime.pid { parts.append("pid \(pid)") }
             return parts.joined(separator: " · ")
         case .starting(let message):
             return message
         case .failed(let reason):
-            return Lf("启动失败：%@", String(reason.prefix(96)))
+            return Lf("不可用：%@", String(reason.prefix(140)))
         case .stopped, .unknown:
             var text = Lf(
-                "未运行 · %@（首次启动需加载模型，约 20–60 秒）",
+                "未运行 · Qwen3-TTS-1.7B · %@ · %@（首次启动需加载模型，约 20–60 秒）",
+                voiceSettings.voiceComputeDevice.label,
                 voiceSettings.cosyVoiceEndpoint)
             if cosyVoiceVoices.isEmpty {
                 text += "；" + L("先添加一个音色")
@@ -559,17 +623,40 @@ struct VoiceSettingsPanel: View {
                 let formatter = DateFormatter()
                 formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.dateFormat = "yyyy-MM-dd HH:mm"
-                return Lf("已安装 · %@ · %@", formatter.string(from: installedAt),
-                          cosyVoiceInstall.homePath)
+                return Lf("已安装 · Qwen3-TTS-1.7B · %@ · %@",
+                          formatter.string(from: installedAt), cosyVoiceInstall.homePath)
             }
-            return Lf("已安装 · %@", cosyVoiceInstall.homePath)
+            return Lf("已安装 · Qwen3-TTS-1.7B · %@", cosyVoiceInstall.homePath)
         case .failed(let reason):
             return Lf("安装失败：%@", String(reason.prefix(180)))
         case .notInstalled, .unknown:
-            return Lf(
-                "未安装 · 合计约 %@（依赖约 2–3GB + 模型约 5–7GB）",
-                sizeText(cosyVoiceInstall.estimatedBytes))
+            return Lf("未安装 · Qwen3-TTS-1.7B · %@", cosyVoiceInstallEstimateText)
         }
+    }
+
+    /// 安装体积说明（单模型，约 4.7GB）。
+    private var cosyVoiceInstallEstimateText: String {
+        Lf("合计约 %@（MLX 模型约 4.2GB + 依赖约 0.5GB；运行时内存约 10GB）",
+           sizeText(cosyVoiceInstall.estimatedBytes))
+    }
+
+    // MARK: - 安装/删除确认文案
+
+    private var cosyVoiceInstallDialogTitle: String {
+        L("下载并安装 Qwen3-TTS-1.7B")
+    }
+
+    private var cosyVoiceInstallDialogMessage: String {
+        L("将下载 Qwen3-TTS-1.7B 的 MLX 模型（约 4.2GB）与依赖（约 0.5GB），合计约 4.7GB，保存在本机。运行时内存约 10GB，首次合成会预热约 10 秒；冷启动加载约 20 秒。默认使用 GPU（MLX）；CPU 后端极慢（短句可能数分钟），仅建议排障或无 GPU 环境使用，合成可能超时并改发文字。安装可能持续数十分钟，可随时取消，取消后已下载内容会保留。")
+    }
+
+    private var cosyVoiceDeleteDialogTitle: String {
+        L("删除 Qwen3-TTS-1.7B？")
+    }
+
+    private var cosyVoiceDeleteDialogMessage: String {
+        Lf("会删除 Qwen3-TTS-1.7B 的模型、运行环境（venv）与安装标记（约 %@）；共享音色/参考音会保留，需要时可重新安装。已生成的语音文件不受影响。",
+           sizeText(cosyVoiceInstall.estimatedBytes))
     }
 
     private var cosyVoiceVoiceRow: some View {
@@ -623,8 +710,8 @@ struct VoiceSettingsPanel: View {
                 .controlSize(.small)
                 .disabled(!cosyVoiceInstall.state.isInstalled)
                 .help(cosyVoiceInstall.state.isInstalled
-                    ? L("查看/新增/编辑/删除 CosyVoice3 音色")
-                    : L("先安装 CosyVoice3 运行环境与模型"))
+                    ? L("查看/新增/编辑/删除本机音色")
+                    : L("先安装 Qwen3-TTS-1.7B 运行环境与模型"))
             }
         }
     }
@@ -642,7 +729,7 @@ struct VoiceSettingsPanel: View {
             ? voice.name
             : "\(voice.name) · \(voice.description)"
         if !cosyVoiceInstall.state.isInstalled {
-            return "\(base) · " + L("先安装 CosyVoice3 后才能试听")
+            return "\(base) · " + L("先安装 Qwen3-TTS-1.7B 后才能试听")
         }
         if !cosyVoiceRuntime.state.isRunning {
             return "\(base) · " + L("先启动本地服务后可试听")
@@ -651,7 +738,9 @@ struct VoiceSettingsPanel: View {
     }
 
     private var cosyVoicePreviewDisabledHint: String {
-        if !cosyVoiceInstall.state.isInstalled { return L("先安装 CosyVoice3") }
+        if !cosyVoiceInstall.state.isInstalled {
+            return L("先安装 Qwen3-TTS-1.7B")
+        }
         if cosyVoiceVoices.isEmpty { return L("先添加一个音色") }
         if voiceSettings.effectiveCosyVoiceVoiceID.isEmpty { return L("先选择音色") }
         if !cosyVoiceRuntime.state.isRunning { return L("先启动本地服务") }
@@ -696,14 +785,14 @@ struct VoiceSettingsPanel: View {
         }
     }
 
-    // MARK: - CosyVoice3 状态轮询 / 动作
+    // MARK: - 本地语音状态轮询 / 动作
 
     private func pollCosyVoice() async {
         cosyVoiceEndpointDraft = voiceSettings.cosyVoiceEndpoint
         await refreshCosyVoiceState(loadVoices: true)
         if !didAttemptCosyVoiceAutoStart {
             didAttemptCosyVoiceAutoStart = true
-            // 只在「允许语音回复 + 开启自动启动」时拉起 8GB 级的本地服务；
+            // 只在「允许语音回复 + 开启自动启动」时拉起 GB 级的本地模型；
             // 面板里仍可手动点「启动」。
             if voiceSettings.replyEnabled,
                voiceSettings.cosyVoiceAutoStart,
@@ -724,7 +813,13 @@ struct VoiceSettingsPanel: View {
     private func refreshCosyVoiceState(loadVoices: Bool) async {
         cosyVoiceInstall = await CosyVoiceInstaller.shared.refresh()
         cosyVoiceRuntime = await CosyVoiceRuntime.shared.refresh(
-            endpoint: voiceSettings.effectiveCosyVoiceEndpoint)
+            endpoint: voiceSettings.effectiveCosyVoiceEndpoint,
+            device: voiceSettings.voiceComputeDevice)
+        // 旧版残留体积只在首次/显式刷新时扫描（4GB 级目录不能每秒遍历）。
+        if loadVoices || !legacyCleanupChecked {
+            legacyCleanupBytes = await CosyVoiceInstaller.shared.legacyCosyVoice3Bytes()
+            legacyCleanupChecked = true
+        }
         if loadVoices || !cosyVoiceVoicesLoaded {
             await loadCosyVoiceVoices()
         }
@@ -756,7 +851,7 @@ struct VoiceSettingsPanel: View {
     private func startCosyVoiceService(userInitiated: Bool) async {
         guard cosyVoiceInstall.state.isInstalled else {
             if userInitiated {
-                toast.show(L("请先安装 CosyVoice3 运行环境与模型"), tone: .info)
+                toast.show(L("请先安装 Qwen3-TTS-1.7B 运行环境与模型"), tone: .info)
             }
             return
         }
@@ -768,9 +863,10 @@ struct VoiceSettingsPanel: View {
         }
         do {
             _ = try await CosyVoiceRuntime.shared.start(
-                endpoint: voiceSettings.effectiveCosyVoiceEndpoint)
+                endpoint: voiceSettings.effectiveCosyVoiceEndpoint,
+                device: voiceSettings.voiceComputeDevice)
             if userInitiated {
-                toast.show(L("CosyVoice3 服务已启动"), tone: .success)
+                toast.show(L("Qwen3-TTS 本地服务已启动"), tone: .success)
             }
         } catch {
             if userInitiated {
@@ -778,6 +874,23 @@ struct VoiceSettingsPanel: View {
             }
         }
         await refreshCosyVoiceState(loadVoices: true)
+    }
+
+    /// 切换运行设备：停旧服务 → 保存设置 → 刷新安装/服务/音色状态 → 按自动启动策略拉起。
+    ///
+    /// 保存已在 binding setter 里同步完成（保证 UI 立即反映选择），这里负责重启服务：
+    /// 先停，再按「允许语音回复 + 自动启动 + 已安装 + 有音色」拉起。
+    private func switchVoiceComputeDevice(to device: VoiceComputeDevice) {
+        store.voicePreview.stop()
+        Task {
+            await CosyVoiceRuntime.shared.stop()
+            await refreshCosyVoiceState(loadVoices: true)
+            guard voiceSettings.replyEnabled,
+                  voiceSettings.cosyVoiceAutoStart,
+                  cosyVoiceInstall.state.isInstalled,
+                  !cosyVoiceVoices.isEmpty else { return }
+            await startCosyVoiceService(userInitiated: false)
+        }
     }
 
     private func stopCosyVoiceService() {
@@ -792,7 +905,8 @@ struct VoiceSettingsPanel: View {
         Task {
             do {
                 try await CosyVoiceInstaller.shared.install(consent: true)
-                toast.show(L("CosyVoice3 已安装"), tone: .success)
+                toast.show(L("Qwen3-TTS-1.7B 已安装"), tone: .success)
+                legacyCleanupChecked = false
                 await refreshCosyVoiceState(loadVoices: true)
                 if voiceSettings.cosyVoiceAutoStart {
                     Task { await startCosyVoiceService(userInitiated: false) }
@@ -820,10 +934,26 @@ struct VoiceSettingsPanel: View {
             await CosyVoiceRuntime.shared.stop()
             do {
                 try await CosyVoiceInstaller.shared.deleteLocalInstall()
-                toast.show(L("已删除 CosyVoice3"), tone: .info)
+                toast.show(L("已删除 Qwen3-TTS-1.7B"), tone: .info)
             } catch {
                 toast.show(error.localizedDescription, tone: .error)
             }
+            await refreshCosyVoiceState(loadVoices: false)
+        }
+    }
+
+    /// 清理旧版 CosyVoice3 残留：先停服务，只删旧文件（保留音色与 Qwen3-TTS）。
+    private func cleanupLegacyCosyVoice3() {
+        store.voicePreview.stop()
+        Task {
+            await CosyVoiceRuntime.shared.stop()
+            do {
+                try await CosyVoiceInstaller.shared.deleteLegacyCosyVoice3()
+                toast.show(L("已清理 CosyVoice3 旧文件"), tone: .info)
+            } catch {
+                toast.show(error.localizedDescription, tone: .error)
+            }
+            legacyCleanupChecked = false
             await refreshCosyVoiceState(loadVoices: false)
         }
     }
@@ -850,6 +980,19 @@ struct VoiceSettingsPanel: View {
                 Task { await startCosyVoiceService(userInitiated: false) }
             }
         }
+    }
+
+    private var cosyVoiceComputeDeviceBinding: Binding<VoiceComputeDevice> {
+        Binding(
+            get: { store.settings.bot.voiceSettings.voiceComputeDevice },
+            set: { device in
+                guard device != store.settings.bot.voiceSettings.voiceComputeDevice else { return }
+                store.voicePreview.stop()
+                store.settings.bot.voiceSettings.voiceComputeDevice = device
+                store.persist()
+                switchVoiceComputeDevice(to: device)
+            }
+        )
     }
 
     private var cosyVoiceVoiceBinding: Binding<String> {
@@ -916,7 +1059,7 @@ struct VoiceSettingsPanel: View {
     }
 
     private func sizeText(_ bytes: Int64) -> String {
-        // 体积按 1024 进制展示，与安装页/文档的 “2–3GB + 5–7GB” 对齐。
+        // 体积按 1024 进制展示，与安装页/文档的「约 4.7GB（模型 4.2GB + 依赖 0.5GB）」对齐。
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
     }
 

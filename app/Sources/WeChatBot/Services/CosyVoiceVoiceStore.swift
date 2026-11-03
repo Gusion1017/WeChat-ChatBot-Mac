@@ -12,7 +12,7 @@ struct CosyVoiceManagedVoice: Identifiable, Hashable, Sendable {
     var name: String
     var description: String
     /// 参考音频与参考文本（按保存顺序）；至少 1 条。
-    /// `mode == cross_lingual` 时文本可为空；多条时文本必须同时为空或同时填写。
+    /// `mode == cross_lingual` 时文本可为空；部分片段缺少文本时使用非空文本合并。
     var references: [CosyVoiceReferenceClip]
     /// `zero_shot` / `cross_lingual`
     var mode: String
@@ -61,7 +61,9 @@ struct CosyVoiceManagedVoice: Identifiable, Hashable, Sendable {
 enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
     case invalidName(String)
     case invalidAudio(String)
+    /// 单条参考音频短于 1 秒（不再有单条上限，超长由导入流程自动截取）。
     case audioTooShort(seconds: Double)
+    /// 历史错误：单条音频曾限制 ≤30 秒；现在不会再抛出，保留仅为源码兼容。
     case audioTooLong(seconds: Double)
     case silentAudio
     case invalidID(String)
@@ -84,9 +86,9 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
     case tooManyReferences(max: Int)
     /// 一条参考音频都没有。
     case missingReferences
-    /// 多条参考音频的文本没有统一「全填」或「全空」。
+    /// 历史错误：多条参考文本曾要求「全填/全空」；现在不再抛错，保留仅为源码兼容。
     case inconsistentReferenceText
-    /// 合并后的参考音频总时长超过上限。
+    /// 合并后的参考音频总时长超过上限（正常 UI 导入已按预算裁剪，这里只是最终兜底）。
     case referenceTotalTooLong(seconds: Double)
     /// 某一条参考音频/片段路径不可用。
     case invalidReference(String)
@@ -98,9 +100,9 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
         case .invalidAudio(let reason):
             return "参考音频无法使用：\(reason)"
         case .audioTooShort(let seconds):
-            return String(format: "参考音频太短（%.1f 秒），需要 5–30 秒", seconds)
+            return String(format: "参考音频太短（%.1f 秒），至少需要 1 秒", seconds)
         case .audioTooLong(let seconds):
-            return String(format: "参考音频太长（%.1f 秒），需要 5–30 秒", seconds)
+            return String(format: "参考音频太长（%.1f 秒），请缩短到 30 秒以内", seconds)
         case .silentAudio:
             return "参考音频几乎无声，请换一段清晰的单人说话录音"
         case .invalidID(let id):
@@ -130,10 +132,10 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
         case .missingReferences:
             return "请至少添加一条参考音频"
         case .inconsistentReferenceText:
-            return "多条参考音频的参考文本需要同时填写或同时留空"
+            return "部分参考音频缺少参考文本"
         case .referenceTotalTooLong(let seconds):
             return String(
-                format: "参考音频总时长过长（%.1f 秒），最多 %.0f 秒",
+                format: "参考音频总长 %.1f 秒，超过 %.0f 秒上限；请先删除或缩短参考音频",
                 seconds, CosyVoiceReferenceSpec.maxTotalDuration)
         case .invalidReference(let reason):
             return "参考音频不可用：\(reason)"
@@ -151,14 +153,17 @@ struct CosyVoiceVoiceExportResult: Sendable, Equatable {
 
 // MARK: - Store
 
-/// CosyVoice3 音色库（`voices.json` + `<id>/prompt.wav|prompt.txt|refs/|meta.json`）。
+/// 本机音色库（`voices.json` + `<id>/prompt.wav|prompt.txt|refs/|meta.json`）。
+/// 2026-11-04 起语音模型收敛为 Qwen3-TTS-1.7B（历史文件名保留）。
 ///
 /// 设计边界：
 /// - **actor**：所有文件/manifest 读写串行；
 /// - **manifest 是事实来源**：用户新增/编辑/删除只改已知字段，保留未知字段与其他音色；
 /// - **路径安全**：音色 id 只允许 `[a-z0-9-]`，所有路径收敛在 voices 目录内；
-/// - **音频规范**：任意可解码音频 → 24 kHz 单声道 float → 峰值归一到 0.95 → 16-bit PCM WAV；
-/// - **多条参考音**：1–5 条，每条 5–30 秒；按顺序拼接成合并 prompt（片段间 0.25s 静音），
+/// - **音频规范**：任意 AVFoundation 可解码音频（不按扩展名白名单）→ 24 kHz 单声道 float
+///   → 峰值归一到 0.95 → 16-bit PCM WAV；
+/// - **多条参考音**：1–5 条，每条至少 1 秒；合并总长 ≤30 秒，导入时 UI 按剩余预算自动截取，
+///   保存时仍做总长兜底；按顺序拼接成合并 prompt（片段间 0.25s 静音），
 ///   `prompt.wav` / `prompt.txt` 仍是服务端合成入口，原始片段保存在 `<id>/refs/ref-N.wav|txt`；
 /// - **原子性**：每次变更前记录 manifest/音色目录旧状态，任何失败（含服务 reload）回滚；
 /// - **服务 reload**：服务就绪时调用 `POST /voices/reload`，失败回滚并抛错；未运行则跳过，
@@ -168,14 +173,12 @@ actor CosyVoiceVoiceStore {
 
     static let builtinIDs: [String] = ["girl", "loli", "onee"]
     static let minDuration: TimeInterval = CosyVoiceReferenceSpec.minClipDuration
-    static let maxDuration: TimeInterval = CosyVoiceReferenceSpec.maxClipDuration
     static let sampleRate = CosyVoiceReferenceSpec.sampleRate
     /// 峰值归一目标（留 5% headroom，避免 16-bit 削波）。
     static let peakTarget: Float = 0.95
     static let maxNameLength = 40
     static let maxDescriptionLength = 200
     static let maxReferenceTextLength = CosyVoiceReferenceSpec.maxTextLength
-    static let allowedAudioExtensions: Set<String> = ["wav", "m4a", "aiff", "aif"]
     /// 原始参考片段目录名（相对音色目录）。
     static let refsDirectoryName = "refs"
 
@@ -230,7 +233,7 @@ actor CosyVoiceVoiceStore {
     /// 兼容入口：单条参考音频 = 一条 `references`。
     ///
     /// - Parameters:
-    ///   - audioURL: 用户选择的 wav/m4a/aiff（5–30 秒，单人说话）。
+    ///   - audioURL: 用户选择的音频（AVFoundation 可解码的常见格式，至少 1 秒，单人说话）。
     ///   - referenceText: 参考文本；留空自动使用 cross_lingual。
     ///   - crossLingual: 强制 cross_lingual。
     @discardableResult
@@ -401,8 +404,9 @@ actor CosyVoiceVoiceStore {
 
     /// 新入口：全量替换参考片段（顺序即拼接顺序）；`name` / `description` 为 nil 时保留原值。
     ///
-    /// - `crossLingual == nil`：按文本推断（全空 → cross_lingual，全填 → zero_shot）。
-    /// - `crossLingual == false`：全空仍 cross_lingual；部分填写抛 `.inconsistentReferenceText`。
+    /// - `crossLingual == nil`：按文本推断（全空 → cross_lingual，其余 → zero_shot）。
+    /// - `crossLingual == false`：全空仍 cross_lingual；部分填写不再拒绝，
+    ///   用非空文本合并（UI 保存前会尽量自动补齐缺失文本）。
     /// - `crossLingual == true`：强制 cross_lingual。
     @discardableResult
     func update(
@@ -483,10 +487,7 @@ actor CosyVoiceVoiceStore {
             if builtin {
                 newMode = oldVoice.mode
             } else if let crossLingual {
-                guard CosyVoiceReferenceSpec.hasConsistentTexts(
-                    oldVoice.references.map(\.text), crossLingual: crossLingual) else {
-                    throw CosyVoiceVoiceStoreError.inconsistentReferenceText
-                }
+                // 文本不再要求「全填/全空」：部分缺失时用非空文本合并，mode 按文本推断。
                 newMode = crossLingual
                     ? CosyVoiceManagedVoice.modeCrossLingual
                     : (newText.isEmpty
@@ -990,7 +991,7 @@ actor CosyVoiceVoiceStore {
             """
             : ""
         return """
-        CosyVoice3 音色备份 / CosyVoice3 Voice Backup
+        Qwen3-TTS 音色备份 / Qwen3-TTS Voice Backup
 
         音色 / Voice: \(voiceName)
         导出时间 / Exported at: \(exportedAt)
@@ -1005,8 +1006,8 @@ actor CosyVoiceVoiceStore {
         \(multipleReferenceNote)
 
         恢复方式 / How to restore:
-          1. 先安装 CosyVoice3 运行环境与模型。
-             Install the CosyVoice3 runtime and model first.
+          1. 先安装 Qwen3-TTS-1.7B 运行环境与模型。
+             Install the Qwen3-TTS-1.7B runtime and model first.
           2. 把 <id>/ 目录复制到本机音色目录（voices/）下，
              保持 \(restorePaths) 的相对路径不变。
              Copy the <id>/ directory into the local voices/ directory,
@@ -1407,8 +1408,11 @@ actor CosyVoiceVoiceStore {
         var duration: TimeInterval
     }
 
-    /// 校验输入条数/文本一致性 → 逐条转码/校验 → 合并总时长。
+    /// 校验输入条数 → 逐条转码/校验 → 合并总时长。
     ///
+    /// 文本规则（2026-11 简化）：全空 = cross_lingual；部分为空不再拒绝，用非空文本合并
+    /// （UI 会先自动转写补齐，尽量保证 prompt.txt 与合并 prompt.wav 对应）。
+    /// 正常 UI 导入已按剩余预算裁剪，总长校验只是最终兜底。
     /// 全部为只读操作，失败时不会留下任何落盘副作用。
     private func prepareReferences(
         _ inputs: [CosyVoiceReferenceInput],
@@ -1427,11 +1431,6 @@ actor CosyVoiceVoiceStore {
             case .existing(_, _, let text):
                 return Self.validatedReferenceText(text)
             }
-        }
-        // 文本规则先于音频校验：部分填写/部分留空直接给出明确错误。
-        guard CosyVoiceReferenceSpec.hasConsistentTexts(
-            texts, crossLingual: crossLingual ?? false) else {
-            throw CosyVoiceVoiceStoreError.inconsistentReferenceText
         }
         var clips: [PreparedClip] = []
         clips.reserveCapacity(inputs.count)
@@ -1705,16 +1704,62 @@ actor CosyVoiceVoiceStore {
 
     struct AudioPreparation: Sendable, Equatable {
         var samples: [Float]
+        /// 实际可用时长（秒）；经总预算裁剪后可能小于源文件时长。
         var duration: TimeInterval
+        /// 裁剪前的源文件时长（秒）；没有裁剪时等于源文件时长。
+        var originalDuration: TimeInterval?
+
+        init(
+            samples: [Float],
+            duration: TimeInterval,
+            originalDuration: TimeInterval? = nil
+        ) {
+            self.samples = samples
+            self.duration = duration
+            self.originalDuration = originalDuration
+        }
     }
 
-    /// 读取用户音频 → 24 kHz 单声道 → 5–30s 校验 → 峰值归一。
+    /// 读取用户音频 → 24 kHz 单声道 → ≥1 秒校验 → 峰值归一。
+    ///
+    /// 2026-11 起不再按扩展名白名单过滤：只要 AVFoundation 能解码
+    /// （wav / mp3 / m4a / aac / aiff / aif / caf / flac 等）就接受；
+    /// 不可解码、空、几乎无声仍给出明确错误。单条没有时长上限，
+    /// 超长音频由 UI 用 `fittedReferenceAudio(url:maxDuration:)` 按总预算截取。
     static func prepareAudio(url: URL) throws -> AudioPreparation {
-        let extensionName = url.pathExtension.lowercased()
-        guard allowedAudioExtensions.contains(extensionName) else {
-            throw CosyVoiceVoiceStoreError.invalidAudio(
-                "不支持 .\(extensionName.isEmpty ? "未知" : extensionName) 格式；请使用 wav / m4a / aiff")
+        try readAudio(url: url, maxDuration: nil)
+    }
+
+    /// 导入专用：读入用户音频、按 `maxDuration` 截掉超出部分（保留开头），不写文件。
+    ///
+    /// UI 导入时用剩余总预算调用，再把 `samples` 交给 `writeTemporaryWAV` 落成临时 WAV；
+    /// 之后仍走现有 `.newAudio` 保存流程（试听/转写/保存都用这个裁剪后的临时文件）。
+    static func fittedReferenceAudio(
+        url: URL,
+        maxDuration: TimeInterval
+    ) throws -> AudioPreparation {
+        guard maxDuration >= minDuration - 0.05 else {
+            throw CosyVoiceVoiceStoreError.invalidReference(
+                String(
+                    format: "参考音总长已达 %.0f 秒，请先删除或缩短参考音",
+                    CosyVoiceReferenceSpec.maxTotalDuration))
         }
+        return try readAudio(url: url, maxDuration: maxDuration)
+    }
+
+    /// 把 24k 单声道样本写成 16-bit WAV 临时文件（供导入裁剪结果落盘）；调用方负责删除。
+    static func writeTemporaryWAV(_ samples: [Float]) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cosyvoice-ref-\(UUID().uuidString.lowercased()).wav")
+        try writeWAV(samples, to: url)
+        return url
+    }
+
+    /// 统一解码实现：任意可解码格式 → 24k mono；按需截断到 `maxDuration`（保留开头）。
+    private static func readAudio(
+        url: URL,
+        maxDuration: TimeInterval?
+    ) throws -> AudioPreparation {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let file: AVAudioFile
@@ -1723,10 +1768,25 @@ actor CosyVoiceVoiceStore {
         } catch {
             throw CosyVoiceVoiceStoreError.invalidAudio("无法读取该音频文件")
         }
-        let frameCount = AVAudioFrameCount(file.length)
-        guard frameCount > 0 else {
+        let sourceSampleRate = file.processingFormat.sampleRate
+        let totalFrames = file.length
+        guard totalFrames > 0, sourceSampleRate > 0 else {
             throw CosyVoiceVoiceStoreError.invalidAudio("音频为空")
         }
+        let sourceDuration = Double(totalFrames) / sourceSampleRate
+        var framesToRead = totalFrames
+        if let maxDuration {
+            let maxSourceFrames = AVAudioFramePosition(
+                (maxDuration * sourceSampleRate).rounded(.down))
+            framesToRead = min(totalFrames, maxSourceFrames)
+        }
+        guard framesToRead > 0 else {
+            throw CosyVoiceVoiceStoreError.invalidAudio("音频为空")
+        }
+        guard framesToRead <= AVAudioFramePosition(UInt32.max) else {
+            throw CosyVoiceVoiceStoreError.invalidAudio("音频过长，无法处理")
+        }
+        let frameCount = AVAudioFrameCount(framesToRead)
         guard let input = AVAudioPCMBuffer(
             pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
             throw CosyVoiceVoiceStoreError.invalidAudio("无法分配音频缓冲")
@@ -1790,12 +1850,19 @@ actor CosyVoiceVoiceStore {
         guard !samples.isEmpty else {
             throw CosyVoiceVoiceStoreError.invalidAudio("音频为空")
         }
+        // 重采样可能有 1–2 帧的取整误差：按预算硬截到 maxDuration，保证合并总长不越界。
+        if let maxDuration {
+            let maxSamples = Int((maxDuration * Double(sampleRate)).rounded(.down))
+            if samples.count > maxSamples {
+                samples.removeLast(samples.count - maxSamples)
+            }
+            guard !samples.isEmpty else {
+                throw CosyVoiceVoiceStoreError.invalidAudio("音频为空")
+            }
+        }
         let duration = Double(samples.count) / Double(sampleRate)
         guard duration >= minDuration - 0.05 else {
             throw CosyVoiceVoiceStoreError.audioTooShort(seconds: duration)
-        }
-        guard duration <= maxDuration + 0.05 else {
-            throw CosyVoiceVoiceStoreError.audioTooLong(seconds: duration)
         }
         var peak: Float = 0
         for sample in samples { peak = max(peak, abs(sample)) }
@@ -1807,7 +1874,8 @@ actor CosyVoiceVoiceStore {
                 normalized[index] = max(-1, min(1, normalized[index] * gain))
             }
         }
-        return AudioPreparation(samples: normalized, duration: duration)
+        return AudioPreparation(
+            samples: normalized, duration: duration, originalDuration: sourceDuration)
     }
 
     // MARK: 校验/工具

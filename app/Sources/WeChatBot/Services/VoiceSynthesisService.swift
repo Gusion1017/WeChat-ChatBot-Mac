@@ -4,13 +4,13 @@ import Foundation
 
 /// 一次合成要用的音色参数（由全局 `VoiceSettings` 解析而来）。
 ///
-/// CosyVoice3 是 App 唯一的 TTS 引擎：音色来自本机 `voices.json` / 服务端
-/// `/voices`，语速 0.5–2.0（默认 1.0）。App 不内置任何音色，空音色表示
-/// 「未选择音色」，合成前会明确报错而不是回退到某个内置音色。
+/// Qwen3-TTS-1.7B 是 App 唯一的 TTS 模型：音色来自本机 `voices.json` / 服务端
+/// `/voices`。App 不内置任何音色，空音色表示「未选择音色」，合成前会明确报错
+/// 而不是回退到某个内置音色。`speed` 仅为内部兼容字段（Qwen3 不支持语速，UI 不展示）。
 struct VoiceSelection: Sendable, Equatable, Hashable {
-    /// CosyVoice3 音色 ID；空字符串表示「未选择音色」。
+    /// 音色 ID；空字符串表示「未选择音色」。
     var cosyVoiceVoiceID: String
-    /// 语速（0.5...2.0）。
+    /// 语速（0.5...2.0；Qwen3-TTS 忽略该值，仅保留给调试/旧调用面）。
     var speed: Double
 
     init(cosyVoiceVoiceID: String = "", speed: Double = 1.0) {
@@ -41,7 +41,7 @@ struct VoiceSelection: Sendable, Equatable, Hashable {
     var hasVoice: Bool { !trimmedVoiceID.isEmpty }
 }
 
-/// 一次合成产物：引擎原生采样率（CosyVoice3 为 24 kHz）的单声道 16-bit WAV。
+/// 一次合成产物：模型原生采样率（Qwen3-TTS 为 24 kHz）的单声道 16-bit WAV。
 struct SynthesisResult: Sendable, Equatable {
     var wavURL: URL
     var duration: TimeInterval
@@ -53,7 +53,7 @@ struct SynthesisResult: Sendable, Equatable {
 enum VoiceSynthesisError: Error, LocalizedError, Equatable {
     /// 文本清洗后为空（纯 Markdown/emoji/URL）。
     case emptyText
-    /// CosyVoice3 未安装、本地服务未运行/加载中，或未选择音色（UI 应引导安装/启动/选音色）。
+    /// Qwen3-TTS 未安装、本地服务未运行/加载中，或未选择音色（UI 应引导安装/启动/选音色）。
     case engineNotReady(reason: String)
     /// 合成超过时长上限且按策略不允许截断。
     case tooLong(actualSeconds: Double, maxSeconds: Int)
@@ -69,7 +69,7 @@ enum VoiceSynthesisError: Error, LocalizedError, Equatable {
         case .emptyText:
             return "没有可朗读的文本"
         case .engineNotReady(let reason):
-            return "CosyVoice3 语音未就绪：\(reason)"
+            return "Qwen3-TTS 语音未就绪：\(reason)"
         case .tooLong(let actual, let maxSeconds):
             return String(format: "语音时长 %.1f 秒超过上限 %d 秒", actual, maxSeconds)
         case .synthesisFailed(let reason):
@@ -84,13 +84,13 @@ enum VoiceSynthesisError: Error, LocalizedError, Equatable {
 
 // MARK: - Service
 
-/// 出站语音合成服务（CosyVoice3 本地 HTTP 旁路）。
+/// 出站语音合成服务（Qwen3-TTS-1.7B 本机 HTTP 旁路）。
 ///
 /// 设计边界：
 /// - **actor**：合成串行，写 WAV/清理输出串行化；
-/// - **本地**：只请求本机回环地址上的 CosyVoice3 sidecar，不联网、不上传音频/文本；
+/// - **本地**：只请求本机回环地址上的 Qwen3-TTS sidecar，不联网、不上传音频/文本；
 /// - 输入清洗与超限截断是纯函数（`VoiceTextSanitizer`），可单测；
-/// - 输出沿用引擎原生采样率（CosyVoice3 为 24 kHz）的单声道 16-bit WAV；
+/// - 输出沿用模型原生采样率（Qwen3-TTS 为 24 kHz）的单声道 16-bit WAV；
 ///   微信 SILK 链路由 bridge 负责重采样/编码。
 ///
 /// 与 `CosyVoiceClient` 的分工：本服务负责文本清洗、时长上限/截断与最终 WAV 落盘；
@@ -108,7 +108,7 @@ actor VoiceSynthesisService {
 
     // MARK: Readiness
 
-    /// CosyVoice3 是否可用：已安装 + 最近一次健康检查通过。
+    /// Qwen3-TTS 是否可用：已安装 + 最近一次健康检查通过（且运行的是 qwen3tts）。
     ///
     /// 只读缓存快照（真正的健康检查在 `CosyVoiceRuntime` 后台推进），
     /// `nonisolated`：UI 与回复决策可在 `@MainActor` 同步调用。
@@ -215,13 +215,13 @@ actor VoiceSynthesisService {
 
     // MARK: Synthesis backend
 
-    /// 调用 CosyVoice3 本地服务合成（只返回原始 PCM；时长/截断/落盘由本 actor 统一处理）。
+    /// 调用 Qwen3-TTS 本地服务合成（只返回原始 PCM；时长/截断/落盘由本 actor 统一处理）。
     private func makeAudio(
         for voice: VoiceSelection,
         text: String
     ) async throws -> CosyVoiceRawSynthesis {
         guard voice.hasVoice else {
-            throw VoiceSynthesisError.engineNotReady(reason: "未选择 CosyVoice3 音色")
+            throw VoiceSynthesisError.engineNotReady(reason: "未选择语音音色")
         }
         do {
             return try await CosyVoiceClient.shared.synthesizeRaw(
@@ -236,7 +236,7 @@ actor VoiceSynthesisService {
                     reason: error.errorDescription ?? "本地服务不可用")
             default:
                 throw VoiceSynthesisError.synthesisFailed(
-                    error.errorDescription ?? "CosyVoice3 合成失败")
+                    error.errorDescription ?? "Qwen3-TTS 合成失败")
             }
         } catch {
             throw VoiceSynthesisError.synthesisFailed(
