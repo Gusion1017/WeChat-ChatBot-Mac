@@ -6,13 +6,13 @@
 
 | 文档 | 内容 | 类型 |
 | --- | --- | --- |
-| [`install.md`](install.md) | **安装与启动**：Releases App（v2.1.1，约 65MB）/ 源码 ZIP 两种方式、**Command Line Tools 前置**、Gatekeeper、菜单栏、首次向导与发布打包 | 操作手册 |
+| [`install.md`](install.md) | **安装与启动**：Releases App（v3.1.3，约 65 MB）/ 源码 ZIP 两种方式、**Command Line Tools 前置**、Gatekeeper、菜单栏、首次向导与发布打包 | 操作手册 |
 | [`updates.md`](updates.md) | **应用内更新（设置 → 更新）**：GitHub Releases 检查/限流、SemVer 比较、SHA256 校验、状态机、原地安装与失败回滚、安装门禁与安全边界 | 现行契约 |
 | [`architecture.md`](architecture.md) | 总体架构、目录边界、OneBot 桥接契约 | 现行契约 |
 | [`accounts.md`](accounts.md) | **多微信账号数据隔离**：隔离矩阵、`accounts/<wxid>/` 布局、识别算法、三种切号路径、旧版单库迁移与 `_unassigned` 认领、边界与排障 | 现行契约 |
 | [`core-services.md`](core-services.md) | Swift 核心服务：AppStore、AI/OneBot/记忆/触发判定/调度、防睡眠、并发与错误处理 | 现行契约 |
 | [`bridge.md`](bridge.md) | Go OneBot 桥接：启动参数、HTTP/WS 接口、frida-core 接入 | 现行契约 |
-| [`memory.md`](memory.md) | **记忆系统 v2**：每会话角色目录只放 `memory.sqlite` 记忆卡（人格统一来自人格设定，旧 `persona.md` 进废纸篓）+ 固定 `c-__global__` 全局共享卡（手动维护、注入所有会话）、四类记忆、72h/重要度加权召回、0.92 折叠与 supersede、批量提取、全量互动、App 记忆面板与导出；旧 `memories` 表只读兼容 | 现行契约 |
+| [`memory.md`](memory.md) | **记忆系统 v2**：每会话一个 `memory.sqlite` 记忆卡（人格统一来自人格设定）加固定全局共享卡；四类记忆、72h/重要度加权召回、0.92 折叠与 supersede、批量提取、App 记忆面板与导出；旧 `memories` 表只读兼容 | 现行契约 |
 | [`ui-design.md`](ui-design.md) | SwiftUI 信息架构、设计 token、组件拆分与交互约定 | 现行契约 |
 | [`voice.md`](voice.md) | **语音能力**：入站转写、出站 TTS（Qwen3-TTS-1.7B 单模型，GPU/CPU）、本机音色管理与试听、安装与降级到文字、系统语音资源、4.2 Hook 限制 | 现行契约 |
 | [`cosyvoice.md`](cosyvoice.md) | **本地 TTS（Qwen3-TTS-1.7B，唯一模型）**：MLX GPU/CPU、安装/下载、参考音导入规则、本机音色管理、HTTP 契约、性能与降级到文字、旧版清理 | 现行契约 |

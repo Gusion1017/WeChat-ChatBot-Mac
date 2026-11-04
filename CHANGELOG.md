@@ -6,6 +6,12 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.4] — 2026-11-04
+
+### 变更
+
+- 精简 README 与 `docs/`：功能列表收敛为 8 条，安装、架构、记忆、语音、更新等文档改为快速上手 + 详细契约链接，删除重复实现细节与过时参数；无功能变更。
+
 ## [3.1.3] — 2026-11-04
 
 ### 优化
@@ -947,4 +953,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.3...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.4...HEAD
