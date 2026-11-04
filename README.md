@@ -5,12 +5,10 @@
 [![Swift](https://img.shields.io/badge/Swift-6.2-orange.svg)](app/Package.swift)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](bridge/go.mod)
 
-macOS 原生微信 AI 助手：用 Frida Gadget 注入官方微信（唯一实例），消息经 Go OneBot bridge
-接入 SwiftUI App，由 DeepSeek / OpenAI 兼容模型生成拟人化回复。
+macOS 原生微信 AI 助手：接入 DeepSeek / OpenAI，支持拟人化回复、长期记忆、语音与识图。
 
-A native macOS WeChat AI assistant: injects the official WeChat client with Frida Gadget
-(single instance), bridges messages through a Go OneBot bridge into a SwiftUI app, and writes
-human-like replies with DeepSeek / any OpenAI-compatible model.
+A native macOS WeChat AI assistant with DeepSeek / OpenAI: human-like replies, long-term
+memory, voice and image understanding.
 
 > GPL-3.0 · 个人自用 / 学习研究 · 改微信有签名失效与账号风险 · 与腾讯、Apple 无关联
 > GPL-3.0 · personal / learning project · patching WeChat carries signature and account risk · not affiliated with Tencent or Apple
