@@ -4,7 +4,7 @@
 > GitHub 的「Download ZIP」默认只给**源码**，不含已编译的 App、bridge 二进制和 Frida Gadget。
 > 非开发者请让发布者提供 **Releases 里的 App 压缩包**；只有源码时按「源码构建」操作。
 >
-> 当前发布版本：**3.1.2（build 29，2026-11-04）**，Releases 压缩包约 65MB。
+> 当前发布版本：**3.1.3（build 30，2026-11-04）**，Releases 压缩包约 65MB。
 
 ## 1. 先确认环境
 
@@ -37,13 +37,13 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后，把 `WeChat AI.app` 压缩上传到 GitHub Releases。当前版本 **3.1.2（约 65MB）**。
+发布者在本地构建后，把 `WeChat AI.app` 压缩上传到 GitHub Releases。当前版本 **3.1.3（约 65MB）**。
 
-1. 下载 `WeChat-AI-3.1.2.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。
+1. 下载 `WeChat-AI-3.1.3.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。
    可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-3.1.2.zip.sha256
+   shasum -a 256 -c WeChat-AI-3.1.3.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
@@ -174,7 +174,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
 
 ## 4. 发布者：如何制作可下载的 App 压缩包
 
-当前发布版本 **3.1.2（build 29，2026-11-04）**，zip 约 **65MB**。在已具备 Xcode 27 / CLT 的机器上，
+当前发布版本 **3.1.3（build 30，2026-11-04）**，zip 约 **65MB**。在已具备 Xcode 27 / CLT 的机器上，
 按下面顺序构建：
 
 ```bash
@@ -186,15 +186,15 @@ bash scripts/package_release.sh      # 或 make release
 
 脚本会校验必需资源、检查签名、打包并生成 SHA256，产物：
 
-- `dist/WeChat-AI-3.1.2.zip`
-- `dist/WeChat-AI-3.1.2.zip.sha256`
+- `dist/WeChat-AI-3.1.3.zip`
+- `dist/WeChat-AI-3.1.3.zip.sha256`
 
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包。也可以手动执行：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-3.1.2.zip"
-( cd dist && shasum -a 256 "WeChat-AI-3.1.2.zip" > "WeChat-AI-3.1.2.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-3.1.3.zip"
+( cd dist && shasum -a 256 "WeChat-AI-3.1.3.zip" > "WeChat-AI-3.1.3.zip.sha256" )
 ```
 
 签名与公证的预期：
@@ -210,10 +210,10 @@ bash scripts/build_app.sh
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-3.1.2.zip.sha256
+shasum -a 256 -c WeChat-AI-3.1.3.zip.sha256
 ```
 
-把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 建议 `v3.1.2`），在说明里写清：
+把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 建议 `v3.1.3`），在说明里写清：
 
 - 支持 Apple Silicon / macOS 26+ / 微信 4.2.0.12、4.2.0.9、4.2.0.5、4.1.15.55 或 4.1.12.53；
 - **安装 Hook 需要 Xcode Command Line Tools**（`xcode-select --install`，无需开发者账号），
@@ -229,7 +229,7 @@ shasum -a 256 -c WeChat-AI-3.1.2.zip.sha256
 | 现象 | 处理 |
 | --- | --- |
 | 双击提示“无法验证开发者”，且找不到「仍要打开」 | macOS 15+ 已取消右键打开。先双击触发拦截，再进 系统设置 → 隐私与安全性 → 仍要打开（需管理员/Touch ID）；仍没有条目就 `xattr -dr com.apple.quarantine "<App 实际路径>"` 后 `open`。两种路径示例见方式 A 第 3 步 |
-| 设置里没有「更新」分类 | 已发布的 **3.1.2** 尚未包含应用内更新；按方式 A 手动下载最新 Releases 覆盖安装即可。包含该功能的版本发布后，设置「应用」组会出现「更新」 |
+| 设置里没有「更新」分类 | 已发布的 **3.1.3** 尚未包含应用内更新；按方式 A 手动下载最新 Releases 覆盖安装即可。包含该功能的版本发布后，设置「应用」组会出现「更新」 |
 | 应用内更新失败 / 更新后打不开 | App 内失败不会退出，更新页显示原因并可重试；助手阶段失败会自动恢复旧版并重新打开，详情见 `~/Library/Logs/WeChatAI/update.log`。若新版本仍被 Gatekeeper 拦截，按「仍要打开」流程放行；仍失败则手动重新下载覆盖安装 |
 | 提示“App 已损坏” / 校验失败 | 重新下载并核对 `.sha256`；确认 App 完整解压、没有被安全软件截断；不要从不可信镜像下载 |
 | 向导提示缺少 Command Line Tools / 安装 Hook 按钮禁用 | 点「安装 Command Line Tools」或终端执行 `xcode-select --install`，完成系统安装后点「重新检测」；完整 Xcode 亦可；不需要开发者账号。终端报 `invalid active developer path` 时执行 `sudo xcode-select -s /Library/Developer/CommandLineTools` |

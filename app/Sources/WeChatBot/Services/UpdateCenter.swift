@@ -128,8 +128,15 @@ final class UpdateCenter {
     }
 
     /// 设置页打开时调用：距上次检查超过阈值则静默刷新一次。
-    func refreshIfNeeded() async {
+    ///
+    /// - Parameter loadReleaseInfo: 本次进程还没有检查结果时强制拉取一次（忽略 6 小时节流），
+    ///   用于「更新」页展示本版本/新版本的更新内容；只由设置页触发，不影响启动自动检查节奏。
+    func refreshIfNeeded(loadReleaseInfo: Bool = false) async {
         guard autoCheckEnabled, !state.isBusy else { return }
+        if loadReleaseInfo, latestRelease == nil {
+            await checkForUpdates(userInitiated: false)
+            return
+        }
         guard UpdateCheckPolicy.isCheckDue(lastCheckedAt: lastCheckedAt) else { return }
         await checkForUpdates(userInitiated: false)
     }

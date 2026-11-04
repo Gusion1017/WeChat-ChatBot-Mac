@@ -41,6 +41,7 @@
 | `Services/LogPipeline.swift` | 日志批量刷新、ANSI 清理、过滤与入库节流（200ms 批量，避免主线程逐行失效） |
 | `Services/CrashReporter.swift` | AppKit 布局安全阀、未捕获异常报告、会话面包屑、主线程看门狗 |
 | `Models/AppUpdateModels.swift` | 应用内更新模型：`AppVersion` 解析/比较、Release/Asset、`AppUpdateState`/`AppUpdateError`、`UpdateCheckPolicy` |
+| `Models/ReleaseNotes.swift` | Release 正文 → 更新内容文档：提取「本版重点/更新内容」小节、过滤下载/安装/隐私模板、Markdown 分块（标题/列表/代码/引用） |
 | `Services/GitHubUpdateClient.swift` | GitHub Releases 只读客户端：latest 检查、资产下载、`.sha256` 拉取、URL 白名单、HTTP/传输错误映射 |
 | `Services/UpdateCenter.swift` | 更新 UI 唯一状态源（独立单例）：自动/手动检查、节流与提示、下载/校验/安装编排、跳过版本与设置持久化 |
 | `Services/UpdateInstaller.swift` | 安装门禁与文件操作：工作目录、解压/包校验、更新助手脚本、启动助手、失败回滚与更新后清理 |
@@ -746,6 +747,10 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
   自动失败只写日志并恢复原状态（不进入 `failed`），手动失败才在页面展示；自动发现新版本
   且未跳过时按 `lastNotifiedTag` 去重发一次应用内通知，徽标读 `hasAvailableUpdate`；
   侧边栏/菜单栏徽标通过 `requestUpdatePageFocus` / `consumeUpdatePageFocus` 深链设置页。
+  更新页打开时若本次进程还没有检查结果，`refreshIfNeeded(loadReleaseInfo: true)` 会补拉一次
+  latest（忽略 6 小时节流，仅设置页触发）；`Models/ReleaseNotes.swift` 从 Release 正文提取
+  「本版重点/更新内容」并过滤下载/安装/隐私模板，`ReleaseNotesView` 按块渲染，安装确认弹窗
+  复用同一文档（避免重启后 6 小时内更新页没有可展示的更新内容）。
 - **下载与校验**：下载 zip 到 `Application Support/WeChatAI/updates/` 临时工作目录，进度回调
   在后台队列并节流后回主线程；随后拉取同名 `.sha256`、流式计算 SHA256 比对，解压并校验
   唯一 `.app` 的 Info.plist/bundle id/版本/主可执行文件/`codesign`，全部通过才进入安装。
@@ -759,7 +764,8 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
   助手在旧进程退出后（最多等约 60 秒）把旧 App 移到同目录 `.update-backup-<epoch>`，用
   `ditto` 展开暂存 App，`xattr -dr com.apple.quarantine` 后
   `/usr/bin/codesign -f -s - --timestamp=none` ad-hoc 重签，`codesign --verify --strict`
-  通过再 `open`。等待超时先 SIGTERM 再 SIGKILL；`xattr` 非 0 只记日志继续。任一步失败时，
+  通过再 `open`。等待超时先校验 PID 身份（`ps -p`，防 PID 复用）再 SIGTERM/SIGKILL；
+  `xattr` 非 0 只记日志继续。任一步失败时，
   已替换则删除半成品、恢复旧备份，未替换则保持旧版原样，随后重新打开旧版并以退出码 1 结束。
   成功后保留备份、删除本次工作目录；新版本启动完成约 8 秒后
   （`scheduleLaunchCheck`）由 `UpdateInstaller.cleanupAfterUpdate`
@@ -767,11 +773,12 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 - **安全**：不发送 API Key/Cookie/账号/本地路径；拒绝非 https 或非 GitHub 域名资产；
   SHA256、bundle id、版本、codesign 任一失败即拒绝；无静默安装、后台强制更新、beta 通道或
   自定义更新源。ad-hoc 未公证，更新后首次打开可能需 Gatekeeper「仍要打开」。
-- **测试**：`UpdateTests.swift`（51 个用例）已覆盖版本解析/比较、6 小时边界、资产选择与
-  `.sha256` 配对、200/404/403/429 与传输错误映射、URL 白名单、SHA256 解析/校验、安装目标
-  （bundle id/版本/Translocation/只读目录）、包元数据与 `codesign` 校验、解包、清理与助手脚本
-  （含真实替换/回滚/工作目录自清理集成）；`UpdateCenter` 的 UI 状态迁移与通知去重仍以手动
-  验收为主。以 `cd app && swift test --filter Update` 实际输出为准；手动验收
+- **测试**：`UpdateTests.swift`（51 个用例）与 `ReleaseNotesTests.swift`（16 个用例）已覆盖
+  版本解析/比较、6 小时边界、资产选择与 `.sha256` 配对、200/404/403/429 与传输错误映射、
+  URL 白名单、SHA256 解析/校验、安装目标（bundle id/版本/Translocation/只读目录）、
+  包元数据与 `codesign` 校验、解包、清理与助手脚本（含真实替换/回滚/工作目录自清理集成）
+  以及 Release 正文「本版重点」提取/模板过滤/Markdown 分块；`UpdateCenter` 的 UI 状态迁移与
+  通知去重仍以手动验收为主。以 `cd app && swift test` 实际输出为准；手动验收
   （真实替换、回滚、Gatekeeper、三处提示）见 [`updates.md`](updates.md) §9。
 
 ## 6. 错误处理策略
@@ -863,7 +870,7 @@ profile seed、旧文件保留）、`claimUnassigned` 只复制不删除/不覆�
 config + profile 双文件加载/损坏备份/去重双写、`MemoryStore` 切换 A/B 库后会话/记忆/日志/KV
 互不可见。2026-10-28 审查修复另加回归：`_unassigned` 启动认领、`legacyMigrationDone` 门禁、
 空壳目标库替换、WAL 主库无 `-wal/-shm` 时的迁移、`MemoryStore.suspend()` 禁止隐式 open。
-当前 `swift test` **603 项**通过
+当前 `swift test` **619 项**通过
 （2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 记忆 v2（2026-10-28）新增、2026-10-29 扩展到 36 项的 `CharacterMemoryTests.swift`（临时目录，不碰真实网络/数据）：
@@ -897,7 +904,7 @@ RuleEngine 白黑名单/@/关键词/冷却、Scheduler 各 repeat 的 nextFireAt
 ChatEngine 分段/角色合并/关键词分词。输出 `[selftest] PASS/FAIL/WARN` 与汇总退出码。
 
 历史 CLI 驱动实测：**63 passed / 0 failed / 0 warnings**；当前 `swift test` 为
-**603 项（601 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
+**619 项（617 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、
 `config.json` 无明文 Key。
 

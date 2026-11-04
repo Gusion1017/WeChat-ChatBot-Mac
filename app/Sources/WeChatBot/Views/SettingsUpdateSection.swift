@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsUpdateSection: View {
     @State private var updates = UpdateCenter.shared
     @State private var showInstallConfirmation = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
@@ -23,7 +24,9 @@ struct SettingsUpdateSection: View {
         .task {
             // 外部重新加载配置 / 切换语言后，开关与上次检查时间可能已变化。
             updates.reloadSettings()
-            await updates.refreshIfNeeded()
+            // 重启后 6 小时节流内不会自动检查，但更新页仍应能展示本版本更新内容：
+            // 缺少检查结果时补拉一次（只读 latest，不改自动检查节奏）。
+            await updates.refreshIfNeeded(loadReleaseInfo: true)
         }
         .sheet(isPresented: $showInstallConfirmation) {
             installConfirmation
@@ -186,18 +189,21 @@ struct SettingsUpdateSection: View {
                 tint: Theme.info
             )
         case .upToDate(let checkedAt):
-            SettingsSection(
-                title: "更新检查",
-                footer: "自动检查每 6 小时最多一次；手动检查不受限制。"
-            ) {
-                SettingsRow(
-                    title: showsSkippedRelease ? "已跳过新版本" : "已是最新版本",
-                    subtitle: Lf("上次检查：%@", UIFormat.relative(checkedAt)),
-                    symbol: showsSkippedRelease ? "eye.slash" : "checkmark.circle.fill",
-                    tint: showsSkippedRelease ? Theme.warning : Theme.success
+            VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+                SettingsSection(
+                    title: "更新检查",
+                    footer: "自动检查每 6 小时最多一次；手动检查不受限制。"
                 ) {
-                    checkButton
+                    SettingsRow(
+                        title: showsSkippedRelease ? "已跳过新版本" : "已是最新版本",
+                        subtitle: Lf("上次检查：%@", UIFormat.relative(checkedAt)),
+                        symbol: showsSkippedRelease ? "eye.slash" : "checkmark.circle.fill",
+                        tint: showsSkippedRelease ? Theme.warning : Theme.success
+                    ) {
+                        checkButton
+                    }
                 }
+                currentVersionNotesSection
             }
         case .available(let release):
             availableCard(release)
@@ -255,7 +261,7 @@ struct SettingsUpdateSection: View {
         GlassCard(tint: Theme.accent) {
             VStack(alignment: .leading, spacing: 14) {
                 releaseHeader(release)
-                releaseNotes(release)
+                newVersionNotes(release)
 
                 Button {
                     if let pageURL = release.pageURL {
@@ -334,42 +340,78 @@ struct SettingsUpdateSection: View {
         }
     }
 
-    private func releaseNotes(_ release: AppUpdateRelease) -> some View {
+    /// 可用更新卡片里的「新版本更新内容」。
+    private func newVersionNotes(_ release: AppUpdateRelease) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(L("发布说明"))
+            Text(L("新版本更新内容"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            if release.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(L("此版本没有提供发布说明。"))
+            let document = ReleaseNotesDocument.digest(
+                from: release.notes,
+                versionLabel: release.version.description
+            )
+            if document.isEmpty {
+                Text(L("此版本没有提供可展示的更新内容。"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
-                ScrollView {
-                    Text(attributedNotes(release.notes))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 210)
-                .padding(10)
-                .background(
-                    Color.primary.opacity(0.04),
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(Theme.hairline, lineWidth: 1)
-                }
+                ReleaseNotesView(document: document, maxHeight: 240)
             }
         }
     }
 
-    private func attributedNotes(_ notes: String) -> AttributedString {
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .full
-        options.failurePolicy = .returnPartiallyParsedIfPossible
-        return (try? AttributedString(markdown: notes, options: options)) ?? AttributedString(notes)
+    // MARK: - Current version notes
+
+    /// 已是最新版本时也展示「本版本更新内容」，而不是只显示一句状态。
+    @ViewBuilder
+    private var currentVersionNotesSection: some View {
+        if let release = updates.latestRelease, release.version == updates.currentVersion {
+            SettingsSection(
+                title: "本版本更新内容",
+                footer: "内容来自 GitHub Release 的「本版重点」；已过滤下载、安装与隐私说明等发布模板。"
+            ) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text(Lf("版本 %@", release.version.description))
+                        if let publishedAt = release.publishedAt {
+                            Text("·")
+                            Text(Lf("发布于 %@", UIFormat.fullDateTime.string(from: publishedAt)))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    if let document = currentVersionNotesDocument, !document.isEmpty {
+                        ReleaseNotesView(document: document, maxHeight: 260)
+                    } else {
+                        Text(L("此版本没有提供可展示的更新内容。"))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    if let pageURL = release.pageURL {
+                        Button {
+                            NSWorkspace.shared.open(pageURL)
+                        } label: {
+                            Label(L("在 GitHub 查看完整发布说明"), systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(14)
+            }
+        }
+    }
+
+    private var currentVersionNotesDocument: ReleaseNotesDocument? {
+        guard let release = updates.latestRelease, release.version == updates.currentVersion else {
+            return nil
+        }
+        return ReleaseNotesDocument.digest(
+            from: release.notes,
+            versionLabel: release.version.description
+        )
     }
 
     /// 已具备安装条件时返回 nil；否则返回可以直接展示的禁用原因。
@@ -596,20 +638,107 @@ struct SettingsUpdateSection: View {
 
     // MARK: - Confirmation
 
+    /// 安装确认弹窗：先展示目标版本的更新内容，再给出退出/替换/重签提示。
     private var installConfirmation: some View {
-        ConfirmSheet(
-            title: "安装 WeChat AI 更新",
-            message: "将下载新版本并替换当前安装包，然后自动重新打开。",
-            details: [
-                "机器人会先停止。",
-                "App 会退出并替换当前安装包「WeChat AI.app」。",
-                "替换后会重新进行 ad-hoc 签名，并自动重新打开新版本。",
-                "取消不会修改任何文件。"
-            ],
-            confirmTitle: "下载并安装",
-            isDestructive: false
-        ) {
-            Task { await updates.downloadAndInstall() }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 11) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("安装 WeChat AI 更新"))
+                        .font(.headline)
+                    if let release = updates.availableRelease {
+                        Text(Lf(
+                            "当前 v%@ → 新版本 v%@",
+                            updates.currentVersion.description,
+                            release.version.description
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let release = updates.availableRelease {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Text(L("新版本更新内容"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        if let pageURL = release.pageURL {
+                            Button {
+                                NSWorkspace.shared.open(pageURL)
+                            } label: {
+                                Label(L("在 GitHub 查看完整发布说明"), systemImage: "arrow.up.right.square")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    let document = ReleaseNotesDocument.digest(
+                        from: release.notes,
+                        versionLabel: release.version.description
+                    )
+                    if document.isEmpty {
+                        Text(L("此版本没有提供可展示的更新内容。"))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ReleaseNotesView(document: document, maxHeight: 220)
+                    }
+                }
+            }
+
+            InlineNotice(
+                kind: .warning,
+                title: "更新会退出 App",
+                message: "将停止机器人、退出 App、替换当前安装包并自动重新打开。"
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                detailBullet("机器人会先停止。")
+                detailBullet("App 会退出并替换当前安装包「WeChat AI.app」。")
+                detailBullet("替换后会重新进行 ad-hoc 签名，并自动重新打开新版本。")
+                detailBullet("取消不会修改任何文件。")
+            }
+
+            HStack(spacing: 9) {
+                Spacer(minLength: 0)
+                Button(L("取消")) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(L("下载并安装")) {
+                    dismiss()
+                    Task { await updates.downloadAndInstall() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!updates.canInstallInPlace || updates.isBusy)
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
+        .background(.regularMaterial)
+    }
+
+    private func detailBullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 4, height: 4)
+                .padding(.top, 5)
+                .accessibilityHidden(true)
+            Text(L(text))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -484,15 +484,16 @@ Window("WeChat AI", id: "main")
 - **更新页结构**（从上到下）：
   - 版本卡：当前 `CFBundleShortVersionString` / Build、安装位置
     （`Bundle.main.bundleURL`）与门禁状态；开发构建（`dist/`、`.build`）显示提示但不阻断；
-  - 新版本卡：Release 标题/说明/发布时间、「下载并安装」「跳过此版本」、GitHub Release 链接；
+  - 新版本卡：Release 标题/发布时间、「新版本更新内容」（从 Release 正文提取的「本版重点」）、「下载并安装」「跳过此版本」、GitHub Release 链接；
+  - 本版本卡（已是最新时）：显示当前版本的更新内容、发布时间与 GitHub 完整发布说明链接；重启后 6 小时节流内也会为展示内容补拉一次 latest；
   - 进度区：下载进度（总大小未知时用不确定进度）、SHA256 校验、准备安装；
   - 设置区：自动检查开关（即时持久化）、已跳过的版本与「取消跳过」；
   - 页脚：GitHub Releases 与更新日志（`update.log`）入口。
 - **页面状态**：`idle` / `checking` / `upToDate` / `available` / `downloading` /
   `verifying` / `installing` / `failed(message)`。检查/下载/校验/安装进行中禁用重复触发，
   按钮显示进度；自动检查失败不进入错误态，也不把页面卡在「检查中」。
-- **确认弹窗**：点击「下载并安装」先二次确认，明确会**停止机器人并退出 App**，随后由更新助手
-  替换当前 App 并重新打开；取消不产生下载或文件改动。
+- **确认弹窗**：点击「下载并安装」先二次确认，弹窗顶部先展示新版本更新内容（与页面同源的「本版重点」），
+  再明确会**停止机器人并退出 App**，随后由更新助手替换当前 App 并重新打开；取消不产生下载或文件改动。
 - **进度与退出**：`downloading` 显示已接收/总大小与百分比；`verifying` 显示校验中；
   `installing` 显示安装中并提示 App 会自动重新打开。助手启动成功后 App 自行退出，
   不再提供「取消安装」。
@@ -505,6 +506,9 @@ Window("WeChat AI", id: "main")
   安装目录不可写或发布包缺 zip/`.sha256` 时禁用「下载并安装」并显示对应原因与处理建议；
   安装位置卡片展示版本、Build、路径与校验状态，门禁失败时提供「打开发布页手动下载」；
   不请求管理员权限。
+- **更新内容渲染**：`ReleaseNotesDocument` 从 Release 正文提取「本版重点/更新内容」，过滤下载表格、
+  安装步骤、隐私说明等模板段落；`ReleaseNotesView` 按标题/列表/代码/引用分块排版，行内加粗、
+  行内代码与链接交给 `AttributedString`。
 - **更新后**：新版本首次启动清理旧 `.update-backup-*` 与超过 24 小时的更新工作目录；
   ad-hoc 签名未公证，首次打开可能需 Gatekeeper「仍要打开」放行，页面与安装文档给出提醒。
 
@@ -596,6 +600,7 @@ Window("WeChat AI", id: "main")
 | `ScheduleRow` / `ScheduleMath` | 定时任务行与下次时间估算 |
 | 记忆 v2：角色列表 / 记忆卡行 / 全量记录 sheet / 记忆设置 sheet | 记忆卡模式（左栏角色、右栏记忆卡；人格来自人格设定，无每会话人设卡；导入旧记忆与 Markdown/JSON 导出） |
 | `LogRow` | 日志行 |
+| `ReleaseNotesView` | 更新内容渲染：标题 / 列表 / 代码 / 引用分块，行内 Markdown（加粗、代码、链接）由 `AttributedString` 处理 |
 | `GlassToolbar` / `Toast` / `EmptyState` / `ConfirmSheet` | 见 DesignSystem |
 
 ## 7. 交互约定
@@ -704,7 +709,7 @@ UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网�
 
 已验证：
 
-- `cd app && SWIFT_DISABLE_SANDBOX=1 swift test` **603 项执行（601 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）
+- `cd app && SWIFT_DISABLE_SANDBOX=1 swift test` **619 项执行（617 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）
   （含批量记忆、压缩器、权重强化、旧库迁移、防睡眠配置兼容与三档决策、回复进度倒计时、
   自消息路由修复、通讯录标题补全、拍一拍回复、唤醒后免唤醒词窗口、appmsg 引用/链接/文件等分类与历史文本修复、
   入站帧单次解析与历史修复 trusted 语义、微信 4.2.0.5 R3 版本门禁/运行期配置合并、识图设置/多模态请求/图片编码与描述落库/引用图片说明）。

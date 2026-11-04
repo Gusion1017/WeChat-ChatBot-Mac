@@ -1975,6 +1975,12 @@
 "预览版" = "Pre-release";
 "发布于 %@" = "Published %@";
 "发布说明" = "Release notes";
+"本版本更新内容" = "Release notes for this version";
+"新版本更新内容" = "Release notes for the new version";
+"此版本没有提供可展示的更新内容。" = "This release has no update details to show.";
+"在 GitHub 查看完整发布说明" = "View full release notes on GitHub";
+"内容来自 GitHub Release 的「本版重点」；已过滤下载、安装与隐私说明等发布模板。" = "Content comes from the “Key changes” section of the GitHub Release; download, install, and privacy boilerplate are filtered out.";
+"当前 v%@ → 新版本 v%@" = "v%@ → new version v%@";
 "此版本没有提供发布说明。" = "This release has no notes.";
 "发布包中没有可安装的 zip 文件" = "No installable zip asset in the release";
 "发布包缺少 SHA256 校验文件，已禁用应用内安装" = "The release has no SHA256 checksum; in-app installation is disabled";

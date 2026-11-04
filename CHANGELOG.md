@@ -6,6 +6,16 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.3] — 2026-11-04
+
+### 优化
+
+- **更新内容展示（2026-11-04）**：更新页在「已是最新」时也展示「本版本更新内容」，有更新时展示
+  「新版本更新内容」；内容从 GitHub Release 正文的「本版重点 / 更新内容」小节提取，过滤下载表格、
+  安装步骤与隐私说明等发布模板，并按标题/列表/代码/引用分块渲染（`ReleaseNotesDocument` /
+  `ReleaseNotesView`，16 项单测）。点「下载并安装」的确认弹窗先展示新版本更新内容，再给出退出/
+  替换/重签提示；重启后在 6 小时检查节流内打开更新页，也会为展示内容补拉一次 latest。
+
 ## [3.1.2] — 2026-11-04
 
 ### 修复
@@ -937,4 +947,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.2...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.3...HEAD
