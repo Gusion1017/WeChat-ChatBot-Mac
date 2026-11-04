@@ -8,7 +8,6 @@ import SwiftUI
 struct SettingsUpdateSection: View {
     @State private var updates = UpdateCenter.shared
     @State private var showInstallConfirmation = false
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
@@ -710,11 +709,13 @@ struct SettingsUpdateSection: View {
             HStack(spacing: 9) {
                 Spacer(minLength: 0)
                 Button(L("取消")) {
-                    dismiss()
+                    showInstallConfirmation = false
                 }
                 .keyboardShortcut(.cancelAction)
                 Button(L("下载并安装")) {
-                    dismiss()
+                    // 直接用绑定关闭 sheet：`@Environment(\.dismiss)` 在 presenter 上
+                    // 拿不到 sheet 自身的 dismiss action，点了会留在弹窗里。
+                    showInstallConfirmation = false
                     Task { await updates.downloadAndInstall() }
                 }
                 .buttonStyle(.borderedProminent)

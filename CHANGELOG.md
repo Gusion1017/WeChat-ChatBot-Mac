@@ -6,6 +6,15 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.5] — 2026-11-04
+
+### 修复
+
+- **更新确认弹窗点击「下载并安装」后不关闭（2026-11-04）**：确认弹窗由 `SettingsUpdateSection`
+  直接展示，按钮里使用的 `@Environment(\.dismiss)` 属于 presenter 而不是 sheet 内容，调用后
+  弹窗不消失。改为直接置 `showInstallConfirmation = false`，确认/取消都会立即关闭弹窗并继续
+  下载进度或保持页面不变。
+
 ## [3.1.4] — 2026-11-04
 
 ### 变更
@@ -953,4 +962,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.4...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.5...HEAD

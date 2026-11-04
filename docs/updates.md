@@ -123,7 +123,7 @@
 
 | # | 步骤 | 说明 | 失败处理 |
 | --- | --- | --- | --- |
-| 1 | 用户确认 | 「下载并安装」前弹出确认：先展示新版本更新内容，再明确会**停止机器人并退出 App** | 取消则无副作用 |
+| 1 | 用户确认 | 「下载并安装」前弹出确认：先展示新版本更新内容，再明确会**停止机器人并退出 App**；点击「下载并安装」后弹窗立即关闭并开始下载 | 取消则无副作用 |
 | 2 | 安装门禁复核 | 重新解析 `Bundle.main.bundleURL`，检查 `.app`、bundle id、Translocation、目录可写 | 进入 `failed`，不下载 |
 | 3 | 下载 zip 并校验 SHA256 | 下载到 `~/Library/Application Support/WeChatAI/updates/update-<UUID>/`，按字节回调进度（约 200ms 节流）；从 Release 同名资产取 `.sha256`（内容为空/格式非法按缺失处理），流式计算 SHA256 比对 | 下载失败删除工作目录；缺失拒绝安装；不匹配 → `failed`，不继续解压 |
 | 4 | 解压与校验 | 解压到工作目录，确认是唯一 `.app`，校验 Info.plist、bundle id、版本号、主可执行文件与 codesign 签名 | `unzipFailed` / `invalidBundle` / `signatureInvalid` |

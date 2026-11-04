@@ -406,6 +406,8 @@ Window("WeChat AI", id: "main")
   可读中文提示（见 [`updates.md`](updates.md) §6）。
 - **确认与进度**：点「下载并安装」先二次确认，顶部展示新版本更新内容（与页面同源「本版重点」），
   再明确会**停止机器人并退出 App**，随后由更新助手替换并重新打开；取消无下载或文件改动。
+  点「下载并安装」后**弹窗立即关闭**（用 sheet 的 `isPresented` 绑定关闭，不依赖 presenter 的
+  `dismiss`），页面随即切到下载进度。
   `downloading` 显示已接收/总大小与百分比，`verifying` 显示校验中，`installing` 提示 App 会自动重新
   打开；助手启动成功后 App 自行退出，不再提供「取消安装」。
 - **跳过版本**：写入 `updates.skippedTag` 后徽标与 toast 消失，页面显示「已跳过 vX」；「取消跳过」
