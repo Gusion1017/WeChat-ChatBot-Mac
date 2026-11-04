@@ -105,7 +105,7 @@ WeChatAI.app (SwiftUI)          bridge/onebot (Go)              WeChat.app
 
 - **普通用户**：下载 [`WeChat-AI-3.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip)
   （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip.sha256)），
-  按下面步骤安装；历史版本见 [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags)。
+  按下面步骤安装；历史发布说明见 [`docs/releases/`](docs/releases/)。
 
   1. 解压得到 `WeChat AI.app`，拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）。
   2. 双击启动会被 Gatekeeper 拦截（App 为 ad-hoc 签名、未公证）。**macOS 15 起（含 26）已取消
@@ -337,7 +337,7 @@ Contracts in [`docs/architecture.md`](docs/architecture.md); document index in
 - **Regular users**: download
   [`WeChat-AI-3.1.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip)
   (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.1/WeChat-AI-3.1.1.zip.sha256))
-  and follow these steps; older versions are on [Tags](https://github.com/Gusion1017/WeChat-ChatBot-Mac/tags).
+  and follow these steps; older release notes are in [`docs/releases/`](docs/releases/).
 
   1. Unzip `WeChat AI.app` and drag it to `~/Applications` (current user, no admin) or
      `/Applications` (all users).

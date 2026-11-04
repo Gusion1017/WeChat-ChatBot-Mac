@@ -6,13 +6,13 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
-## [3.1.1] — 2026-11-04
+## 3.1.1 — 2026-11-04
 
 ### 变更
 
 - 更新提示文案由「可更新 vX」改为「有新版本 X」，同步侧边栏、菜单栏与文档；无功能变更。
 
-## [3.1.0] — 2026-11-04
+## 3.1.0 — 2026-11-04
 
 ### 新增
 
@@ -26,7 +26,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   更新设置存全局 `config.json` 的 `updates` 段，旧配置缺键逐段回退。ad-hoc 签名未公证，
   更新后首次打开可能需系统「仍要打开」放行。契约见 [`docs/updates.md`](docs/updates.md)。
 
-## [3.0.0] — 2026-11-04
+## 3.0.0 — 2026-11-04
 
 ### 变更
 
@@ -48,7 +48,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   patch/bench/perf 工具。实测：`swift test` 546 项（544 通过 / 2 跳过）、Python sidecar 72 项、
   GPU 真实 E2E 与 CPU ready/慢速数据见 [`docs/cosyvoice.md`](docs/cosyvoice.md) §11。
 
-## [2.1.1] — 2026-11-03
+## 2.1.1 — 2026-11-03
 
 ### 变更
 
@@ -60,7 +60,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   `.gitignore` 补充 SQLite sidecar 与覆盖率规则；`--docs` 检查说明与 CI Python 语法覆盖修正。
   构建缓存与冗余解包 App 已清理（可再生，不影响源码）。
 
-## [2.1.0] — 2026-11-03
+## 2.1.0 — 2026-11-03
 
 ### 新增
 
@@ -79,7 +79,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   手动发送捕获 R3 文本句柄后，`/send_private_msg` 发送到文件传输助手 slot13 返回 0、worker result=1。
   语音发送（voice seed 未捕获）与图片获取下载未复测；群聊 @ 未单独复测。
 
-## [2.0.2] — 2026-10-30
+## 2.0.2 — 2026-10-30
 
 ### 移除
 
@@ -89,7 +89,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   以免回滚丢配置；历史主动消息保留为普通出站消息。主动聊天与「定时任务」的区别说明不再适用。
   机器人页子栏目恢复为 7 个（常规 / 触发 / 互动 / 名单 / 节奏 / 定时 / 语音）。
 
-## [2.0.1] — 2026-10-29
+## 2.0.1 — 2026-10-29
 
 ### 变更
 
@@ -105,7 +105,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   详见 [`docs/ui-design.md`](docs/ui-design.md) §5.11、§11 与
   [`docs/core-services.md`](docs/core-services.md)。
 
-## [2.0.0] — 2026-10-29
+## 2.0.0 — 2026-10-29
 
 ### 修复
 
@@ -179,7 +179,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   [`docs/core-services.md`](docs/core-services.md)、[`docs/ui-design.md`](docs/ui-design.md)、
   [`docs/install.md`](docs/install.md)、[`docs/accounts.md`](docs/accounts.md)、根 `README.md` 与本文。
 
-## [1.8.0] — 2026-10-29
+## 1.8.0 — 2026-10-29
 
 ### 新增
 
@@ -214,7 +214,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   静默时长改为「快捷预设（30 分钟–7 天）+ 微调 Stepper」，不再使用 15 分钟–7 天的粗粒度滑杆；
   主动页文案同步精简，去掉重复的状态与说明。
 
-## [1.7.0] — 2026-10-28
+## 1.7.0 — 2026-10-28
 
 ### 变更
 
@@ -247,7 +247,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   [`docs/core-services.md`](docs/core-services.md)、[`docs/accounts.md`](docs/accounts.md)、
   [`docs/ui-design.md`](docs/ui-design.md)、根 `README.md` 与本文。
 
-## [1.6.2] — 2026-10-28
+## 1.6.2 — 2026-10-28
 
 ### 安全
 
@@ -257,7 +257,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   移除该回退不影响资源定位。已验证 release 二进制不再包含 `/Users/<user>/...` 源码路径。
 
 
-## [1.6.1] — 2026-10-28
+## 1.6.1 — 2026-10-28
 
 ### 修复
 
@@ -329,7 +329,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - `scripts/build_bridge.sh`：Go 构建 + 全部单元/契约测试通过。
 - `scripts/check.sh --docs`：脚本语法、hook/bridge sha 一致、文档链接、hook 版本 JSON 全绿。
 
-## [1.6.0] — 2026-10-28
+## 1.6.0 — 2026-10-28
 
 ### 新增
 
@@ -369,7 +369,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
     留下的空壳库、绝不覆盖已有业务数据；bridge `image_path` 强制取当前账号目录；
     切号失败复位 `isBotRunning` 并禁止启动机器人并发。
 
-## [1.5.2] — 2026-10-27
+## 1.5.2 — 2026-10-27
 
 ### 变更
 
@@ -378,7 +378,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   共用组件 `VoiceSettingsPanel`，面板行为与语音功能本身未改动。设置分类现为
   通用 / 外观 / 通知 / Hook / OneBot / 数据与备份 / 关于。
 
-## [1.5.1] — 2026-10-27
+## 1.5.1 — 2026-10-27
 
 ### 变更
 
@@ -418,7 +418,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   发送日志改为记录实际等待的拟人化延迟，语音回复的进度条不再显示等待倒计时。
   新增发送节奏单测与旧配置缺键默认值断言。
 
-## [1.5.0] — 2026-10-27
+## 1.5.0 — 2026-10-27
 
 ### 新增
 
@@ -508,7 +508,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - **手改配置的超界音色编号（2026-10-27）**：`kokoroSpeakerID` 在解码/保存与合成前统一收敛到
   0–102，避免 UI 显示越界编号或引擎侧静默落到别的音色。
 
-## [1.4.0] — 2026-10-26
+## 1.4.0 — 2026-10-26
 
 ### 新增
 
@@ -552,7 +552,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   当成使用门槛。模型已就绪、语音回复已开启时，决策命中后仍被「尚未同意下载语音模型」拦下并
   逐条降级文字。现在只在模型未就绪时降级；下载同意仍只在下载入口校验，已下载模型直接使用。
 
-## [1.3.0] — 2026-10-26
+## 1.3.0 — 2026-10-26
 
 ### 新增
 
@@ -806,7 +806,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   密钥派生或发送任务构造，只保留行为、开关与安全边界。
 - 新增 `.gitignore` 与文档层面的隐私检查（真实 wxid / 聊天记录 / 截图 / Key 不入库）。
 
-## [1.2.4] — 2026-10-23
+## 1.2.4 — 2026-10-23
 
 ### 新增
 
@@ -816,7 +816,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   **同一发送者**在窗口内继续发言无需再次唤醒，命中消息会滑动续期；仅群聊生效，
   不绕过白黑名单、工作时段、冷却与每分钟上限；旧配置缺省保持关闭。
 
-## [1.2.3] — 2026-10-23
+## 1.2.3 — 2026-10-23
 
 ### 变更
 
@@ -832,7 +832,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   人物段过滤。新总结提示要求不记录群聊玩笑/临时外号，冲突时以手写/核心记忆为准。
   这样群昵称被改、被开玩笑或重名时，模型不会把别人的称呼套到当前发言人身上。
 
-## [1.2.2] — 2026-10-22
+## 1.2.2 — 2026-10-22
 
 ### 变更
 
@@ -853,7 +853,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   `正文\n[引用 发送者] 原文` 在事件入口统一重排为 `【引用 发送者：原文】`，
   避免被引用内容里的旧称呼被模型当成当前发言人说的话。
 
-## [1.2.1] — 2026-10-22
+## 1.2.1 — 2026-10-22
 
 ### 新增
 
@@ -866,7 +866,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   单测覆盖引用机器人/引用他人、`<fromusr>` 回退、群 ID 与 selfID 缺失、
   触发方式编解码；真机验证：引用机器人的消息可命中，引用他人消息不会误触发。
 
-## [1.2.0] — 2026-10-22
+## 1.2.0 — 2026-10-22
 
 ### 修复
 
@@ -885,7 +885,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   新增 `WeChatXML`（共享 XML 工具，`PatMessage` 去重）、`WeChatAppmsgTests`、
   `AppmsgRoutingTests`（实时替换、拍一拍不回归、历史修复幂等、群触发只看正文）。当前 Swift 测试 164 项通过。
 
-## [1.1.0] — 2026-10-22
+## 1.1.0 — 2026-10-22
 
 ### 新增
 
@@ -901,7 +901,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   媒体下载维持自 4.1.15 起的已知缺失（4.2.0.5 hook 日志中
   downloadFile/downloadImag 仍 skipped，non-fatal）。
 
-## [1.0.0] — 2026-10-20
+## 1.0.0 — 2026-10-20
 
 ### 新增
 
@@ -923,28 +923,3 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.1...HEAD
-[1.3.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.3.0
-[1.4.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.4.0
-[1.5.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.0
-[1.5.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.1
-[1.5.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.5.2
-[1.6.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.6.0
-[1.6.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.6.1
-[1.6.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.6.2
-[1.7.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.7.0
-[1.8.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.8.0
-[2.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.0
-[2.0.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.1
-[2.0.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.0.2
-[2.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.0
-[2.1.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v2.1.1
-[3.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.0.0
-[3.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.1.0
-[3.1.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v3.1.1
-[1.0.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.0.0
-[1.1.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.1.0
-[1.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.0
-[1.2.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.1
-[1.2.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.2
-[1.2.3]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/tree/v1.2.3
-[1.2.4]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/tag/v1.2.4
