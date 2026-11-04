@@ -22,56 +22,22 @@ memory, voice and image understanding.
 
 ### 功能
 
-- **私聊自动回复**；**群聊触发可多选**（@ / 关键词 / 拍一拍 / 引用机器人；拍一拍只认「拍机器人」，
-  可 @ 拍的人；「引用机器人」默认可选，别人引用机器人的消息时唤醒）；
-  **唤醒后免唤醒词**（默认关闭，同一发送者在 1–60 分钟窗口内继续发言无需再次唤醒）
-- **白 / 黑名单**（会话 ID 或 wxid）、冷却、每分钟限流、工作时段，均可按会话覆盖
-- **按会话选择人格** / 通道与模型覆盖，温度按模型配置；DeepSeek、OpenAI、Ollama 或任意 OpenAI 兼容端点
-- **记忆 v2（2026-10-28）**：一个微信会话一个记忆卡目录（`characters/<会话>/memory.sqlite`）；
-  人格统一来自「人格设定」（会话只记录绑定，不再每会话复制 `persona.md`）；
-  事实/决策/待办/经验四类记忆，最近 72h/重要/关键词相关
-  加权召回（新卡默认空，机器人回复后自动提取）；0.92 相似度自动折叠、冲突 supersede 留档、
-  普通 30 天/重要 180 天半衰期与自动归档；
-  每 N 条互动后台批量 AI 提取，全量互动永久保存；另有固定**全局共享记忆**
-  （`characters/c-__global__/`，手动维护、注入所有会话、不自动提取且不可删除）；
-  App 记忆面板支持查看/编辑/置顶/压缩/导出（Markdown/JSON），旧记忆手动导入；
-  聊天记录清理在具体会话内操作（只删本地消息，不动记忆卡/全量记录），不开放微信 `/记忆` 指令。
-  详见 [`docs/memory.md`](docs/memory.md)
-- **多微信账号数据隔离**：聊天记录、记忆卡（角色目录）、会话设置、机器人配置、人格、定时任务与新媒体
-  按当前微信账号自动切换；AI 模型、Hook、OneBot、Keychain、本地 TTS 安装与音色、文件日志全局共享。
-  升级旧版时旧单库/旧媒体只复制保留、不删除；运行中换号会停止机器人，需手动重新启动。
-  详见 [`docs/accounts.md`](docs/accounts.md)
-- **应用内更新（设置 → 更新）**：启动后自动检查 GitHub Releases（默认开启，6 小时内不重复），
-  发现新版本时设置侧边栏「更新」行显示「新」徽标，主窗口侧边栏与菜单栏面板 footer 显示
-  「有新版本 X」；更新页始终展示本版本/新版本的更新内容（从 GitHub Release 提取「本版重点」，
-  过滤下载/安装/隐私模板），安装确认弹窗也会先展示新版本更新内容。确认后从 GitHub 下载
-  `WeChat-AI-<version>.zip`、校验同名 SHA256 与签名，退出 App 后原地替换并 ad-hoc 重签，
-  安装阶段失败会自动恢复旧版并重新打开。更新会停止机器人并退出 App；ad-hoc 签名未公证，
-  更新后首次打开可能需系统「仍要打开」放行。详见 [`docs/updates.md`](docs/updates.md)
-- **拟人化延迟**、回复进度倒计时、防睡眠、定时消息、实时会话看板、会话重命名/置顶/删除聊天（仅本机）、运行日志
-- **设备与账户**：总览「设备与账户」卡与菜单栏弹层显示本机电池电量 / 充电状态 / 剩余时间
-  （IOKit，30 秒刷新）和 DeepSeek 账户余额（总额、赠送/充值、可用状态；启动查询 + 每 5 分钟刷新，
-  可手动刷新；Key 读取自 Keychain 中的 DeepSeek 通道，未配置时给出去 AI 模型页的入口）
-- **聊天图片获取**（按会话开关，会话详情 → 菜单 →「媒体」；默认开启，关闭后只显示「图片」占位）：
-  收到图片时自动从微信下载、解密并保存到本机媒体目录，会话里直接显示；**识图模型**
-  （AI 模型页配置，可单独指定视觉通道/模型）对近期入站图片生成文字描述，作为回复上下文，
-  描述显示在图片下方；引用图片时会把被引用原图的内容描述带入本轮回复
-- **语音转写（本地）**：收到的语音消息经 Apple 本地 Speech 框架（SpeechAnalyzer）转成文字，
-  气泡展示/进上下文与记忆，可逐项关闭；**语音回复（本地 TTS）**唯一模型为 Qwen3-TTS-1.7B
-  （Apple MLX，约 4.7GB；默认 GPU，可切 CPU（实验性、极慢））；**App 不内置任何音色**，
-  可在「管理音色」导入 1–5 段参考音（常见格式均可，每段 ≥1s、合计 ≤30s，超长自动截取；
-  参考文本默认自动转写、可修改），新增/编辑/删除/试听，支持语音时长/概率/对等/短回复设置；
-  模型未安装、服务未启动、旧版服务仍在或合成失败/超时时本条改发文字；
-  已确定改发语音时默认跳过拟人化延迟（可关闭）；语音设置位于「机器人」页。
-  > 4.2.0.5 已真机打通语音**下载/转写与发送**；出站使用官方 SILK SDK 的 24k WeChat 兼容编码。
-  > 首次启用/微信重启后需手动发一条文字 + 一条语音捕获句柄，bridge 重启自动恢复；
-  > 首次开启语音回复或 bridge 启动检测到句柄缺失时会自动弹出捕获引导。详见 [`docs/voice.md`](docs/voice.md)。
-- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 原生文本发送**（设置内开关，无句柄时自动排队）；**通讯录真实昵称 / 群名**（本机只读）
-- **机器人页 7 个子栏目**：常规 / 触发 / 互动 / 名单 / 节奏 / 定时 / 语音（定时任务从侧边栏移入），工具栏下方 sticky 分栏条，
-  切换回填顶部、按窗口记忆上次子栏目
-- **首启向导环境检查**：显示 Xcode Command Line Tools 状态，可一键「安装 Command Line Tools」
-  （`xcode-select --install`）并「重新检测」；CLT 未就绪时禁用 Hook 安装
-- **中 / 英双语界面**；原生 Liquid Glass 风格、菜单栏常驻（**左键开合状态面板**）；无 WebView / Electron
+- **聊天自动回复**：私聊直接回复；群聊支持 @ / 关键词 / 拍一拍 / 引用机器人；
+  可按会话覆盖黑白名单、冷却、限流与工作时段。
+- **模型与人格**：DeepSeek、OpenAI、Ollama 或任意 OpenAI 兼容端点；
+  按会话选择人格、通道与模型。
+- **长期记忆**：每个会话一张记忆卡，自动提取事实/决策/待办/经验，支持全局共享记忆、
+  搜索编辑与 Markdown/JSON 导出。详见 [`docs/memory.md`](docs/memory.md)。
+- **语音与识图**：本地语音转写 + Qwen3-TTS 语音回复（需自行安装模型，App 不内置音色）；
+  图片获取、视觉模型描述与引用识图。详见 [`docs/voice.md`](docs/voice.md)。
+- **多账号隔离**：聊天、记忆、设置、人格与定时任务按微信账号隔离；
+  AI 模型、Hook、OneBot、Keychain 与语音模型等本机能力共享。
+  详见 [`docs/accounts.md`](docs/accounts.md)。
+- **自动化与风控**：拟人化延迟、定时消息、防睡眠、实时会话看板与运行日志；
+  支持微信 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53。
+- **原生体验**：菜单栏常驻，左键开合状态面板；中 / 英双语、原生 SwiftUI，无 WebView / Electron。
+- **应用内更新**：自动检查 GitHub Releases，校验 SHA256 与签名，失败自动回滚。
+  详见 [`docs/updates.md`](docs/updates.md)。
 
 ### 状态
 
@@ -236,73 +202,26 @@ GPL-3.0，见 [`LICENSE`](LICENSE)。基于
 
 ### Features
 
-- **Automatic private-chat replies**; **multi-select group triggers** (@ / keyword / pat-pat / quote —
-  only pats on the bot count, and it can @ the person who patted; the optional quote trigger wakes
-  the bot when someone quotes its message); **no wake word after wake-up** (off by default; the same
-  sender can keep chatting for a 1–60 minute window)
-- **Allow / block lists** (conversation ID or wxid), cooldown, per-minute rate limit and working
-  hours, all overridable per conversation
-- **Per-conversation persona selection** plus channel and model overrides, with temperature
-  configured per model; DeepSeek, OpenAI, Ollama or any OpenAI-compatible endpoint
-- **Memory v2 (2026-10-28)**: one memory-card directory per WeChat conversation
-  (`characters/<conversation-key>/memory.sqlite`); persona comes from the single "Persona"
-  settings template (conversations only store the binding — no per-conversation `persona.md`);
-  typed memories (fact/decision/todo/lesson) recalled by last 72 h → important → keyword
-  relevance (new cards start empty and fill from extracted replies); ≥0.92 similarity auto-merge,
-  conflicting memories kept via supersede,
-  30/180-day half-lives with auto-archiving; background AI extraction every N messages plus a full
-  interaction archive. A fixed **global shared memory** card (`characters/c-__global__/`) is
-  manually maintained and injected into every conversation (never auto-extracted, cannot be
-  deleted). The App memory panel supports view/edit/pin/compress/export (Markdown/JSON), manual
-  legacy import; chat cleanup is per-conversation (local messages only, cards/archive untouched);
-  no WeChat `/memory` command. See [`docs/memory.md`](docs/memory.md)
-- **Multi-account data isolation**: chats, memory cards (character directories), conversation
-  settings, bot config, personas, schedules and new media automatically follow the current WeChat
-  account, while AI models, hook, OneBot, Keychain, the local TTS install and voices, and file logs stay global.
-  Upgrading copies the legacy database/media without deleting them; a running bot stops on account
-  switch and must be restarted manually. See [`docs/accounts.md`](docs/accounts.md)
-- **In-app updates (Settings → Update)**: checks GitHub Releases automatically after launch (on by
-  default, at most once every 6 hours). A newer version marks the Update row in Settings with a
-  "New" badge and shows "New version X" in the main-window sidebar and the menu-bar panel. The
-  Update page always shows this version's or the new version's release highlights (extracted from
-  the GitHub Release and filtered of download/install/privacy boilerplate), and the install
-  confirmation repeats the new version's highlights. After confirmation the app downloads
-  `WeChat-AI-<version>.zip`, verifies its SHA256 and signature, quits, replaces and ad-hoc
-  re-signs itself in place, then reopens — install-time failures restore the old version. Updating stops the
-  bot and quits the app; builds are ad-hoc signed and not notarized, so the first launch may need
-  "Open Anyway". See [`docs/updates.md`](docs/updates.md)
-- **Human-like delay**, reply progress countdown, sleep prevention, scheduled messages, live
-  conversation board and runtime logs
-- **Device & Account**: the Overview card and menu-bar popover show the Mac's battery percentage,
-  charging state and remaining time (IOKit, 30 s refresh), plus the DeepSeek account balance (total,
-  granted/topped-up amounts, availability; queried at launch, refreshed every 5 minutes and on demand,
-  using the DeepSeek channel key from the Keychain; unconfigured states link to AI Models)
-- **Chat image fetch** (per-conversation switch under the conversation menu → "Media"; on by
-  default, off keeps only the "图片" placeholder): incoming images are downloaded from WeChat,
-  decrypted and saved into the local media directory, then shown inline. The **vision model**
-  (configured under AI Models, with an optional vision channel/model) describes recent incoming
-  images as text for reply context; the description is shown below the image. Quoting an image
-  brings the referenced image's description into the current reply.
-- **Voice transcription (local)**: incoming voice messages are transcribed on-device with Apple's
-  Speech framework (SpeechAnalyzer) for bubbles/context/memory, each part toggleable; **voice replies
-  (local TTS)** use Qwen3-TTS-1.7B as the only model (Apple MLX, ~4.7 GB; GPU by default, CPU
-  experimental and very slow); **the app ships no voices**. Add 1–5 of your own reference clips (any
-  decodable format, ≥1s each, ≤30s combined with automatic trimming; reference text is auto-transcribed
-  by default and editable) in "Manage Voices" to create/edit/delete/preview a voice; duration/
-  probability/mirroring are configurable. If the model is not installed, its local service is not
-  running, a legacy service is still running, or synthesis fails/times out, that reply is sent as
-  text instead. Voice replies skip the humanize delay by default (toggleable in voice settings).
-  > Voice download/transcription and sending are verified on WeChat 4.2.0.5. Outbound uses the official SILK SDK
-  > with WeChat-compatible 24k encoding. Handle capture is documented in [`docs/voice.md`](docs/voice.md).
-- **4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 native text sending** (toggle in Settings, auto-queues without a send handle);
-  **real contact nicknames / group names** (local, read-only)
-- **Seven bot sub-tabs**: General / Triggers / Interaction / Lists / Pacing / Schedules / Voice
-  (scheduled tasks moved here from the sidebar), with a sticky tab bar, scroll-to-top on switch
-  and per-window tab memory
-- **First-run environment check**: shows Xcode Command Line Tools status, offers an
-  "Install Command Line Tools" button (`xcode-select --install`) and "Check Again"; hook installation is
-  disabled until CLT is ready
-- **Chinese / English UI**; native Liquid Glass look, menu-bar app (**left-click toggles the status panel**); no WebView / Electron
+- **Chat replies**: automatic private-chat replies; group triggers for @ / keyword / pat-pat / quote,
+  with per-conversation allow/block lists, cooldown, rate limit and working hours.
+- **Models & personas**: DeepSeek, OpenAI, Ollama or any OpenAI-compatible endpoint;
+  per-conversation persona, channel and model selection.
+- **Long-term memory**: one memory card per conversation, automatically extracting
+  facts/decisions/todos/lessons, plus a global shared memory, search/edit and Markdown/JSON export.
+  See [`docs/memory.md`](docs/memory.md).
+- **Voice & vision**: on-device transcription and Qwen3-TTS voice replies (model install required;
+  the app ships no voices); image fetch, vision descriptions and quoted-image understanding.
+  See [`docs/voice.md`](docs/voice.md).
+- **Multi-account isolation**: chats, memory, settings, personas and schedules follow the current
+  WeChat account, while AI models, hook, OneBot, Keychain and TTS models stay shared.
+  See [`docs/accounts.md`](docs/accounts.md).
+- **Automation & safety**: human-like delay, scheduled messages, sleep prevention,
+  live conversation board and runtime logs; supports WeChat 4.2.0.12 / 4.2.0.9 / 4.2.0.5 /
+  4.1.15.55 / 4.1.12.53.
+- **Native experience**: menu-bar app with a left-click status panel, Chinese/English UI,
+  native SwiftUI, no WebView or Electron.
+- **In-app updates**: checks GitHub Releases, verifies SHA256 and signature, rolls back on failure.
+  See [`docs/updates.md`](docs/updates.md).
 
 ### Status
 
