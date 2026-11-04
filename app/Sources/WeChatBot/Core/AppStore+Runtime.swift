@@ -1142,7 +1142,7 @@ final class RuntimeCoordinator {
 
         store.stats.startedAt = Date()
         scheduleStatsPersist()
-        // 机器人真正跑起来才需要防睡眠；启动失败/停止时由 stopRuntime 释放。
+        // 防睡眠只在机器人运行期间生效；设置页对未运行时的修改会提示「启动机器人后生效」。
         SleepPreventionCenter.shared.setRuntimeActive(true)
         log(.info, "Bot", "机器人运行时已启动（\(configuration.host):\(configuration.port)）")
     }
@@ -1191,7 +1191,7 @@ final class RuntimeCoordinator {
         if store.settings.hook.autoStartBridge {
             hookManager.stopBridge()
         }
-        // 停止机器人后不再需要防睡眠（用户偏好保留，下次启动恢复）。
+        // 停止机器人后不再需要防睡眠（偏好保留，下次启动机器人时恢复）。
         SleepPreventionCenter.shared.setRuntimeActive(false)
         log(.info, "Bot", "机器人运行时已停止")
         // Flush coalesced logs (UI + SQLite) before the runtime goes idle.

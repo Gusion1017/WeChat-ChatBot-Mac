@@ -624,15 +624,23 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
   不会导致整份配置解码失败。
 - 启动：`AppDelegate.applicationDidFinishLaunching` 读取配置并 `apply(mode:)`；
   退出 `applicationWillTerminate` 调用 `release()`。设置页修改时立即 apply 并 persist。
-- **与机器人运行状态绑定（2026-10-28）**：只有机器人运行时才持有断言。`startRuntime` 成功后
-  `setRuntimeActive(true)`；`stopRuntime` 调用 `setRuntimeActive(false)` 立即释放断言
-  （偏好不变，下次启动恢复）。避免“始终防睡眠”在停止机器人后仍让整机无法空闲睡眠。
+- **与机器人运行状态绑定（2026-11-04 恢复）**：只有机器人运行时才持有断言。
+  `startRuntime` 成功后 `setRuntimeActive(true)`；`stopRuntime` 调用 `setRuntimeActive(false)`
+  立即释放（偏好保留，下次启动恢复）。停止机器人的 App 没有理由阻止整机空闲睡眠
+  （笔记本待机功耗从 ~0.1W 升到数瓦）。
+- **未运行时修改档位的提示（2026-11-04）**：机器人未运行时切换档位只保存偏好、不创建断言；
+  设置页会 toast「已保存，启动机器人后生效」，「当前状态」显示
+  「未生效（机器人未运行）」+「启动机器人后生效」，避免用户误以为设置没生效。
 - 实现：`IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep, On, …)`
   持有最多一个断言；`IOPSNotificationCreateRunLoopSource` 监听电源适配器变化，
-  回调跳回主线程重算，事件驱动、不轮询。
+  回调跳回主线程重算，事件驱动、不轮询。系统副作用（读电源 / 创建与释放断言 / 是否注册通知）
+  集中在可注入的 `SleepPreventionDriver`：生产用 `.system`（直接调 IOKit），单测注入假驱动，
+  不会创建真实断言或读取真实电源状态。电源读取走 `IOPSGetProvidingPowerSourceType`
+  （CoreFoundation **Get** 规则，用 `takeUnretainedValue()`，不得过释放返回的常量 CFString）。
 - 决策：纯函数 `shouldPreventSleep(mode:onExternalPower:)`：
   `never` 永不；`externalPowerOnly` 仅外接电源；`always` 始终。
-  桌面 Mac / 读取失败（nil 电源信息）按外接电源处理，保证 `.externalPowerOnly` 可用。
+  桌面 Mac / 读取失败（nil 电源信息）按外接电源处理，保证 `.externalPowerOnly` 可用；
+  最终是否持有断言 = `isRuntimeActive && shouldPreventSleep(...)`。
 - 失败只写 `lastError`（UI 显示 warning），不崩溃、不影响聊天；
   断言只阻止**系统空闲睡眠**，不阻止合盖、手动睡眠或显示器休眠。
 
@@ -806,7 +814,7 @@ dry-run 只记录计划不发送。原生 sendpat 已于 2026-10-21 真机验证
 ### 8.1 `swift test`（推荐，无需 UI）
 
 测试 target 位于 `app/Tests/WeChatAITests/`（`CoreServicesTests.swift`（52）、
-`SleepPreventionTests.swift`（10）、`MessageRoutingTests.swift`（12）、
+`SleepPreventionTests.swift`（16）、`MessageRoutingTests.swift`（12）、
 `NativeSendConfigTests.swift`（5）、`ConversationNameTests.swift`（8）、`WorkingHoursStatusTests.swift`（6）、
 `MenuBarClickTests.swift`（9）、`ContactDirectoryTests.swift`（15）、`PatMessageTests.swift`（20）、
 `PatReplySettingsTests.swift`（7）、
@@ -855,7 +863,7 @@ profile seed、旧文件保留）、`claimUnassigned` 只复制不删除/不覆�
 config + profile 双文件加载/损坏备份/去重双写、`MemoryStore` 切换 A/B 库后会话/记忆/日志/KV
 互不可见。2026-10-28 审查修复另加回归：`_unassigned` 启动认领、`legacyMigrationDone` 门禁、
 空壳目标库替换、WAL 主库无 `-wal/-shm` 时的迁移、`MemoryStore.suspend()` 禁止隐式 open。
-当前 `swift test` **597 项**通过
+当前 `swift test` **603 项**通过
 （2 项按环境跳过：真实本地 TTS 服务 E2E）。
 
 记忆 v2（2026-10-28）新增、2026-10-29 扩展到 36 项的 `CharacterMemoryTests.swift`（临时目录，不碰真实网络/数据）：
@@ -889,7 +897,7 @@ RuleEngine 白黑名单/@/关键词/冷却、Scheduler 各 repeat 的 nextFireAt
 ChatEngine 分段/角色合并/关键词分词。输出 `[selftest] PASS/FAIL/WARN` 与汇总退出码。
 
 历史 CLI 驱动实测：**63 passed / 0 failed / 0 warnings**；当前 `swift test` 为
-**597 项（595 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
+**603 项（601 通过 / 2 跳过）**（见 8.1；2026-11-04 实测）。另外用 CLI runtime harness 验证了 `AppStore` 初始化 → SQLite →
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、
 `config.json` 无明文 Key。
 

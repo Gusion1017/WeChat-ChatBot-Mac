@@ -865,7 +865,7 @@
 "尝试调整级别、来源或搜索条件。" = "Try adjusting the level, source or search.";
 "延迟与分段发送，让回复更像真人" = "Delays and split messages make replies feel human";
 "当前使用电池，按设置不阻止睡眠" = "On battery, so sleep isn't blocked per your settings";
-"按当前电源状态阻止系统空闲睡眠" = "Blocks idle sleep according to the current power source";
+"机器人运行期间按当前电源状态阻止系统空闲睡眠" = "Blocks idle system sleep according to the power source while the bot is running";
 "机器人会先停止，微信会被退出。" = "The bot stops first, and WeChat will be quit.";
 "每周重复至少需要选择一个星期。" = "Weekly repeat needs at least one day selected.";
 "Keychain 账户名不能为空" = "Keychain account name can't be empty";
@@ -1113,7 +1113,7 @@
 "会先完整备份 /Applications/WeChat.app，再注入 Gadget 并 ad-hoc 重签。" = "Fully backs up /Applications/WeChat.app, then injects Gadget and re-signs ad-hoc.";
 "启动机器人后会连接本地 OneBot 桥接。若仍无法连接，请在设置 → Hook 中检查微信与 Hook 状态。" = "Starting the bot connects to the local OneBot bridge. If it still can't connect, check WeChat and Hook status in Settings → Hook.";
 "需要已安装官方微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12（arm64）。安装 Hook 会修改微信应用包，请先退出微信并确认了解风险。" = "Requires official WeChat 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 (arm64). Installing the Hook modifies the WeChat app bundle, so quit WeChat first and make sure you understand the risks.";
-"仅阻止系统因空闲进入睡眠，不会阻止合盖睡眠、手动睡眠，也不会让显示器保持点亮。使用电池且选择「接入电源时」时不会阻止。" = "Only blocks idle system sleep. It doesn't block lid-close or manual sleep and doesn't keep the display awake. When on battery with \"On power adapter\" selected, it stays inactive.";
+"机器人运行期间生效（未运行时修改会提示「启动机器人后生效」）。仅阻止系统因空闲进入睡眠，不会阻止合盖睡眠、手动睡眠，也不会让显示器保持点亮。使用电池且选择「接入电源时」时不会阻止。" = "Applies while the bot is running (changing it while stopped reminds you that it takes effect after the bot starts). Only blocks idle system sleep. It doesn't block lid-close or manual sleep and doesn't keep the display awake. When on battery with \\\"On power adapter\\\" selected, it stays inactive.";
 "登录项需要 App 以 .app 形式安装后生效。启动时显示主窗口；关闭窗口后 App 继续在菜单栏运行，Dock 图标只在主窗口打开期间出现，菜单栏图标始终保留。" = "The login item works only when the app is installed as a .app. The main window opens at launch; after you close it, the app keeps running in the menu bar. The Dock icon appears only while the main window is open, and the menu bar icon is always available.";
 "会先完整备份 /Applications/WeChat.app，再注入 Frida Gadget 并 ad-hoc 重签。" = "The app first makes a full backup of /Applications/WeChat.app, then injects Frida Gadget and re-signs it ad hoc.";
 "密钥保存在 Keychain（service com.gusionw.wechatai），不会写入 config.json。" = "Keys are stored in the Keychain (service com.gusionw.wechatai) and never written to config.json.";
@@ -2023,3 +2023,6 @@
 "发布包缺少 SHA256 校验文件，已拒绝自动安装" = "The release is missing its SHA256 checksum; automatic installation was refused";
 "更新包校验失败（SHA256 不匹配）" = "Update package verification failed (SHA256 mismatch)";
 "当前不是以 .app 方式运行，无法应用内更新" = "Not running as a .app bundle; in-app updates aren't available";
+"未生效（机器人未运行）" = "Inactive (bot not running)";
+"启动机器人后生效" = "Takes effect after the bot starts";
+"已保存，启动机器人后生效" = "Saved. Takes effect after the bot starts";

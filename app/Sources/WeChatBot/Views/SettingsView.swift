@@ -262,11 +262,11 @@ struct SettingsView: View {
 
             SettingsSection(
                 title: "节能与睡眠",
-                footer: "仅阻止系统因空闲进入睡眠，不会阻止合盖睡眠、手动睡眠，也不会让显示器保持点亮。使用电池且选择「接入电源时」时不会阻止。"
+                footer: "机器人运行期间生效（未运行时修改会提示「启动机器人后生效」）。仅阻止系统因空闲进入睡眠，不会阻止合盖睡眠、手动睡眠，也不会让显示器保持点亮。使用电池且选择「接入电源时」时不会阻止。"
             ) {
                 SettingsRow(
                     title: "防止系统睡眠",
-                    subtitle: "按当前电源状态阻止系统空闲睡眠",
+                    subtitle: "机器人运行期间按当前电源状态阻止系统空闲睡眠",
                     symbol: "moon.zzz",
                     tint: Theme.violet
                 ) {
@@ -351,6 +351,11 @@ struct SettingsView: View {
                 store.settings.general.sleepPrevention = newValue
                 sleepCenter.apply(mode: newValue)
                 store.persist()
+                // 防睡眠只在机器人运行期间生效：未运行时修改不会立刻生效，
+                // 必须明确提示，避免用户以为设置没生效。
+                if newValue != .never, !sleepCenter.isRuntimeActive {
+                    toast.show("已保存，启动机器人后生效", tone: .info, symbol: "bolt.slash")
+                }
             }
         )
     }
@@ -360,7 +365,15 @@ struct SettingsView: View {
         case .never:
             "已关闭"
         default:
-            sleepCenter.isPreventingSleep ? "已生效（阻止空闲睡眠）" : (sleepCenter.isOnExternalPower ? "未生效" : "未生效（使用电池）")
+            if sleepCenter.isPreventingSleep {
+                "已生效（阻止空闲睡眠）"
+            } else if !sleepCenter.isRuntimeActive {
+                "未生效（机器人未运行）"
+            } else if !sleepCenter.isOnExternalPower {
+                "未生效（使用电池）"
+            } else {
+                "未生效"
+            }
         }
     }
 
@@ -371,6 +384,8 @@ struct SettingsView: View {
         default:
             if sleepCenter.isPreventingSleep {
                 "已持有防睡眠断言，Mac 不会因空闲自动睡眠"
+            } else if !sleepCenter.isRuntimeActive {
+                "启动机器人后生效"
             } else if !sleepCenter.isOnExternalPower {
                 "当前使用电池，按设置不阻止睡眠"
             } else {
@@ -391,7 +406,13 @@ struct SettingsView: View {
         case .never:
             .secondary
         default:
-            sleepCenter.isPreventingSleep ? Theme.success : Theme.warning
+            if sleepCenter.isPreventingSleep {
+                Theme.success
+            } else if !sleepCenter.isRuntimeActive {
+                .secondary
+            } else {
+                Theme.warning
+            }
         }
     }
 
@@ -400,7 +421,13 @@ struct SettingsView: View {
         case .never:
             "minus"
         default:
-            sleepCenter.isPreventingSleep ? "checkmark" : "exclamationmark"
+            if sleepCenter.isPreventingSleep {
+                "checkmark"
+            } else if !sleepCenter.isRuntimeActive {
+                "pause"
+            } else {
+                "exclamationmark"
+            }
         }
     }
 

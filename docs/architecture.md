@@ -369,8 +369,11 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   批量提取、权重/衰减、0.92 合并、supersede 与归档。旧 `memories` 表只读兼容。
   契约见 [`memory.md`](memory.md) §4.4、§8。
 - `SleepPreventionCenter`（`Services/SleepPreventionService.swift`，`@MainActor @Observable`）：
-  `general.sleepPrevention` 的运行时执行者，持有/释放 IOKit `PreventUserIdleSystemSleep` 断言，
-  监听电源适配器变化；纯决策函数 `shouldPreventSleep(mode:onExternalPower:)` 可单测。
+  `general.sleepPrevention` 的运行时执行者，只在机器人运行期间按「档位 + 当前电源状态」
+  持有/释放 IOKit `PreventUserIdleSystemSleep` 断言（`startRuntime`/`stopRuntime` 切换
+  `isRuntimeActive`）；未运行时修改只保存偏好并在设置页提示「启动机器人后生效」。
+  监听电源适配器变化；系统副作用集中在可注入的 `SleepPreventionDriver`，
+  纯决策函数 `shouldPreventSleep(mode:onExternalPower:)` 与假驱动用例均可单测。
 - `UpdateCenter`（`Services/UpdateCenter.swift`，`@MainActor @Observable` 单例）：
   应用内更新的唯一 UI 状态源；检查 GitHub Releases、节流/提示、下载与 SHA256 校验、安装门禁、
   停止机器人并启动更新助手。`UpdateInstaller` 负责解压/包校验/助手脚本/回滚与启动后清理。

@@ -6,6 +6,21 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.2] — 2026-11-04
+
+### 修复
+
+- **节能与睡眠设置未生效（2026-11-04）**：`general.sleepPrevention` 明确为「机器人运行期间生效」——
+  `startRuntime` / `stopRuntime` 通过 `setRuntimeActive` 持有/释放 IOKit
+  `PreventUserIdleSystemSleep` 断言；未运行机器人时切换档位只保存偏好、不创建断言。
+  同时补齐反馈：未运行时修改档位会 toast「已保存，启动机器人后生效」，「当前状态」显示
+  「未生效（机器人未运行）」+「启动机器人后生效」，不再出现「设置改了却毫无反应」的误解
+  （此前没有任何提示，用户报告为「节能与睡眠设置未生效」）。
+  另修正电源读取的 CF 所有权（`IOPSGetProvidingPowerSourceType` 是 Get 规则，改用
+  `takeUnretainedValue()`，旧写法会过释放常量 CFString）。系统副作用集中到可注入的
+  `SleepPreventionDriver`，6 项单测覆盖门控/电源切换/幂等/失败路径（假电源 + 假断言，
+  不碰真实电源状态）；Swift 测试 603 项（其中 2 项按环境跳过）。
+
 ## 3.1.1 — 2026-11-04
 
 ### 变更
@@ -922,4 +937,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.2...HEAD
