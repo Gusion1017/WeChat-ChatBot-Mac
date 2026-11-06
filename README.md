@@ -68,8 +68,8 @@ AI 走 OpenAI 兼容接口，消息、记忆与日志只存本机。契约见
 ### 快速开始
 
 - **普通用户**：下载
-  [`WeChat-AI-3.1.5.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.5/WeChat-AI-3.1.5.zip)
-  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.5/WeChat-AI-3.1.5.zip.sha256)），
+  [`WeChat-AI-3.1.6.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.6/WeChat-AI-3.1.6.zip)
+  （约 65 MB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.6/WeChat-AI-3.1.6.zip.sha256)），
   历史发布说明见 [`docs/releases/`](docs/releases/)。
 
   1. 解压下载的 zip 得到 `WeChat AI.app`，拖入 `~/Applications`（当前用户，无需管理员）或
@@ -208,8 +208,8 @@ OpenAI-compatible API; messages, memory and logs stay on this Mac. Contracts in
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-3.1.5.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.5/WeChat-AI-3.1.5.zip)
-  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.5/WeChat-AI-3.1.5.zip.sha256));
+  [`WeChat-AI-3.1.6.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.6/WeChat-AI-3.1.6.zip)
+  (~65 MB, [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v3.1.6/WeChat-AI-3.1.6.zip.sha256));
   older release notes are in [`docs/releases/`](docs/releases/).
 
   1. Unzip the downloaded zip to get `WeChat AI.app`, then drag it to `~/Applications` (current

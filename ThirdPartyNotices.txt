@@ -55,11 +55,11 @@ copyright notices are listed with each component.
 
 ## Downloaded on demand (not bundled)
 
-- **CosyVoice3 (Fun-CosyVoice3-0.5B-2512)** — https://github.com/FunAudioLLM/CosyVoice
-  Local TTS sidecar runtime and model weights, installed by the user on demand;
-  they are not part of this repository or its release binaries. License:
-  Apache-2.0 (`LICENSES/Apache-2.0.txt`); the upstream repository and model card
-  govern the downloaded files.
+- **Qwen3-TTS-12Hz-1.7B-Base (MLX bf16)** — https://github.com/QwenLM/Qwen3-TTS
+  Local TTS sidecar runtime and model weights (`mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16`),
+  installed by the user on demand; they are not part of this repository or its release
+  binaries. License: Apache-2.0 (`LICENSES/Apache-2.0.txt`); the upstream repository and
+  model card govern the downloaded files.
 
 ## Apple
 

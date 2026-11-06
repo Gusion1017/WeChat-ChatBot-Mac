@@ -1119,7 +1119,7 @@ struct SettingsView: View {
 
             SettingsSection(
                 title: "自研研究与实现",
-                footer: "Hook 版本适配、4.1.15 / 4.2 收发、原生发送与通讯录读取均为本项目自研；上游仅提供基线脚本、地址查找工具与 OneBot 协议实现。具体地址、结构与密钥细节不在界面展开。"
+                footer: "Hook 版本适配、4.1.15 / 4.2 收发、原生发送与通讯录读取，以及语音与媒体链路均为本项目自研；上游仅提供基线脚本、地址查找工具、OneBot 协议实现与开源语音模型。具体地址、结构与密钥细节不在界面展开。"
             ) {
                 researchRow(
                     "微信版本适配",
@@ -1168,6 +1168,20 @@ struct SettingsView: View {
                     "读取所需密钥只在本机内存与受限缓存中，不写日志、不下发 App；仅用于自己的账号。",
                     symbol: "key.horizontal",
                     tint: Theme.violet
+                )
+                SettingsDivider()
+                researchRow(
+                    "语音转写与回复",
+                    "入站语音用系统本地识别转写；回复用本机 Qwen3-TTS 合成，经原生链路发送，未就绪时改发文字。",
+                    symbol: "waveform",
+                    tint: Theme.success
+                )
+                SettingsDivider()
+                researchRow(
+                    "图片与媒体入站",
+                    "入站图片 / 语音按需下载、解密并落盘到账号媒体目录；失败只跳过该条，不阻塞文本。",
+                    symbol: "photo.on.rectangle",
+                    tint: Theme.info
                 )
                 SettingsDivider()
                 researchRow(

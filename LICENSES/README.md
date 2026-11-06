@@ -5,7 +5,7 @@
 
 | 文件 | 适用组件 |
 | --- | --- |
-| `Apache-2.0.txt` | CosyVoice3 运行环境与模型（Fun-CosyVoice3-0.5B-2512，按需下载、不随包分发） |
+| `Apache-2.0.txt` | Qwen3-TTS 运行环境与模型（Qwen3-TTS-12Hz-1.7B-Base，按需下载、不随包分发） |
 | `MIT.txt` | zerolog、lumberjack、kn007/silk-v3-decoder 封装 |
 | `BSD-3-Clause.txt` | gorilla/websocket、google/uuid、protobuf-go、wdvxdr1123/go-silk、kissfft |
 | `ISC.txt` | frida-go（Copyright (c) 2025 frida-go contributors） |

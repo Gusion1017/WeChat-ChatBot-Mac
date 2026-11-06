@@ -6,6 +6,16 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [3.1.6] — 2026-11-06
+
+### 变更
+
+- **关于页补充自研说明（2026-11-06）**：在「设置 → 关于 → 自研研究与实现」补充语音转写与回复、
+  图片与媒体入站两条能力概述，页脚同步说明语音与媒体链路为自研；沿用既有隐私边界，不展示地址、
+  结构偏移或密钥细节，中英文案同步。
+- **第三方许可说明同步 Qwen3-TTS（2026-11-06）**：`ThirdPartyNotices.txt` 与 `LICENSES/README.md`
+  中按需下载的语音模型由 CosyVoice3 更正为 Qwen3-TTS-12Hz-1.7B-Base（Apache-2.0），与实际实现一致。
+
 ## [3.1.5] — 2026-11-04
 
 ### 修复
@@ -962,4 +972,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.5...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v3.1.6...HEAD
