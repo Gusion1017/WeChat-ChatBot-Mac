@@ -26,8 +26,8 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   `script.js` 同步 `hook/script.js` 的微信版本化适配（4.1.12 / 4.1.15 / 4.2.0.5 / 4.2.0.9 /
   4.2.0.12 / 4.2.0.17，见 §5）。
 
-> **发布状态（2026-11-10）**：本文描述 **4.0.0**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
-> 下载用户见 [`install.md`](install.md) 与 [`releases/4.0.0.md`](releases/4.0.0.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.0.1**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
+> 下载用户见 [`install.md`](install.md) 与 [`releases/4.0.1.md`](releases/4.0.1.md)。
 
 ---
 
@@ -347,7 +347,7 @@ Content-Type: application/json
 - **构建与测试**：从完全干净状态（删除 `bridge/onebot` 与 `/tmp/chatbot-bridge-cache`）重跑
   `scripts/build_bridge.sh` 成功：下载并校验 Go 1.25.14 与 devkit 17.8.0，编译、`-h` 自检与
   `bridge/*_test.go` 全部通过（19 个 `_test.go`、Go 312 项用例 = 180 顶层 + 132 子测试，0 失败）；
-  Swift 879 项执行（877 通过 / 2 跳过 / 0 失败，41 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
+  Swift 886 项执行（884 通过 / 2 跳过 / 0 失败，41 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
   `script.js` 的 4.1.15 / 4.1.12 模板渲染结果 `node --check` 均通过。
 - **SNS 同步 CmdBuf**：`bridge/sns_sync_envelope_test.go` 覆盖外层信封 `{1: len, 2: payload}`、cmd45 与
   cmd46 的 Type 1/2/3 解码、评论合并去重与 timeline `reply_to_user_id`；解码结构来自 2026-11-09 真机样本。

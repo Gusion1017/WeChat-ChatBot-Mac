@@ -1,6 +1,6 @@
 # 语音能力（入站转写 / 出站合成）
 
-> **发布状态（2026-11-10）**：本文描述 **4.0.0**，已包含 4.2.0.17 适配（见 [`install.md`](install.md)）。
+> **发布状态（2026-11-10）**：本文描述 **4.0.1**，已包含 4.2.0.17 适配（见 [`install.md`](install.md)）。
 >
 > 状态：**入站转写与出站语音发送均已在微信 4.2.0.5 真机打通**；目标微信 4.2.0.17（Hook/文本链路已于
 > 2026-11-07 真机验证；语音发送沿用同一链路但未在 4.2.0.17 复测），历史 4.2.0.12 / 4.2.0.9 已验证文本链路。
@@ -270,7 +270,7 @@ bash scripts/check.sh --with-go        # 静态 + Swift 全量 + Go
 cd app && SWIFT_DISABLE_SANDBOX=1 swift test --scratch-path .build-lead
 ```
 
-当前：Swift **879 项**执行（877 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件；覆盖 Qwen3 GPU/CPU、参考音
+当前：Swift **886 项**执行（884 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件；覆盖 Qwen3 GPU/CPU、参考音
 导入、语音合成/发送回归、记忆 v2、捕获句柄判定）；Go **312 项**用例（180 顶层 + 132 子测试，0 失败；`bridge/*_test.go` 19 个文件）；4.0.0 App 约 175MB（本机 `dist/` 实测；二进制约 21MB，
 不再静态链接 sherpa-onnx）。语音实现细节见 `bridge/voice.go`、`bridge/voice_test.go`；
 契约与限制见本文件与 [`bridge.md`](bridge.md)。

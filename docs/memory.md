@@ -438,7 +438,7 @@ score       = max(0.0001, base × recency × usage × decay)
 
 ## 14. 验证
 
-单测（`app/Tests/WeChatAITests/CharacterMemoryTests.swift`、`ChatEngineV2Tests.swift`、`SnsMemoryIngestorTests.swift`，临时目录，不碰真实网络/数据），当前 `swift test` **879 项**（877 通过 / 2 项按环境跳过），覆盖：
+单测（`app/Tests/WeChatAITests/CharacterMemoryTests.swift`、`ChatEngineV2Tests.swift`、`SnsMemoryIngestorTests.swift`，临时目录，不碰真实网络/数据），当前 `swift test` **886 项**（884 通过 / 2 项按环境跳过），覆盖：
 
 - 目录 key 编码/超长哈希；建卡只生成 `memory.sqlite`（无 `persona.md`）、新卡 0 条记忆、meta 与 `last_extracted_at` 初始化、再次 ensure 不清记忆。
 - schema、interactions upsert 与去重、`(timestamp, id)` 复合游标、字段裁剪、首次回填/增量同步。
@@ -452,7 +452,7 @@ score       = max(0.0001, base × recency × usage × decay)
 
 ```bash
 cd app && SWIFT_DISABLE_SANDBOX=1 swift build --build-tests
-cd app && SWIFT_DISABLE_SANDBOX=1 swift test          # 879 项（2 项按环境跳过）
+cd app && SWIFT_DISABLE_SANDBOX=1 swift test          # 886 项（2 项按环境跳过）
 bash scripts/check.sh                                 # 文档/脚本/符号检查
 ```
 

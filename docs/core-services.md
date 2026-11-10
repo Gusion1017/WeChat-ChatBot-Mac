@@ -4,8 +4,8 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.0.0**，包含朋友圈（Moments）与 4.2.0.17 适配；
-> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.0.md`](releases/4.0.0.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.0.1**，包含朋友圈（Moments）与 4.2.0.17 适配；
+> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.1.md`](releases/4.0.1.md)。
 
 ## 1. 文件清单
 
@@ -698,11 +698,16 @@ id != active 或 active == _unassigned
   `SnsPublishSettings` 计算；只发布 `publish.targetUserIDs` 里显式选择的对象（空 = 不发布），
   目标之间留 ≥61s 避开 bridge 全局最小间隔；`SnsPublishLedger` 按账号命名空间在 UserDefaults
   持久化计数，跨天归零。写通道未就绪时失败并记录，不重试、不伪造。
-- **AI 自动互动（P7，2026-11-09）**：`SnsInteractionScheduler` 只在机器人运行且「朋友圈 + 写开关 + R3 +
-  互动开关 + 非空互动名单 + 至少一种动作」满足时由 `AppStore+Runtime` 创建，与朋友圈页是否可见无关。
+- **AI 自动互动（P7，2026-11-09；2026-11-11 起互动对象复用聊天白名单私聊对象）**：`SnsInteractionScheduler`
+  只在机器人运行且「朋友圈 + 写开关 + R3 + 互动开关 + 至少一种动作」满足时由 `AppStore+Runtime` 创建，
+  与朋友圈页是否可见无关。互动对象每轮从「聊天白名单（`effectiveWhitelist`）+ 私聊会话
+  （`Conversation(kind == .direct)`）列表」推导（去空白/去重、排除群聊/服务号 ID），**不落库**；
+  对象为空（白名单为空或没有匹配的私聊会话）时调度器空转、不发起检查——聊天回复的「不限制」语义不适用于
+  自动互动，**不会**退化为全部好友；聊天黑名单仍是硬门槛。调度器设置签名包含聊天白名单/黑名单，编辑白名单
+  即重建（无需重启机器人）；会话列表变化不触发重建，但互动对象每轮重新推导、下一轮检查即生效。
   每轮：`/sns/status` → best-effort `/sns/sync`（解出的 Type 2/3 评论并入 bridge 缓存）→ `/sns/timeline`
-  （native refresh，已合并 sync 评论）→ `SnsInteractionPlanner` 选候选（评论名单好友新动态 / 回复自己动态下
-  的评论 / 回复别人对自己评论的回复；聊天黑名单硬门槛、可放宽回复范围为所有好友）。「回复我的评论」
+  （native refresh，已合并 sync 评论）→ `SnsInteractionPlanner` 选候选（评论互动对象的新动态 / 回复自己动态下
+  的评论 / 回复别人对自己评论的回复；三种动作均只针对互动对象，无「所有好友」范围）。「回复我的评论」
   同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，避免 native 回包缺少父评论时漏判；**4.2.0.17
   Type=11 hint 本身无正文、不直接进入候选；sns.db 只读补全把正文补进 timeline，32 位 comment_id=<id> 已确认
   可作 reply_comment_id，P7 自动回复已生成 c<id3>、页面闭环（Mac UI 不触发 0xd2）**。
@@ -718,14 +723,15 @@ id != active 或 active == _unassigned
   模型」；把一条动态内的全部图片放进同一次视觉请求，失败回退逐张识别；原图失败回退缩略图，分析只写内存
   缓存（80 条）；识图未配置/失败时降级纯文本，纯图片且无描述时不生成评论（不猜内容），纯视频动态跳过。
 - **设置与默认值**：`bot.sns` 随账号 `profile.json`；功能默认关、自动同步默认开、同步间隔 60s、图片
-  默认缩略图、可见性默认 `partial`、写开关默认关、自动发布默认关、自动互动默认关且互动名单为空；
+  默认缩略图、可见性默认 `partial`、写开关默认关、自动发布默认关、自动互动默认关、互动对象每轮由
+  聊天白名单私聊对象推导（无独立持久化名单；旧 `targetUserIDs` / `replyScope` 键由解码器忽略、不迁移）；
   可发时段/时间点分别最多 6 段/10 个。字段范围见 [sns.md](sns.md) §6.2。
 - **演练模式（`bot.dryRun`，全局）**：聊天自动回复/拍一拍/定时任务/朋友圈自动发布与自动互动都只生成
   记录或草稿，不发送、不写计数/账本、不写记忆卡；朋友圈记忆维护与聊天记忆维护（建卡/同步互动/提取）
   在演练期间整体跳过，关闭后恢复（演练生成的回复以 system 消息保存，本就不进入提示词与提取）。
 - **测试**：`SnsTests.swift` / `SnsInteractionTests.swift` 覆盖模型容错解码、状态机合并/去重、`SnsClient`
   请求与错误映射、发布可见性、评论/回复请求体与回包合并、`reply_to_user_id` 识别好友回复、`comment_ready`
-  门禁、调度器时机/上限/间隔与 ledger 持久化；自动互动覆盖规划器（三种动作/名单/黑名单/回复范围/年龄与
+  门禁、调度器时机/上限/间隔与 ledger 持久化；自动互动覆盖规划器（三种动作/白名单私聊对象推导/黑名单/年龄与
   单帖上限/启用时间）、账本（去重/尝试/每日/启动时间跨重启保留）、调度器（发送/演练/native 校验/每日与
   最小间隔/失败冷却）与识图（选图/缓存/缩略图回退）；bridge 侧
   `sns*_test.go` 覆盖 protobuf、HTTP 门禁、评论写回包合并/新评论 diff/失败不占配额、媒体下载、同步 CmdBuf
@@ -824,11 +830,11 @@ swift test --scratch-path .build-verify
   时间线/详情/媒体/同步请求与错误映射、发布可见性收敛、`MomentsStore` 合并去重/切号清缓存/
   `refreshPrimingStatus`、`SnsPublishScheduler` 两种时机/到点校验/目标节流、`SnsPublishLedger` 跨天与持久化、
   `SnsClient` 鉴权与 404/409/429 映射、`SnsInteractionScheduler`/`SnsInteractionPlanner`/`SnsInteractionLedger`/
-  `SnsMomentVision` 的名单/黑名单/回复范围/频率/退避/演练/识图缓存、**重启保留水位与 24h 停机补处理**、
+  `SnsMomentVision` 的白名单私聊对象推导/黑名单/频率/退避/演练/识图缓存、**重启保留水位与 24h 停机补处理**、
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 879 项执行（877 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
+当前实测基线：Swift 886 项执行（884 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
 + 132 子测试，0 失败；19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。
@@ -892,6 +898,8 @@ Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Ke
   自动回复，也不会把会话预览/未读回退。
 - **白名单语义**：`effectiveWhitelist` / `effectiveBlacklist` 是「会话 ID 或用户 wxid」的统一名单；黑名单同时检查
   会话和发送者，白名单命中任一即可。旧版四列表在首次启动时迁移到 `whitelistEntries` / `blacklistEntries` 并清空。
+  朋友圈自动互动的「互动对象」也由该白名单派生：取白名单中与私聊会话（`Conversation(kind == .direct)`）匹配的
+  集合，聊天回复的「白名单为空 = 不限制」不适用于自动互动（为空即无对象、不互动）。
 - **安装脚本进度**：按 `tools/install_gadget.sh` 的 stdout 进度协议解析；`manage_wechat.sh status` 用于补充插件/
   备份信息，失败静默降级。
 - **测试 target**：`app/Tests/WeChatAITests` 与 `app/Package.swift` 的 `.testTarget` 已就位；并行构建时用独立

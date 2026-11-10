@@ -6,6 +6,24 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [4.0.1] — 2026-11-11
+
+### 变更
+
+- **朋友圈自动互动对象改为复用聊天白名单私聊对象（2026-11-11）**：删除「互动名单」
+  （`bot.sns.interaction.targetUserIDs`）与「回复范围」（`replyScope`、`SnsInteractionReplyScope`、
+  200 人上限 `maxTargets`）；自动互动的对象改为聊天白名单（「机器人 → 名单 → 白名单」的 `effectiveWhitelist`）
+  中与私聊会话（`Conversation(kind == .direct)`）匹配的集合，每轮运行期推导、不落库。
+  **白名单为空在聊天回复里表示「不限制」，但自动互动不会退化为「全部好友」：白名单为空 = 没有互动对象 =
+  不启动自动互动**；聊天黑名单仍是硬门槛。三种动作（评论新动态 / 回复我的动态 / 回复我收到的回复）均只针对该集合。
+  设置页互动卡删除「互动名单」行与 `MomentsInteractionTargetsSheet`、删除「回复范围」分段，新增只读
+  「互动对象」行（「共 N 人」+「去名单…」跳转「机器人 → 名单」编辑白名单），前置条件阻塞文案改为
+  「聊天白名单里还没有私聊对象」。旧 `profile.json` 里的 `targetUserIDs` / `replyScope` 键由解码器忽略
+  （不迁移、不报错、无需用户操作）。调度器设置签名包含聊天白名单/黑名单，编辑白名单即重建调度器；
+  会话列表变化不触发重建，但互动对象每轮运行期重新推导、下一轮检查即生效（均无需重启机器人）。
+  互动对象为空时「立即检查」直接给出「先去名单添加白名单」的提示。中英文文案已同步
+  （`app/Packaging/en.lproj/Localizable.strings`）。契约见 [`docs/sns.md`](docs/sns.md) §1.5、§6.2。
+
 ## [4.0.0] — 2026-11-10
 
 ### 新增
@@ -1306,4 +1324,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.0.1...HEAD

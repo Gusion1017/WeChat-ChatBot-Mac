@@ -670,7 +670,7 @@ struct SnsPendingDraft: Identifiable, Codable, Hashable {
 
 /// AI 自动互动类别。
 enum SnsInteractionKind: String, Codable, CaseIterable, Hashable, Identifiable {
-    /// 给互动名单好友的新动态写评论。
+    /// 给白名单私聊对象的新动态写评论。
     case commentOnPost = "comment_on_post"
     /// 回复自己动态下的评论。
     case replyOnOwnPost = "reply_on_own_post"
@@ -690,11 +690,11 @@ enum SnsInteractionKind: String, Codable, CaseIterable, Hashable, Identifiable {
     var detail: String {
         switch self {
         case .commentOnPost:
-            L("互动名单内的好友发新动态时，AI 写一条简短评论")
+            L("白名单私聊好友发新动态时，AI 写一条简短评论")
         case .replyOnOwnPost:
-            L("自己的动态下有互动名单好友的评论时，AI 回复")
+            L("自己的动态下有白名单私聊好友的评论时，AI 回复")
         case .replyToMyComment:
-            L("别人动态下，互动名单好友回复我的评论时，AI 再回复")
+            L("别人动态下，白名单私聊好友回复我的评论时，AI 再回复")
         }
     }
 
@@ -703,32 +703,6 @@ enum SnsInteractionKind: String, Codable, CaseIterable, Hashable, Identifiable {
         case .commentOnPost: "text.bubble"
         case .replyOnOwnPost: "arrowshape.turn.up.left"
         case .replyToMyComment: "arrowshape.turn.up.left.2"
-        }
-    }
-}
-
-/// 回复类互动的对象范围。
-enum SnsInteractionReplyScope: String, Codable, CaseIterable, Hashable, Identifiable {
-    /// 只回复互动名单内的好友（默认，最保守）。
-    case listOnly = "list"
-    /// 回复所有好友（仍受聊天黑名单约束）；评论新动态始终只针对互动名单。
-    case allFriends = "all"
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .listOnly: L("仅互动名单")
-        case .allFriends: L("所有好友")
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .listOnly:
-            L("只回复互动名单内好友的评论与回复")
-        case .allFriends:
-            L("回复所有好友的评论与回复（聊天黑名单除外）；评论新动态只针对互动名单")
         }
     }
 }
@@ -814,11 +788,46 @@ struct SnsInteractionRunSummary: Hashable {
     var handledCount: Int { commentedCount + repliedCount }
 }
 
+/// 自动互动的对象来源：聊天白名单里的私聊对象。
+///
+/// 2026-11-11 起不再单独维护「互动名单」：直接复用聊天白名单（`bot.effectiveWhitelist`，
+/// 即「机器人 → 名单 → 白名单」）里能对应到私聊会话（`Conversation.kind == .direct`）的对象，
+/// 避免两套名单互相打架。聊天黑名单仍是硬门槛，由调度器/规划器另行排除。
+///
+/// 注意与聊天回复的差异：聊天白名单为空表示「不限制」，但这里为空表示**没有互动对象**，
+/// 不会退化为「所有好友」——自动评论/回复必须显式配置对象。
+enum SnsInteractionTargets {
+    /// 从白名单与会话列表推导互动对象。
+    ///
+    /// - 只保留白名单里与私聊会话 ID 匹配的条目（排除群聊 / 服务号 / 只作为群发言人出现的 wxid）；
+    /// - 保持白名单顺序、去空白、去重；空 ID 永远不进入结果。
+    static func whitelistDirectUserIDs(
+        whitelist: [String],
+        conversations: [Conversation]
+    ) -> [String] {
+        let directIDs = Set(conversations
+            .filter { $0.kind == .direct }
+            .map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { ConversationIdentity.isPlausiblePeerID($0) })
+        guard !directIDs.isEmpty else { return [] }
+        var seen: Set<String> = []
+        var result: [String] = []
+        for raw in whitelist {
+            let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard ConversationIdentity.isPlausiblePeerID(id),
+                  directIDs.contains(id),
+                  seen.insert(id).inserted else { continue }
+            result.append(id)
+        }
+        return result
+    }
+}
+
 /// 朋友圈 AI 自动互动设置（`bot.sns.interaction`）。
 ///
 /// 设计边界：
-/// - **默认全关且互动名单为空**：必须显式勾选好友，避免开启后自动评论所有好友；
-/// - 互动名单独立于聊天白名单；聊天黑名单始终是硬门槛（见运行时 `RuleEngine` 口径）；
+/// - **默认全关**：互动对象直接取聊天白名单里的私聊对象，白名单为空则不互动；
+/// - 聊天黑名单始终是硬门槛（即使好友在聊天白名单里也不会被互动）；
 /// - 频率受「每天上限 + 两次互动最小间隔 + 单条动态最多回复几条 + 只处理最近 N 小时」共同约束；
 /// - 只写评论/回复，不点赞、不删评论；失败不自动重发（由下一轮检查按退避重试）。
 struct SnsInteractionSettings: Codable, Hashable {
@@ -829,23 +838,17 @@ struct SnsInteractionSettings: Codable, Hashable {
     /// 0 表示「无上限」：同一条动态当天可回复任意条评论，仍受去重与频率设置约束。
     static let maxRepliesPerPostRange: ClosedRange<Int> = 0...5
     static let checkIntervalRange: ClosedRange<Double> = 60...600
-    /// 互动名单上限：与设置页「全选/导入」共用同一常量，逐行勾选也要受它约束。
-    static let maxTargets = 200
     /// 「无上限」哨兵值（0），用于设置面板与调度器判定。
     static let unlimitedValue = 0
 
     /// 自动互动总开关，默认关。
     var enabled: Bool = false
-    /// 互动名单（好友 wxid）；空 = 不互动任何好友。
-    var targetUserIDs: [String] = []
-    /// 给名单内好友的新动态写评论。
+    /// 给白名单私聊对象的新动态写评论。
     var commentOnNewPosts: Bool = true
-    /// 回复自己动态下的评论（评论者需在互动名单内）。
+    /// 回复自己动态下的评论（评论者需在聊天白名单内）。
     var replyToOwnPostComments: Bool = true
     /// 别人回复了我的评论时，再回复对方的回复。
     var replyToMyCommentReplies: Bool = true
-    /// 回复类互动的对象范围（默认仅互动名单；可放宽到所有好友）。
-    var replyScope: SnsInteractionReplyScope = .listOnly
     /// 互动前识别动态图片，帮助 AI 理解内容（复用「AI 模型 → 识图模型」）。
     var useVision: Bool = true
     /// 每天最多互动次数（评论 + 回复合计）。
@@ -873,11 +876,6 @@ struct SnsInteractionSettings: Codable, Hashable {
         copy.checkIntervalSeconds = min(max(copy.checkIntervalSeconds,
                                             Self.checkIntervalRange.lowerBound),
                                         Self.checkIntervalRange.upperBound)
-        var seen: Set<String> = []
-        copy.targetUserIDs = Array(copy.targetUserIDs
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && seen.insert($0).inserted }
-            .prefix(Self.maxTargets))
         return copy
     }
 
@@ -885,7 +883,6 @@ struct SnsInteractionSettings: Codable, Hashable {
     var effectiveMinInterval: TimeInterval {
         TimeInterval(sanitized.minIntervalMinutes) * 60
     }
-    var hasTargets: Bool { !sanitized.targetUserIDs.isEmpty }
     /// 每天互动次数是否不设上限（0 = 无上限）。
     var isMaxPerDayUnlimited: Bool { sanitized.maxPerDay == Self.unlimitedValue }
     /// 单条动态每天回复数是否不设上限（0 = 无上限）。
@@ -896,39 +893,33 @@ struct SnsInteractionSettings: Codable, Hashable {
     var hasAction: Bool {
         commentOnNewPosts || replyToOwnPostComments || replyToMyCommentReplies
     }
-    var isActive: Bool { enabled && hasTargets && hasAction }
+    /// 配置层面已启用且至少一种动作：真正的「可互动」还要叠加白名单私聊对象非空
+    /// （运行期由 `SnsInteractionTargets` 推导，见 `SnsInteractionScheduler.Configuration`）。
+    var isActive: Bool { enabled && hasAction }
 }
 
 extension SnsInteractionSettings {
     private enum CodingKeys: String, CodingKey {
-        case enabled, targetUserIDs, targetUserIds
+        case enabled
         case commentOnNewPosts, replyToOwnPostComments, replyToMyCommentReplies
-        case replyScope, useVision, maxPerDay, minIntervalMinutes, maxAgeHours
+        case useVision, maxPerDay, minIntervalMinutes, maxAgeHours
         case maxRepliesPerPost, checkIntervalSeconds
     }
 
     /// 逐键容错解码：缺键/类型损坏只回退该字段，不丢整份 `bot.sns`。
+    ///
+    /// 旧配置里的 `targetUserIDs` / `replyScope` 已移除：解码器自动忽略未知键，
+    /// 不需要迁移，也不会因为这两个旧键存在而失败。
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = SnsInteractionSettings()
         enabled = (try? container.decodeIfPresent(Bool.self, forKey: .enabled)) ?? defaults.enabled
-        if container.contains(.targetUserIDs) || container.contains(.targetUserIds) {
-            let key: CodingKeys = container.contains(.targetUserIDs) ? .targetUserIDs : .targetUserIds
-            targetUserIDs = (try? container.decodeIfPresent([String].self, forKey: key)) ?? []
-        } else {
-            targetUserIDs = defaults.targetUserIDs
-        }
         commentOnNewPosts = (try? container.decodeIfPresent(
             Bool.self, forKey: .commentOnNewPosts)) ?? defaults.commentOnNewPosts
         replyToOwnPostComments = (try? container.decodeIfPresent(
             Bool.self, forKey: .replyToOwnPostComments)) ?? defaults.replyToOwnPostComments
         replyToMyCommentReplies = (try? container.decodeIfPresent(
             Bool.self, forKey: .replyToMyCommentReplies)) ?? defaults.replyToMyCommentReplies
-        if let raw = try? container.decodeIfPresent(String.self, forKey: .replyScope) {
-            replyScope = SnsInteractionReplyScope(rawValue: raw.lowercased()) ?? defaults.replyScope
-        } else {
-            replyScope = defaults.replyScope
-        }
         useVision = (try? container.decodeIfPresent(Bool.self, forKey: .useVision))
             ?? defaults.useVision
         maxPerDay = SnsJSON.int(container, .maxPerDay) ?? defaults.maxPerDay
@@ -945,11 +936,9 @@ extension SnsInteractionSettings {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(enabled, forKey: .enabled)
-        try container.encode(targetUserIDs, forKey: .targetUserIDs)
         try container.encode(commentOnNewPosts, forKey: .commentOnNewPosts)
         try container.encode(replyToOwnPostComments, forKey: .replyToOwnPostComments)
         try container.encode(replyToMyCommentReplies, forKey: .replyToMyCommentReplies)
-        try container.encode(replyScope, forKey: .replyScope)
         try container.encode(useVision, forKey: .useVision)
         try container.encode(maxPerDay, forKey: .maxPerDay)
         try container.encode(minIntervalMinutes, forKey: .minIntervalMinutes)
@@ -1002,7 +991,7 @@ extension SnsMemorySettings {
 ///
 /// v2 默认：功能与写操作都关闭；列表自动加载缩略图；可见性固定 `partial`
 /// （无当前私聊对象时按 `private` 处理）；自动发布关闭且**未选择任何发布对象**；
-/// AI 自动互动关闭且互动名单为空；好友朋友圈内容默认写入其记忆卡。
+/// AI 自动互动关闭（互动对象取聊天白名单里的私聊对象）；好友朋友圈内容默认写入其记忆卡。
 struct SnsSettings: Codable, Hashable {
     static let syncIntervalRange: ClosedRange<Double> = 30...300
     static let defaultSyncInterval: Double = 60
@@ -1019,7 +1008,7 @@ struct SnsSettings: Codable, Hashable {
     var writeEnabled: Bool = false
     /// 自动发布设置（默认关）。
     var publish: SnsPublishSettings = SnsPublishSettings()
-    /// AI 自动互动（评论 / 回复）设置（默认关、名单为空）。
+    /// AI 自动互动（评论 / 回复）设置（默认关；互动对象取聊天白名单里的私聊对象）。
     var interaction: SnsInteractionSettings = SnsInteractionSettings()
     /// 好友朋友圈内容写入对方记忆卡（默认开）。
     var memory: SnsMemorySettings = SnsMemorySettings()

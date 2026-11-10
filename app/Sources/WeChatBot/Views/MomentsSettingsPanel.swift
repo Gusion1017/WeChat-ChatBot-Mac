@@ -8,8 +8,10 @@ import SwiftUI
 /// - **一眼可见**：分区上方三枚状态胶囊汇总「读取 / 互动 / 发布」当前状态；
 /// - **只暴露真正生效的设置**：自动同步/同步间隔、原图预取等未接线或伪选项不再出现；
 ///   发布前确认已移除（v3.0 完全自动发布）；
-/// - **禁用有原因**：每张卡都展示前置条件（就绪状态 / 写通道 / 演练模式 / 发布对象 / 互动名单），
+/// - **禁用有原因**：每张卡都展示前置条件（就绪状态 / 写通道 / 演练模式 / 发布对象 / 白名单对象），
 ///   不再出现「灰着但不知道为什么」；
+/// - **不重复配置**：自动互动的对象直接取「机器人 → 名单」里的聊天白名单私聊对象，
+///   朋友圈设置不再维护第二份互动名单与回复范围。
 /// - **可观测**：读取状态来自 `MomentsStore`（bridge `/sns/status`），自动发布展示
 ///   「排程预览」（今天剩余时刻、今日配额与下一次）与上一轮结果（含跳过原因）。
 ///
@@ -23,9 +25,13 @@ struct MomentsSettingsPanel: View {
     @SceneStorage("moments.settingsSection")
     private var settingsSectionID: String = MomentsSettingsSection.read.rawValue
 
+    /// 「去名单…」跳到机器人的「名单」分栏：与 `BotView` 共用同一个 SceneStorage key，
+    /// 朋友圈设置不再单独维护互动名单。
+    @SceneStorage("bot.subTab")
+    private var botSubTabID: String = BotTab.general.rawValue
+
     @State private var isTargetsPresented = false
     @State private var isOutboxPresented = false
-    @State private var isInteractionTargetsPresented = false
     @State private var isInteractionActivityPresented = false
     @State private var isCheckingReadiness = false
     @State private var isCheckingInteractions = false
@@ -98,10 +104,6 @@ struct MomentsSettingsPanel: View {
             MomentsOutboxSheet()
                 .environment(store)
                 .environment(toast)
-        }
-        .sheet(isPresented: $isInteractionTargetsPresented) {
-            MomentsInteractionTargetsSheet()
-                .environment(store)
         }
         .sheet(isPresented: $isInteractionActivityPresented) {
             MomentsInteractionActivitySheet()
@@ -615,11 +617,6 @@ struct MomentsSettingsPanel: View {
                 SettingsDivider()
                 interactionActionRow(SnsInteractionKind.replyToMyComment,
                                      isOn: binding(\.interaction.replyToMyCommentReplies))
-                // 回复范围只影响两类「回复」，没开启任何回复时没有意义。
-                if interaction.replyToOwnPostComments || interaction.replyToMyCommentReplies {
-                    SettingsDivider()
-                    replyScopeRow
-                }
                 SettingsDivider()
                 interactionFrequencyRows
                 SettingsDivider()
@@ -655,24 +652,30 @@ struct MomentsSettingsPanel: View {
         }
     }
 
+    /// 互动对象只读展示：直接复用「机器人 → 名单」里的聊天白名单私聊对象。
+    ///
+    /// 2026-11-11 起删除「互动名单」与「回复范围」：两套名单容易互相打架，
+    /// 对象统一以聊天白名单为准；白名单为空时不互动（不会退化为全部好友）。
     private var interactionTargetsRow: some View {
-        SettingsRow(
-            title: "互动名单",
-            subtitle: "只对勾选的好友评论/回复；聊天黑名单中的好友永不互动",
+        let targets = store.snsInteractionTargetIDs
+        return SettingsRow(
+            title: "互动对象",
+            subtitle: "直接使用聊天白名单中的私聊对象；聊天黑名单永不互动",
             symbol: "person.2.circle",
             tint: Theme.info,
-            help: "候选为全部私聊会话，不要求开启 AI 自动回复；与聊天白名单相互独立。"
+            help: "在「名单」分栏的白名单里增删对象；白名单为空时不自动互动（不会退化为全部好友）。"
         ) {
             HStack(spacing: 8) {
-                Text(Lf("已选 %d 人", interaction.sanitized.targetUserIDs.count))
+                Text(targets.isEmpty ? L("暂无对象") : Lf("共 %d 人", targets.count))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Button(L("选择…")) {
-                    isInteractionTargetsPresented = true
+                    .foregroundStyle(targets.isEmpty ? Theme.warning : .secondary)
+                Button(L("去名单…")) {
+                    botSubTabID = BotTab.lists.rawValue
                 }
                 .buttonStyle(.glass)
                 .controlSize(.small)
-                .accessibilityLabel(L("选择互动名单"))
+                .help(L("切换到「机器人 → 名单」编辑聊天白名单"))
+                .accessibilityLabel(L("去名单分栏设置聊天白名单"))
             }
         }
     }
@@ -690,26 +693,6 @@ struct MomentsSettingsPanel: View {
                 .controlSize(.small)
                 .disabled(!sns.enabled)
                 .accessibilityLabel(kind.label)
-        }
-    }
-
-    private var replyScopeRow: some View {
-        SettingsRow(
-            title: "回复范围",
-            subtitle: interaction.replyScope.detail,
-            symbol: "person.3",
-            tint: Theme.info
-        ) {
-            Picker(L("回复范围"), selection: binding(\.interaction.replyScope)) {
-                ForEach(SnsInteractionReplyScope.allCases) { scope in
-                    Text(scope.label).tag(scope)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 220)
-            .disabled(!sns.enabled)
-            .accessibilityLabel(L("回复范围"))
         }
     }
 
@@ -1008,7 +991,7 @@ struct MomentsSettingsPanel: View {
     /// 自动互动前置条件提示：文案 + 「查看捕获步骤」入口。
     ///
     /// 只有存在「可在微信里手动补齐」的捕获项时才出现按钮，避免把
-    /// 「没选互动名单」这类配置问题也指向捕获弹窗。
+    /// 「白名单里没有私聊对象」这类配置问题也指向捕获弹窗。
     private var interactionBlockersNotice: some View {
         VStack(alignment: .leading, spacing: 8) {
             InlineNotice(
@@ -1051,7 +1034,9 @@ struct MomentsSettingsPanel: View {
                 items.append(L("评论通道未就绪：在微信里手动评论一次即可捕获"))
             }
         }
-        if !interaction.hasTargets { items.append(L("还没有选择互动名单")) }
+        if store.snsInteractionTargetIDs.isEmpty {
+            items.append(L("聊天白名单里还没有私聊对象（在「名单」分栏添加）"))
+        }
         if !interaction.hasAction { items.append(L("没有启用任何互动动作")) }
         if store.snsBridgeConfigStale {
             items.append(L("朋友圈配置待生效（重启机器人后同步）"))
@@ -1997,7 +1982,7 @@ struct MomentsSettingsPanel: View {
         let badge = interactionBadge
         let detail: String
         if !interaction.enabled {
-            detail = L("自动互动默认关闭；开启后按名单与动作自动评论或回复。")
+            detail = L("自动互动默认关闭；开启后按白名单对象与动作自动评论或回复。")
         } else if !store.isBotRunning {
             detail = L("机器人启动后才会执行自动互动。")
         } else if !interactionConfigBlockers.isEmpty {
@@ -2116,7 +2101,7 @@ struct MomentsSettingsPanel: View {
     }
 
     /// 通用绑定：写入后统一走 `store.persist()`（同步 bridge 镜像并落盘）。
-    /// 支持嵌套 key path，例如 `\.interaction.enabled`、`\.interaction.replyScope`。
+    /// 支持嵌套 key path，例如 `\.interaction.enabled`、`\.interaction.maxPerDay`。
     private func binding<T>(_ keyPath: WritableKeyPath<SnsSettings, T>) -> Binding<T> {
         Binding(
             get: { store.settings.bot.snsSettings[keyPath: keyPath] },

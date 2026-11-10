@@ -986,11 +986,12 @@ final class RuntimeCoordinator {
             }
         }
         // 开启「自动互动（评论/回复）」后，评论句柄（0xD5）与读/写样本一样是必需前置；
-        // 演练模式不真正发送，不要求提前捕获。
+        // 演练模式不真正发送，不要求提前捕获。互动对象为空时调度器不会执行，也不提醒捕获。
         let commentRequired = snsSettings.enabled
             && snsSettings.writeEnabled
             && snsSettings.interaction.enabled
             && snsSettings.interaction.isActive
+            && !store.snsInteractionTargetIDs.isEmpty
             && !store.settings.bot.dryRun
 
         // bridge 可用时以 `/voice_status.configured` 为准（App 下发 R3 时一定带 r3VoiceSend）；
@@ -1405,7 +1406,10 @@ final class RuntimeCoordinator {
     // MARK: 朋友圈自动互动（AI 评论 / 回复）
 
     /// 重建自动互动调度器（幂等）：只在机器人运行、功能/写开关/互动开关打开、
-    /// 互动名单非空、R3 原生发送开启且启用至少一种动作时创建。
+    /// 启用至少一种动作且 R3 原生发送开启时创建。
+    ///
+    /// 互动对象不再单独配置：每轮从「聊天白名单里的私聊对象」（`SnsInteractionTargets`）重新推导，
+    /// 为空时调度器空转等待（`Configuration.isEligible == false`），不会退化为「所有好友」。
     private func startSNSInteractionSchedulerIfNeeded() {
         snsInteractionScheduler?.stop()
         snsInteractionScheduler = nil
@@ -1435,10 +1439,6 @@ final class RuntimeCoordinator {
             log(.info, "SNS", "自动互动未启用任何动作；已跳过调度")
             return
         }
-        guard interaction.hasTargets else {
-            log(.info, "SNS", "自动互动未选择互动名单；已跳过调度")
-            return
-        }
         guard settings.hook.enableNativeSend else {
             log(.warning, "SNS", "自动互动需要开启 R3 原生发送；已跳过调度")
             return
@@ -1455,16 +1455,22 @@ final class RuntimeCoordinator {
                         nativeSendEnabled: false,
                         dryRun: false,
                         interaction: SnsInteractionSettings(),
+                        targetUserIDs: [],
                         blockedUserIDs: []
                     )
                 }
                 let settings = store.settings
+                let targets = SnsInteractionTargets.whitelistDirectUserIDs(
+                    whitelist: settings.bot.effectiveWhitelist,
+                    conversations: store.conversations
+                )
                 return SnsInteractionScheduler.Configuration(
                     snsEnabled: settings.bot.snsSettings.enabled,
                     writeEnabled: settings.bot.snsSettings.writeEnabled,
                     nativeSendEnabled: settings.hook.enableNativeSend,
                     dryRun: settings.bot.dryRun,
                     interaction: settings.bot.snsSettings.interaction,
+                    targetUserIDs: Set(targets),
                     blockedUserIDs: Set(settings.bot.effectiveBlacklist)
                 )
             },
@@ -1534,7 +1540,8 @@ final class RuntimeCoordinator {
         )
         scheduler.start()
         snsInteractionScheduler = scheduler
-        log(.info, "SNS", "自动互动调度已启动（名单 \(interaction.targetUserIDs.count) 人，"
+        let targetCount = store.snsInteractionTargetIDs.count
+        log(.info, "SNS", "自动互动调度已启动（白名单私聊对象 \(targetCount) 人，"
             + "每 \(Int(interaction.effectiveCheckInterval)) 秒检查）")
     }
 
@@ -1847,16 +1854,20 @@ final class RuntimeCoordinator {
         }
     }
 
-    /// 影响自动互动调度器的字段签名；任何互动设置变化都重建（重建成本很低）。
+    /// 影响自动互动调度器的字段签名；任何互动设置/白名单变化都重建（重建成本很低）。
+    ///
+    /// 互动对象由「白名单 + 私聊会话」在运行期推导（`Configuration.targetUserIDs` 每轮重新读取），
+    /// 这里把白名单也纳入签名：编辑名单后立即重建调度器，并让「待配置」状态即时刷新。
     private static func snsInteractionSchedulerSignature(_ settings: AppSettings) -> String {
         let sns = settings.bot.snsSettings
         let interaction = sns.interaction
         return [
             "\(sns.enabled)", "\(sns.writeEnabled)", "\(settings.hook.enableNativeSend)",
             "\(settings.bot.dryRun)", "\(interaction.enabled)",
-            interaction.targetUserIDs.joined(separator: ","),
+            settings.bot.effectiveWhitelist.joined(separator: ","),
+            settings.bot.effectiveBlacklist.joined(separator: ","),
             "\(interaction.commentOnNewPosts)", "\(interaction.replyToOwnPostComments)",
-            "\(interaction.replyToMyCommentReplies)", "\(interaction.replyScope.rawValue)",
+            "\(interaction.replyToMyCommentReplies)",
             "\(interaction.useVision)",
             "\(interaction.maxPerDay)", "\(interaction.minIntervalMinutes)",
             "\(interaction.maxAgeHours)", "\(interaction.maxRepliesPerPost)",
@@ -1880,7 +1891,15 @@ final class RuntimeCoordinator {
         }
         guard let scheduler = snsInteractionScheduler else {
             var summary = SnsInteractionRunSummary(checkedAt: Date())
-            summary.firstError = "自动互动未启动：请检查朋友圈/写开关/R3 原生发送/互动名单/动作开关"
+            summary.firstError = "自动互动未启动：请检查朋友圈/写开关/R3 原生发送/白名单私聊对象/动作开关"
+            store.snsInteractionRun = summary
+            return
+        }
+        // 互动对象直接来自聊天白名单：为空时调度器会空转，这里给出手动检查的可行动提示，
+        // 避免点「立即检查」后只看到一条 0 候选记录。
+        guard !store.snsInteractionTargetIDs.isEmpty else {
+            var summary = SnsInteractionRunSummary(checkedAt: Date())
+            summary.firstError = "聊天白名单里还没有私聊对象：请先在「机器人 → 名单」把好友加入白名单"
             store.snsInteractionRun = summary
             return
         }
@@ -5642,7 +5661,8 @@ extension AppStore {
     func promptCaptureSetupAfterInteractionToggle() async {
         let sns = settings.bot.snsSettings
         guard sns.enabled, sns.writeEnabled, sns.interaction.enabled,
-              !settings.bot.dryRun, sns.interaction.isActive else { return }
+              !settings.bot.dryRun, sns.interaction.isActive,
+              !snsInteractionTargetIDs.isEmpty else { return }
         // 弹窗里的文字条目也要用到 /voice_status 的 textSeed（语音未开启时同样查询）。
         await refreshVoiceStatus()
         prepareMoments()
@@ -5685,6 +5705,18 @@ extension AppStore {
         await snsInteractionLedger().reset()
         clearSNSInteractionActivity()
         RuntimeRegistry.existing(for: self)?.log(.info, "SNS", "已清空朋友圈自动互动记录")
+    }
+
+    /// 朋友圈自动互动的对象：聊天白名单里的私聊对象（与聊天回复共用同一份白名单）。
+    ///
+    /// 2026-11-11 起「互动名单」设置删除：对象在运行期由 `bot.effectiveWhitelist` 与
+    /// 私聊会话（`Conversation.kind == .direct`）推导；白名单为空时返回空数组，
+    /// 调度器据此空转（不会退化为「所有好友」）。聊天黑名单由调度器另行排除。
+    var snsInteractionTargetIDs: [String] {
+        SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: settings.bot.effectiveWhitelist,
+            conversations: conversations
+        )
     }
 
     /// 今天的自动发布配额快照（只读本机 ledger，供设置页解释「为什么没有发送」）。

@@ -32,11 +32,12 @@ struct CaptureSetupSheet: View {
     }
 
     /// 自动评论/回复已配置且非演练时才要求评论句柄；否则不强迫从不评论的用户操作。
+    /// 互动对象来自聊天白名单里的私聊对象：没有对象时调度器不会执行，也不提醒捕获。
     private var commentCaptureRequired: Bool {
         let sns = store.settings.bot.snsSettings
         guard sns.enabled, sns.writeEnabled, sns.interaction.enabled,
               !store.settings.bot.dryRun else { return false }
-        return sns.interaction.isActive
+        return sns.interaction.isActive && !store.snsInteractionTargetIDs.isEmpty
     }
 
     /// bridge 随机器人启停（autoStartBridge）时，机器人停止后仍保留的上一次 `/sns/status`

@@ -46,16 +46,17 @@ struct SnsInteractionDraft {
 /// 纯函数：从当前时间线里挑出「现在应该自动互动」的候选，不发起网络/写入。
 ///
 /// 规则（与设置页文案一致）：
-/// - 只有互动名单内的好友参与；自己永远不互动；
-/// - 评论新动态：名单好友、最近 `maxAgeHours` 内、尚未评论过、尚未处理；
-/// - 回复我的动态：自己动态下、名单好友的评论，未回复过、未处理；
-/// - 回复我收到的回复：别人动态下，名单好友回复了我（按自己的评论 ID 判断），未处理；
+/// - 互动对象由调用方传入（聊天白名单里的私聊对象）；自己永远不互动；
+/// - 评论新动态：对象好友、最近 `maxAgeHours` 内、尚未评论过、尚未处理；
+/// - 回复我的动态：自己动态下、对象好友的评论，未回复过、未处理；
+/// - 回复我收到的回复：别人动态下，对象好友回复了我（按自己的评论 ID 判断），未处理；
 /// - 每条动态每天的回复条数受 `maxRepliesPerPost` 限制（评论新动态不计入）。
 enum SnsInteractionPlanner {
     static func candidates(
         posts: [SnsPost],
         selfID: String,
         settings: SnsInteractionSettings,
+        targetUserIDs: Set<String>,
         now: Date = Date(),
         handledKeys: Set<String> = [],
         myCommentIDs: [String: Set<String>] = [:],
@@ -67,8 +68,8 @@ enum SnsInteractionPlanner {
         let selfID = selfID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard config.isActive, !selfID.isEmpty else { return [] }
 
-        // 聊天黑名单是硬门槛：即使被选进互动名单也绝不互动。
-        let targets = Set(config.targetUserIDs).subtracting(blockedUserIDs)
+        // 聊天黑名单是硬门槛：即使好友在聊天白名单里也绝不互动。
+        let targets = targetUserIDs.subtracting(blockedUserIDs)
         let cutoff = now.addingTimeInterval(-TimeInterval(config.maxAgeHours) * 3600)
         var mineByPost = myCommentIDs
         // 时间线里可见的「自己发的评论」也算自己的评论：别人回复它们同样应触发自动回复。
@@ -87,12 +88,11 @@ enum SnsInteractionPlanner {
             let postAuthoredBySelf = post.isAuthored(by: selfID)
             let postAuthor = post.authorID.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            // 1) 自己动态下、名单好友的新评论 → 回复。
+            // 1) 自己动态下、对象好友的新评论 → 回复。
             if postAuthoredBySelf, config.replyToOwnPostComments {
                 for comment in post.comments {
                     guard isEligibleComment(comment, targets: targets, selfID: selfID,
                                             cutoff: cutoff, now: now, notBefore: notBefore,
-                                            allowAllFriends: config.replyScope == .allFriends,
                                             blockedUserIDs: blockedUserIDs) else { continue }
                     if !config.isMaxRepliesPerPostUnlimited,
                        (replyCounts[post.id] ?? 0) >= config.maxRepliesPerPost {
@@ -109,7 +109,7 @@ enum SnsInteractionPlanner {
                 }
             }
 
-            // 2) 别人动态下、名单好友回复了我 → 再回复对方。
+            // 2) 别人动态下、对象好友回复了我 → 再回复对方。
             //
             // native 时间线回包几乎不含评论，机器人自己的评论经常不在列表里，
             // 只靠父评论 ID（replyTo）匹配会漏掉「回复我的评论」。因此同时接受
@@ -119,7 +119,6 @@ enum SnsInteractionPlanner {
                 for comment in post.comments {
                     guard isEligibleComment(comment, targets: targets, selfID: selfID,
                                             cutoff: cutoff, now: now, notBefore: notBefore,
-                                            allowAllFriends: config.replyScope == .allFriends,
                                             blockedUserIDs: blockedUserIDs) else { continue }
                     let parent = comment.replyTo.trimmingCharacters(in: .whitespacesAndNewlines)
                     let repliedUserID = comment.replyToUserID
@@ -142,7 +141,7 @@ enum SnsInteractionPlanner {
                 }
             }
 
-            // 3) 名单好友的新动态 → 评论。
+            // 3) 对象好友的新动态 → 评论。
             if !postAuthoredBySelf, config.commentOnNewPosts,
                targets.contains(postAuthor) {
                 if let candidate = newPostCandidate(
@@ -172,7 +171,6 @@ enum SnsInteractionPlanner {
         cutoff: Date,
         now: Date,
         notBefore: Date,
-        allowAllFriends: Bool,
         blockedUserIDs: Set<String>
     ) -> Bool {
         // canBeReplyTarget：有服务端 ID 且不是 sns.db 未确认的 32 位 ID。
@@ -184,9 +182,7 @@ enum SnsInteractionPlanner {
         }
         let author = comment.userID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !author.isEmpty, !blockedUserIDs.contains(author) else { return false }
-        if !allowAllFriends {
-            guard targets.contains(author) else { return false }
-        }
+        guard targets.contains(author) else { return false }
         // 时间缺失的评论无法判断新旧，跳过而不是猜。
         guard comment.createTime > 0 else { return false }
         let createdAt = Date(timeIntervalSince1970: TimeInterval(comment.createTime))
@@ -650,11 +646,15 @@ final class SnsInteractionScheduler {
         var nativeSendEnabled: Bool
         var dryRun: Bool
         var interaction: SnsInteractionSettings
+        /// 互动对象：聊天白名单里的私聊对象（wxid）。每轮由 `SnsInteractionTargets` 重新推导；
+        /// 空 = 不互动任何好友（白名单为空不会退化为「所有好友」）。
+        var targetUserIDs: Set<String> = []
         /// 聊天黑名单（wxid）硬门槛；为空表示没有黑名单。
         var blockedUserIDs: Set<String> = []
 
         var isEligible: Bool {
             snsEnabled && writeEnabled && nativeSendEnabled && interaction.isActive
+                && !targetUserIDs.isEmpty
         }
 
         var interval: TimeInterval {
@@ -878,6 +878,7 @@ final class SnsInteractionScheduler {
                 posts: snapshot.posts,
                 selfID: selfID,
                 settings: configuration.interaction,
+                targetUserIDs: configuration.targetUserIDs,
                 now: now,
                 // 演练模式：真实已处理的候选同样跳过（确实没事可做），并额外合并演练专用
                 // 记录，避免同一轮检查反复生成同一条草稿。真实模式绝不读取演练记录。
@@ -911,7 +912,7 @@ final class SnsInteractionScheduler {
                     replies: replyComments,
                     myComments: selfCommentIDs.union(ledgerCommentIDs).count,
                     notBefore: notBefore,
-                    targetCount: configuration.interaction.sanitized.targetUserIDs.count
+                    targetCount: configuration.targetUserIDs.count
                 )
                 finish(summary, configuration: configuration)
                 return summary
@@ -1140,7 +1141,7 @@ final class SnsInteractionScheduler {
     }
 
     /// 「读取成功但 0 候选」每次运行只记一条：便于区分「确实没有新内容」与
-    /// 「启用时间/名单/时效把候选全过滤了」，又不会每 2 分钟淹没运行日志。
+    /// 「启用时间/白名单对象/时效把候选全过滤了」，又不会每 2 分钟淹没运行日志。
     /// 计数含义：动态数 / 时间线可见评论数 / 其中回复类评论数 / 我的评论数（可见 + 账本去重）。
     private func logEmptyRoundOnce(
         scanned: Int,
@@ -1157,7 +1158,7 @@ final class SnsInteractionScheduler {
         let watermark = notBefore.formatted(date: .numeric, time: .standard)
         logger?("朋友圈自动互动：时间线 \(scanned) 条动态（评论 \(comments) / 回复 \(replies) /"
             + " 我的评论 \(myComments)），本轮无候选"
-            + "（名单 \(targetCount) 人，启用时间 \(watermark)）")
+            + "（白名单私聊对象 \(targetCount) 人，启用时间 \(watermark)）")
     }
 
     private static func message(for error: Error) -> String {

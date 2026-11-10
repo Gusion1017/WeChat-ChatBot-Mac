@@ -6,29 +6,27 @@ import XCTest
 // MARK: - 模型 / 设置
 
 final class SnsInteractionSettingsTests: XCTestCase {
-    func testDefaultsAreOffWithEmptyList() {
+    func testDefaultsAreOff() {
         let settings = SnsInteractionSettings()
         XCTAssertFalse(settings.enabled)
-        XCTAssertTrue(settings.targetUserIDs.isEmpty)
         XCTAssertTrue(settings.commentOnNewPosts)
         XCTAssertTrue(settings.replyToOwnPostComments)
         XCTAssertTrue(settings.replyToMyCommentReplies)
-        XCTAssertEqual(settings.replyScope, .listOnly)
         XCTAssertTrue(settings.useVision)
+        // 互动对象不再持久化：`isActive` 只看开关与动作；对象由
+        // `SnsInteractionTargets` 在运行期从聊天白名单推导。
         XCTAssertFalse(settings.isActive)
     }
 
-    func testSanitizedClampsAndDedupesTargets() {
+    func testSanitizedClampsLimits() {
         var settings = SnsInteractionSettings()
         settings.enabled = true
-        settings.targetUserIDs = [" wxid_a ", "", "wxid_a", "wxid_b"]
         settings.maxPerDay = 99
         settings.minIntervalMinutes = -3
         settings.maxAgeHours = 999
         settings.maxRepliesPerPost = 0
         settings.checkIntervalSeconds = 5
         settings = settings.sanitized
-        XCTAssertEqual(settings.targetUserIDs, ["wxid_a", "wxid_b"])
         XCTAssertEqual(settings.maxPerDay, 20)
         XCTAssertEqual(settings.minIntervalMinutes, 0)
         XCTAssertEqual(settings.maxAgeHours, 72)
@@ -39,14 +37,24 @@ final class SnsInteractionSettingsTests: XCTestCase {
         XCTAssertTrue(settings.isActive)
     }
 
-    func testInteractionTargetsAreCappedAtTwoHundred() {
-        var settings = SnsInteractionSettings()
-        settings.targetUserIDs = (0..<250).map { "wxid_\($0)" }
-        let sanitized = settings.sanitized
-        XCTAssertEqual(sanitized.targetUserIDs.count, SnsInteractionSettings.maxTargets)
-        XCTAssertEqual(sanitized.targetUserIDs.first, "wxid_0")
-        // 逐行勾选与全选/导入共用同一上限。
-        XCTAssertEqual(SnsInteractionSettings.maxTargets, 200)
+    /// 旧配置里的互动名单/回复范围已删除：解码时忽略，不迁移、不报错，也不写回。
+    func testLegacyTargetKeysAreIgnoredOnDecode() throws {
+        let json = #"""
+        {"enabled":true,"interaction":{"enabled":true,"targetUserIDs":["wxid_a"],
+        "targetUserIds":["wxid_b"],"replyScope":"all","maxPerDay":3}}
+        """#
+        let settings = try JSONDecoder().decode(SnsSettings.self, from: Data(json.utf8))
+        XCTAssertTrue(settings.interaction.enabled)
+        XCTAssertEqual(settings.interaction.maxPerDay, 3)
+        XCTAssertTrue(settings.interaction.isActive)
+
+        let encoded = try JSONEncoder().encode(settings)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let interaction = try XCTUnwrap(object["interaction"] as? [String: Any])
+        XCTAssertNil(interaction["targetUserIDs"])
+        XCTAssertNil(interaction["targetUserIds"])
+        XCTAssertNil(interaction["replyScope"])
     }
 
     func testUnlimitedLimitsArePreserved() {
@@ -92,19 +100,18 @@ final class SnsInteractionSettingsTests: XCTestCase {
         let settings = try JSONDecoder().decode(SnsSettings.self, from: Data(json.utf8))
         XCTAssertTrue(settings.enabled)
         XCTAssertFalse(settings.interaction.enabled)
-        XCTAssertTrue(settings.interaction.targetUserIDs.isEmpty)
     }
 
     func testSnsSettingsRoundtripKeepsInteraction() throws {
         var settings = SnsSettings()
         settings.interaction.enabled = true
-        settings.interaction.targetUserIDs = ["wxid_a"]
         settings.interaction.maxPerDay = 3
-        settings.interaction.replyScope = .allFriends
+        settings.interaction.maxRepliesPerPost = 0
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(SnsSettings.self, from: data)
         XCTAssertEqual(decoded.interaction, settings.interaction)
-        XCTAssertEqual(decoded.interaction.replyScope, .allFriends)
+        XCTAssertEqual(decoded.interaction.maxPerDay, 3)
+        XCTAssertEqual(decoded.interaction.maxRepliesPerPost, 0)
     }
 
     func testTimelinePageDecodesSourceAndFallsBackToNative() throws {
@@ -118,6 +125,69 @@ final class SnsInteractionSettingsTests: XCTestCase {
             from: Data(#"{"posts":[]}"#.utf8)
         )
         XCTAssertTrue(legacy.isNativeSource)
+    }
+}
+
+// MARK: - 互动对象（聊天白名单里的私聊对象）
+
+/// 2026-11-11：互动名单设置删除，对象改为从聊天白名单 + 私聊会话推导。
+final class SnsInteractionTargetsTests: XCTestCase {
+    private func conversation(_ id: String, kind: ConversationKind = .direct) -> Conversation {
+        Conversation(id: id, kind: kind, title: id)
+    }
+
+    func testUsesWhitelistDirectConversationsOnly() {
+        let conversations = [
+            conversation("wxid_a"),
+            conversation("wxid_b"),
+            conversation("123@chatroom", kind: .group),
+            conversation("gh_official", kind: .official),
+            conversation("wxid_not_whitelisted")
+        ]
+        let targets = SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: ["wxid_a", "wxid_b", "123@chatroom", "gh_official", "wxid_unknown"],
+            conversations: conversations
+        )
+        XCTAssertEqual(targets, ["wxid_a", "wxid_b"])
+    }
+
+    /// 聊天白名单为空在聊天回复里表示「不限制」，但自动互动必须显式配置对象：
+    /// 这里返回空（调度器据此空转），不会退化为「所有好友」。
+    func testEmptyWhitelistMeansNoTargets() {
+        let conversations = [conversation("wxid_a")]
+        XCTAssertTrue(SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: [], conversations: conversations).isEmpty)
+    }
+
+    /// 白名单里有、但会话列表还没加载 / 不是私聊会话：不能当作互动对象。
+    func testWhitelistWithoutConversationsYieldsNoTargets() {
+        XCTAssertTrue(SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: ["wxid_a"], conversations: []).isEmpty)
+    }
+
+    func testTrimsDeduplicatesAndKeepsWhitelistOrder() {
+        let conversations = [conversation("wxid_a"), conversation("wxid_b")]
+        let targets = SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: [" wxid_b ", "", "wxid_a", "wxid_b"],
+            conversations: conversations
+        )
+        XCTAssertEqual(targets, ["wxid_b", "wxid_a"])
+    }
+
+    /// 群 ID、占位自己 ID 与只在群里发言的 wxid 都不是「私聊对象」。
+    func testRejectsGroupIDsPlaceholderSelfAndSenderOnlyIDs() {
+        let conversations = [
+            conversation("wxid_a"),
+            conversation("wxid_self"),
+            conversation("@placeholder_x"),
+            conversation("456@chatroom", kind: .group)
+        ]
+        let targets = SnsInteractionTargets.whitelistDirectUserIDs(
+            whitelist: ["wxid_a", "wxid_self", "@placeholder_x", "456@chatroom",
+                        "wxid_sender_in_group"],
+            conversations: conversations
+        )
+        XCTAssertEqual(targets, ["wxid_a"])
     }
 }
 
@@ -165,10 +235,36 @@ final class SnsInteractionPlannerTests: XCTestCase {
     private let friendID = "wxid_friend"
     private let otherID = "wxid_other"
 
+    /// 互动对象现在由调用方传入（聊天白名单推导）；测试默认用 `friendID`。
+    private func plannerCandidates(
+        posts: [SnsPost],
+        selfID: String,
+        settings: SnsInteractionSettings,
+        targets: Set<String>? = nil,
+        now: Date = Date(),
+        handledKeys: Set<String> = [],
+        myCommentIDs: [String: Set<String>] = [:],
+        replyCounts: [String: Int] = [:],
+        blockedUserIDs: Set<String> = [],
+        notBefore: Date = .distantPast
+    ) -> [SnsInteractionCandidate] {
+        SnsInteractionPlanner.candidates(
+            posts: posts,
+            selfID: selfID,
+            settings: settings,
+            targetUserIDs: targets ?? [friendID],
+            now: now,
+            handledKeys: handledKeys,
+            myCommentIDs: myCommentIDs,
+            replyCounts: replyCounts,
+            blockedUserIDs: blockedUserIDs,
+            notBefore: notBefore
+        )
+    }
+
     private func makeSettings() -> SnsInteractionSettings {
         var settings = SnsInteractionSettings()
         settings.enabled = true
-        settings.targetUserIDs = [friendID]
         settings.maxAgeHours = 24
         settings.maxRepliesPerPost = 2
         return settings
@@ -217,7 +313,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
 
     func testCommentsOnNewPostFromListedFriend() {
         let post = makePost(id: "p1", authorID: friendID)
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.count, 1)
@@ -236,7 +332,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
             comments: [makeComment(id: "c-self", userID: selfID)]
         )
         let handled = makePost(id: "handled", authorID: friendID)
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [own, stranger, old, alreadyCommented, handled],
             selfID: selfID,
             settings: settings,
@@ -249,7 +345,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
     func testRepliesToCommentOnOwnPost() {
         let comment = makeComment(id: "c1", userID: friendID)
         let post = makePost(id: "p-own", authorID: selfID, comments: [comment])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.count, 1)
@@ -261,7 +357,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         let comment = makeComment(id: "c1", userID: friendID)
         let myReply = makeComment(id: "c2", userID: selfID, replyTo: "c1")
         let post = makePost(id: "p-own", authorID: selfID, comments: [comment, myReply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertTrue(candidates.isEmpty, "已经回复过的评论不能再次自动回复")
@@ -271,7 +367,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         let myComment = makeComment(id: "c-self", userID: selfID, ageSeconds: -900)
         let reply = makeComment(id: "c-reply", userID: friendID, replyTo: "c-self")
         let post = makePost(id: "p-other", authorID: otherID, comments: [myComment, reply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.count, 1)
@@ -289,7 +385,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
             replyToUserID: selfID
         )
         let post = makePost(id: "p-other", authorID: otherID, comments: [reply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.count, 1)
@@ -307,7 +403,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
             replyToUserID: selfID
         )
         let post = makePost(id: "p-other", authorID: otherID, comments: [shortID])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.count, 1)
@@ -323,7 +419,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         )
         let markedPost = makePost(id: "p-other2", authorID: otherID, comments: [marked])
         XCTAssertTrue(
-            SnsInteractionPlanner.candidates(
+            plannerCandidates(
                 posts: [markedPost], selfID: selfID, settings: makeSettings(), now: now
             ).isEmpty
         )
@@ -338,7 +434,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
             replyToUserID: otherID
         )
         let post = makePost(id: "p-other", authorID: otherID, comments: [reply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertTrue(candidates.isEmpty, "回复别人的评论不能被当成「回复我的评论」")
@@ -348,7 +444,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
     func testReplyToMyCommentStillMatchedByParentIDWhenUserIDMissing() {
         let reply = makeComment(id: "c-reply", userID: friendID, replyTo: "c-self")
         let post = makePost(id: "p-other", authorID: otherID, comments: [reply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: makeSettings(),
@@ -363,7 +459,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         // 时间线里只看到对方的回复（自己的评论已被截断），但账本记录了评论 ID。
         let reply = makeComment(id: "c-reply", userID: friendID, replyTo: "c-self")
         let post = makePost(id: "p-other", authorID: otherID, comments: [reply])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: makeSettings(),
@@ -377,7 +473,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
     func testReplyCountLimitPerPost() {
         let comment = makeComment(id: "c1", userID: friendID)
         let post = makePost(id: "p-own", authorID: selfID, comments: [comment])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: makeSettings(),
@@ -392,7 +488,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         let post = makePost(id: "p-own", authorID: selfID, comments: [comment])
         var settings = makeSettings()
         settings.maxRepliesPerPost = 0
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: settings,
@@ -407,7 +503,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         let old = makeComment(id: "c-old", userID: friendID, ageSeconds: -25 * 3600)
         let stranger = makeComment(id: "c-stranger", userID: "wxid_stranger")
         let post = makePost(id: "p-own", authorID: selfID, comments: [old, stranger])
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertTrue(candidates.isEmpty)
@@ -417,7 +513,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         let ownComment = makeComment(id: "c1", userID: friendID)
         let ownPost = makePost(id: "p-own", authorID: selfID, comments: [ownComment])
         let newPost = makePost(id: "p-new", authorID: friendID)
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [newPost, ownPost], selfID: selfID, settings: makeSettings(), now: now
         )
         XCTAssertEqual(candidates.map(\.kind), [.replyOnOwnPost, .commentOnPost])
@@ -425,7 +521,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
 
     func testDoesNotBackfillBeforeSessionStart() {
         let post = makePost(id: "p1", authorID: friendID, ageSeconds: -600)
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: makeSettings(),
@@ -436,7 +532,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
 
         let comment = makeComment(id: "c1", userID: friendID, ageSeconds: -600)
         let ownPost = makePost(id: "p-own", authorID: selfID, comments: [comment])
-        let replies = SnsInteractionPlanner.candidates(
+        let replies = plannerCandidates(
             posts: [ownPost],
             selfID: selfID,
             settings: makeSettings(),
@@ -446,28 +542,40 @@ final class SnsInteractionPlannerTests: XCTestCase {
         XCTAssertTrue(replies.isEmpty, "开启前已存在的评论不回填回复")
     }
 
-    func testAllFriendsScopeRepliesToNonListedCommenter() {
-        var settings = makeSettings()
-        settings.replyScope = .allFriends
+    /// 2026-11-11 移除「回复范围（所有好友）」：不在互动对象里的评论者永不回复；
+    /// 聊天黑名单只是在对象集合内再加一道硬门槛。
+    func testNonListedCommenterIsNeverRepliedTo() {
         let comment = makeComment(id: "c1", userID: "wxid_stranger")
         let ownPost = makePost(id: "p-own", authorID: selfID, comments: [comment])
-        let candidates = SnsInteractionPlanner.candidates(
-            posts: [ownPost], selfID: selfID, settings: settings, now: now
+        let candidates = plannerCandidates(
+            posts: [ownPost], selfID: selfID, settings: makeSettings(), now: now
         )
-        XCTAssertEqual(candidates.count, 1)
-        XCTAssertEqual(candidates[0].kind, .replyOnOwnPost)
+        XCTAssertTrue(candidates.isEmpty, "白名单外的评论者即使不在黑名单也不互动")
 
-        // 所有好友范围也不越过聊天黑名单。
-        let blocked = SnsInteractionPlanner.candidates(
-            posts: [ownPost], selfID: selfID, settings: settings, now: now,
-            blockedUserIDs: ["wxid_stranger"]
+        // 白名单外的对象发新动态同样不评论。
+        let strangerPost = makePost(id: "p-stranger", authorID: "wxid_stranger")
+        XCTAssertTrue(plannerCandidates(
+            posts: [strangerPost], selfID: selfID, settings: makeSettings(), now: now
+        ).isEmpty)
+    }
+
+    /// 对象集合与黑名单都可能来自同一份名单：黑名单优先。
+    func testBlacklistWinsOverWhitelistTargets() {
+        let post = makePost(id: "p1", authorID: friendID)
+        let candidates = plannerCandidates(
+            posts: [post],
+            selfID: selfID,
+            settings: makeSettings(),
+            targets: [friendID, "wxid_stranger"],
+            now: now,
+            blockedUserIDs: [friendID]
         )
-        XCTAssertTrue(blocked.isEmpty)
+        XCTAssertTrue(candidates.isEmpty)
     }
 
     func testBlacklistedUserIsNeverInteractedWith() {
         let post = makePost(id: "p1", authorID: friendID)
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [post],
             selfID: selfID,
             settings: makeSettings(),
@@ -482,7 +590,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
         settings.commentOnNewPosts = false
         settings.replyToOwnPostComments = false
         settings.replyToMyCommentReplies = false
-        let candidates = SnsInteractionPlanner.candidates(
+        let candidates = plannerCandidates(
             posts: [makePost(id: "p1", authorID: friendID)],
             selfID: selfID,
             settings: settings,
@@ -616,7 +724,6 @@ final class SnsInteractionSchedulerTests: XCTestCase {
     ) -> SnsInteractionSettings {
         var settings = SnsInteractionSettings()
         settings.enabled = true
-        settings.targetUserIDs = ["wxid_friend"]
         settings.maxPerDay = maxPerDay
         settings.minIntervalMinutes = minIntervalMinutes
         settings.maxRepliesPerPost = maxRepliesPerPost
@@ -667,6 +774,7 @@ final class SnsInteractionSchedulerTests: XCTestCase {
     private func makeHarness(
         posts: [SnsPost],
         interaction: SnsInteractionSettings? = nil,
+        targets: Set<String> = ["wxid_friend"],
         dryRun: Bool = false,
         commentReady: Bool = true,
         pageSource: String = "native",
@@ -682,7 +790,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
             writeEnabled: true,
             nativeSendEnabled: true,
             dryRun: dryRun,
-            interaction: settings
+            interaction: settings,
+            targetUserIDs: targets
         )
         var submitted: [(SnsInteractionCandidate, String)] = []
         var drafted: [SnsInteractionCandidate] = []
@@ -738,7 +847,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
             writeEnabled: true,
             nativeSendEnabled: true,
             dryRun: false,
-            interaction: makeSettings()
+            interaction: makeSettings(),
+            targetUserIDs: ["wxid_friend"]
         )
         return SnsInteractionScheduler(
             configurationProvider: { config },
@@ -771,7 +881,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
             writeEnabled: true,
             nativeSendEnabled: true,
             dryRun: false,
-            interaction: makeSettings()
+            interaction: makeSettings(),
+            targetUserIDs: ["wxid_friend"]
         )
         var emptyPosts: [SnsPost] = []
         let emptyScheduler = SnsInteractionScheduler(
@@ -820,8 +931,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
         _ = await scheduler.performCheck()
         XCTAssertTrue(logs.contains {
             $0.contains("时间线 1 条动态") && $0.contains("评论 1 / 回复 0 / 我的评论 0")
-                && $0.contains("名单 1 人")
-        }, "0 候选日志需包含动态/评论/回复/我的评论/名单计数")
+                && $0.contains("白名单私聊对象 1 人")
+        }, "0 候选日志需包含动态/评论/回复/我的评论/白名单对象计数")
     }
 
     func testCommentsNewPostAndDoesNotRepeat() async {
@@ -920,6 +1031,15 @@ final class SnsInteractionSchedulerTests: XCTestCase {
         XCTAssertTrue(summary.firstError?.contains("评论") == true)
     }
 
+    /// 互动对象为空（聊天白名单里没有私聊对象）时调度器不执行，也不会退化为「所有好友」。
+    func testNoWhitelistTargetsSkipsWithoutSubmitting() async {
+        let harness = makeHarness(posts: [makePost(id: "p1")], targets: [])
+        let summary = await harness.scheduler.performCheck()
+        XCTAssertTrue(harness.submitted().isEmpty)
+        XCTAssertEqual(summary.candidateCount, 0)
+        XCTAssertEqual(summary.scannedPostCount, 0, "对象为空时不应拉时间线")
+    }
+
     func testDailyLimitAndMinInterval() async {
         let settings = makeSettings(maxPerDay: 2)
         let harness = makeHarness(posts: [makePost(id: "p1")], interaction: settings)
@@ -1011,7 +1131,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
             writeEnabled: true,
             nativeSendEnabled: true,
             dryRun: false,
-            interaction: makeSettings()
+            interaction: makeSettings(),
+            targetUserIDs: ["wxid_friend"]
         )
         let ledger = SnsInteractionLedger(accountID: "wxid_self", defaults: defaults)
         var posts: [SnsPost] = []
@@ -1110,7 +1231,8 @@ final class SnsInteractionSchedulerTests: XCTestCase {
             writeEnabled: true,
             nativeSendEnabled: true,
             dryRun: false,
-            interaction: makeSettings()
+            interaction: makeSettings(),
+            targetUserIDs: ["wxid_friend"]
         )
         let ledger = SnsInteractionLedger(accountID: "wxid_self", defaults: defaults)
         var posts: [SnsPost] = []

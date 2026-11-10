@@ -76,8 +76,8 @@ AI 走 OpenAI 兼容接口，消息、记忆与日志只存本机（调用 AI �
 ### 快速开始
 
 - **普通用户**：下载
-  [`WeChat-AI-4.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.0/WeChat-AI-4.0.0.zip)
-  （约 70 MB / 66 MiB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.0/WeChat-AI-4.0.0.zip.sha256)），
+  [`WeChat-AI-4.0.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.1/WeChat-AI-4.0.1.zip)
+  （约 70 MB / 66 MiB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.1/WeChat-AI-4.0.1.zip.sha256)），
   历史发布说明见 [`docs/releases/`](docs/releases/)。
   1. 解压下载的 zip 得到 `WeChat AI.app`，拖入 `~/Applications`（当前用户，无需管理员）或
      `/Applications`（所有用户）。App 未公证，首次启动会被 Gatekeeper 拦截（macOS 15 起无法再
@@ -120,7 +120,7 @@ bash scripts/build_bridge.sh        # Go 构建 + 测试
 make release                        # 构建 → 打包 → 签名校验 → sha256
 ```
 
-Swift 879 项执行（877 通过 / 2 项按环境跳过 / 0 失败，41 个测试文件）与 Go 312 项用例
+Swift 886 项执行（884 通过 / 2 项按环境跳过 / 0 失败，41 个测试文件）与 Go 312 项用例
 （180 顶层 + 132 子测试，0 失败，19 个 `_test.go`）当前全部通过；发布产物在
 `dist/`（zip + `.sha256`）。修改 `hook/script.js` 后需运行 `bash scripts/sync_hook_script.sh`；
 接口或行为变更先改 `docs/` 再改代码。
@@ -231,8 +231,8 @@ install and restore), `devtools/` (local mocks), `assets/` (icon sources), `LICE
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-4.0.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.0/WeChat-AI-4.0.0.zip)
-  (~70 MB (66 MiB), [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.0/WeChat-AI-4.0.0.zip.sha256));
+  [`WeChat-AI-4.0.1.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.1/WeChat-AI-4.0.1.zip)
+  (~70 MB (66 MiB), [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.1/WeChat-AI-4.0.1.zip.sha256));
   older release notes are in [`docs/releases/`](docs/releases/).
   1. Unzip the downloaded zip to get `WeChat AI.app`, then drag it to `~/Applications` (current
      user, no admin) or `/Applications` (all users). The app is not notarized, so Gatekeeper
@@ -280,7 +280,7 @@ bash scripts/build_bridge.sh        # Go build + tests
 make release                        # build → package → signature check → sha256
 ```
 
-879 Swift tests (877 passed / 2 environment-gated skips / 0 failures, 41 test files) and
+886 Swift tests (884 passed / 2 environment-gated skips / 0 failures, 41 test files) and
 312 Go test cases (180 top-level + 132 subtests, 0 failures, 19 `_test.go` files) pass;
 release artifacts live in `dist/` (zip + `.sha256`). After editing `hook/script.js`, run
 `bash scripts/sync_hook_script.sh`; change `docs/` before code for interface or behaviour changes.

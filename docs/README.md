@@ -6,7 +6,7 @@
 
 | 文档 | 内容 | 类型 |
 | --- | --- | --- |
-| [`install.md`](install.md) | **安装与启动**：Releases App（v4.0.0，约 70 MB / 66 MiB）/ 源码 ZIP 两种方式、**Command Line Tools 前置**、Gatekeeper、菜单栏、首次向导与发布打包 | 操作手册 |
+| [`install.md`](install.md) | **安装与启动**：Releases App（v4.0.1，约 70 MB / 66 MiB）/ 源码 ZIP 两种方式、**Command Line Tools 前置**、Gatekeeper、菜单栏、首次向导与发布打包 | 操作手册 |
 | [`updates.md`](updates.md) | **应用内更新（设置 → 更新）**：GitHub Releases 检查/限流、SemVer 比较、SHA256 校验、状态机、原地安装与失败回滚、安装门禁与安全边界 | 现行契约 |
 | [`architecture.md`](architecture.md) | 总体架构、目录边界、OneBot 桥接契约 | 现行契约 |
 | [`accounts.md`](accounts.md) | **多微信账号数据隔离**：隔离矩阵、`accounts/<wxid>/` 布局、识别算法、三种切号路径、旧版单库迁移与 `_unassigned` 认领、边界与排障 | 现行契约 |
@@ -18,7 +18,8 @@
 | [`copy-style.md`](copy-style.md) | **界面文案与提示规范**：术语表、句式与标点、分场景规则、`HelpTip` 用法、`en.lproj` 本地化约定 | 现行契约 |
 | [`voice.md`](voice.md) | **语音能力**：入站转写、出站 TTS（Qwen3-TTS-1.7B 单模型，GPU/CPU）、本机音色管理与试听、安装与降级到文字、系统语音资源、4.2 Hook 限制 | 现行契约 |
 | [`cosyvoice.md`](cosyvoice.md) | **本地 TTS（Qwen3-TTS-1.7B，唯一模型）**：MLX GPU/CPU、安装/下载、参考音导入规则、本机音色管理、HTTP 契约、性能与降级到文字、旧版清理 | 现行契约 |
-| [`releases/4.0.0.md`](releases/4.0.0.md) | **v4.0.0 发布说明**：4.2.0.17 适配、朋友圈（Moments）、测试基线 | 发布记录 |
+| [`releases/4.0.1.md`](releases/4.0.1.md) | **v4.0.1 发布说明**：朋友圈自动互动复用聊天白名单 | 发布记录 |
+| [`releases/4.0.0.md`](releases/4.0.0.md) | v4.0.0 发布说明：4.2.0.17 适配、朋友圈（Moments） | 发布记录 |
 | [`releases/3.1.6.md`](releases/3.1.6.md) | v3.1.6 发布说明（历史） | 发布记录 |
 | [`releases/3.1.5.md`](releases/3.1.5.md) | v3.1.5 发布说明（更新确认弹窗修复） | 发布记录 |
 | [`releases/3.1.4.md`](releases/3.1.4.md) | v3.1.4 发布说明（文档精简） | 发布记录 |
