@@ -272,7 +272,7 @@ func TestMergeSNSDbCommentsNoopWhenSnsReadDisabled(t *testing.T) {
 	}
 }
 
-// comment_id=35 的语义未确认：同一帖子下多条回复共用它时不能互相覆盖；
+// comment_id=<id> 的语义未确认：同一帖子下多条回复共用它时不能互相覆盖；
 // 这里用组合键，只去掉完全重复的行。
 func TestSNSMergeDbCommentListsKeepsSameLocalID(t *testing.T) {
 	native := []snsCommentJSON{{CommentID: "501", UserID: "wxid_native", Text: "native", CreateTime: 10}}

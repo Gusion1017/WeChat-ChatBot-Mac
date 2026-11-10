@@ -147,7 +147,7 @@ func fetchSNSDbComments(postIDs []string) (map[string][]snsCommentJSON, int, err
 // snsDbCommentFromRow 把 SnsMessage_tmp3 行映射为 timeline 评论 JSON。
 // 只接受 type=2（评论）且 del_status=0 的行；正文/作者/时间缺失时用
 // serialized_comment_buf（SnsAction protobuf）补齐，仍缺失则丢弃（不猜测）。
-// reply_to 先留空：comment_id=35 的语义尚未确认，避免 App 用错目标回复。
+// reply_to 先留空：comment_id=<id> 的语义尚未确认，避免 App 用错目标回复。
 func snsDbCommentFromRow(row snsDbCommentRow) (snsCommentJSON, bool) {
 	if row.DelStatus != 0 || row.Type != 2 {
 		return snsCommentJSON{}, false
