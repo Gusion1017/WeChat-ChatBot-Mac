@@ -33,19 +33,8 @@ memory, voice and image understanding.
 - **多账号隔离**：聊天、记忆、会话设置、人格与定时任务按微信账号隔离；
   AI 模型、Hook、OneBot、Keychain 与语音模型等本机能力共享。
   详见 [`docs/accounts.md`](docs/accounts.md)。
-- **朋友圈（Moments）**：只读时间线、评论 / 点赞展示与图片查看；支持在 App 内发表评论与回复（4.2.0.17 真机验证：
-  首次需在微信里手动评论一次以捕获真实请求模板与句柄；回复协议仍待真机），以及写开关下的自动发布文字动态。
-  **AI 自动互动**：可对「互动名单」好友的新动态自动评论、回复自己动态下的评论、回复别人对自己评论的回复；
-  自动互动前可用识图模型理解图片内容；支持频率/时效/单帖上限（每日互动与单帖回复可设为无上限）、
-  演练模式（只生成记录，不发送、不写计数与记忆）、黑名单硬门槛与「最近互动」核对；
-  开启后统一捕获弹窗会提示手动评论一次以捕获评论句柄。
-  **朋友圈记忆**：读到的好友动态会写入其对应记忆卡（来源「朋友圈」，可关闭），聊天与自动互动可召回。
-  功能与写操作默认关；CmdBuf 信封解码已修复（cmd45 新动态正常；4.2.0.17 的好友回复实测为 Type=11、无正文，
-  bridge 只发轻量 `sns_comment_hint`，App 收到后仅静默刷新一次 timeline（不显示提示、不展示正文、不做未读）；
-  hint 本身不能直接自动回复，但 sns.db 只读补全已真机端到端验证（正文可读；32 位 comment_id=35 经手动抓包
-  确认可作 reply_comment_id；P7 自动回复生成 c131、页面 5 条评论闭环）。Mac UI 不触发 0xd2；
-  边界：仅 4.2.0.17、依赖 sns key 缓存、其它 schema 可能不同）。
-  仅 4.2.0.12 / 4.2.0.17 的版本 JSON 含 SNS 锚点。
+- **朋友圈（Moments）**：浏览时间线、评论 / 点赞与图片；可在 App 内评论 / 回复，支持 AI 自动互动
+  与按计划发布文字动态，并可选把好友动态写入记忆。功能与写操作默认关闭，仅 4.2.0.12 / 4.2.0.17 可用。
   详见 [`docs/sns.md`](docs/sns.md)。
 - **自动化与风控**：拟人化延迟、定时消息、防睡眠、实时会话看板与运行日志。
 - **原生体验**：菜单栏常驻，左键开合状态面板；中 / 英双语、原生 SwiftUI，无 WebView / Electron。
@@ -187,27 +176,9 @@ OneBot 桥接为上游项目的 GPL-3.0 衍生，改动清单见 [`bridge/NOTICE
 - **Multi-account isolation**: chats, memory, conversation settings, personas and schedules follow the current
   WeChat account; AI models, hook, OneBot, Keychain and TTS models stay shared.
   See [`docs/accounts.md`](docs/accounts.md).
-- **Moments**: read-only timeline, comments/likes
-  display and image viewing; in-app comments are real-device verified on 4.2.0.17 (comment once in WeChat
-  first to capture the real request template and handle; reply semantics still pending), plus
-  automatic text publishing behind the write switch (off by default, failures never faked).
-  **AI auto-engagement**: comments on new posts from the interaction list, replies to comments on
-  your own posts and to replies on your comments; optional vision understanding, frequency/age/
-  per-post limits (daily interactions and per-post replies can be unlimited), dry-run mode
-  (records only; no send, counters or memory), blacklist hard gate and a recent-activity sheet;
-  enabling it adds a "comment or like once" item to the unified capture sheet. **Moments memory**:
-  posts from friends are written to their memory cards (source Moments, can be disabled) and can
-  be recalled by chats and auto-engagement. Features and writes are off by default; sync event
-  decoding unwraps the CmdBuf envelope (cmd45 new posts work; on 4.2.0.17 a friend reply to the
-  bot arrives as a body-less Type=11 action, so the bridge only emits a lightweight `sns_comment_hint`;
-  the app only refreshes the timeline silently (no notice, no body, no unread count); the hint itself
-  cannot auto-reply, but the read-only sns.db completion is verified end-to-end on device (body readable;
-  the 32-bit comment_id=35 is confirmed as reply_comment_id by a manual capture; P7 auto-generated c131 and
-  the page shows 5 comments). The Mac UI never triggers 0xd2; limits: 4.2.0.17 only, sns key cache required,
-  other schemas may differ;
-  `reply_to_user_id` and sync merging are unit-tested). Only the
-  4.2.0.12 / 4.2.0.17 version JSONs carry SNS anchors.
-  See [`docs/sns.md`](docs/sns.md).
+- **Moments**: browse the timeline, comments/likes and images; comment or reply in-app, with optional
+  AI auto-engagement, scheduled text posts and friends' posts written into memory. Off by default;
+  available on 4.2.0.12 / 4.2.0.17. See [`docs/sns.md`](docs/sns.md).
 - **Automation & safety**: human-like delay, scheduled messages, sleep prevention,
   live conversation board and runtime logs.
 - **Native experience**: menu-bar app with a left-click status panel, Chinese/English UI,
