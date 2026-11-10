@@ -62,9 +62,6 @@ memory, voice and image understanding.
 | 4.1.15.55 (270135) | ✅ 文本收发（R3） |
 | 4.1.12.53 (269365) | ✅ 文本收发（legacy） |
 
-> 4.2.0.17 已知风险：关闭 R3（`enableSend=false`，legacy StartTask 路径）时曾观察到 1 次微信崩溃
-> （发送后立即发生），后续 4 次以上捕获未复现；默认 R3 模式稳定，建议保持开启。
-
 语音发送与部分媒体能力在部分版本上尚未复测，差异见 [`docs/install.md`](docs/install.md)。
 
 环境：Apple Silicon、macOS 26+；微信须为上述版本之一，位于 `/Applications/WeChat.app` 且当前用户可写

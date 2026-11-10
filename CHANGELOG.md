@@ -75,9 +75,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
   Gadget + ad-hoc 重签（保留 sandbox entitlements）；模块基址与版本地址表解析通过；Message finalizer
   入站（群聊文本、type=49 appmsg、自身消息）字段正确；R3 classA/service vptr、slot13 捕获、newsendmsg
   closure 克隆与 seed 持久化通过；R3 文本发送到文件传输助手（slot13 返回 0、worker result=1）；
-  通讯录 29 人 / 1 群；R3 模式下连续运行数分钟稳定。**已知风险**：关闭 R3（`enableSend=false`，
-  legacy StartTask 路径）时曾出现 1 次微信崩溃（发送后立即发生），后续 4 次以上捕获未复现；
-  默认 R3 模式稳定。语音发送、图片获取下载与群聊 @ 未复测。
+  通讯录 29 人 / 1 群；R3 模式下连续运行数分钟稳定。语音发送、图片获取下载与群聊 @ 未复测。
 
 ### 变更
 

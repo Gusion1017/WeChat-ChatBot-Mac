@@ -23,8 +23,6 @@
 > （保留 sandbox entitlements）；模块基址与版本地址表解析通过；Message finalizer 入站（群聊文本、type=49 appmsg、
 > 自身消息）字段正常；R3 classA/service vptr、slot13 捕获、newsendmsg closure seed 均通过；R3 文本发送到
 > 文件传输助手（slot13 返回 0、worker result=1）；通讯录读取正常（联系人 / 群聊）；R3 模式下连续运行数分钟稳定。
-> 已知风险：关闭 R3（仓库 JSON `enableSend=false`，legacy StartTask 路径）时曾出现 1 次微信崩溃（发送后立即发生），
-> 后续 4 次以上捕获未复现；默认 R3 模式稳定，建议保持开启。
 > 4.2.0.12 / 4.2.0.9 / 4.2.0.5 已完成真机验证（注入、入站消息、通讯录与 R3 文本发送）。
 > 语音发送、图片获取与群聊 @ 未在 4.2.0.17 逐一复测，历史记录见 `CHANGELOG.md`。
 >
