@@ -1,13 +1,13 @@
-# 微信 AI 助手（WeChat AI）
+# 微信 AI 聊天机器人（WeChat AI）
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-lightgrey.svg)](#简体中文)
 [![Swift](https://img.shields.io/badge/Swift-6.4-orange.svg)](app/Package.swift)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](bridge/go.mod)
 
-macOS 原生微信 AI 助手：接入 DeepSeek / OpenAI，支持拟人化回复、长期记忆、语音与识图。
+macOS 原生微信 AI 聊天机器人：接入 DeepSeek / OpenAI，支持拟人化回复、长期记忆、语音与识图。
 
-A native macOS WeChat AI assistant with DeepSeek / OpenAI: human-like replies, long-term
+A native macOS WeChat AI chatbot with DeepSeek / OpenAI: human-like replies, long-term
 memory, voice and image understanding.
 
 > GPL-3.0 · 个人自用 / 学习研究 · 改微信有签名失效与账号风险 · 与腾讯、Apple 无关联
