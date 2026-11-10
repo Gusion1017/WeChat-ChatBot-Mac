@@ -676,8 +676,8 @@ id != active 或 active == _unassigned
 - **sns.db 评论补全（P1）**：`/sns/timeline` 返回前由 bridge 按 signed `feed_id=uint64-2^64` 查
   `SnsMessage_tmp3`，把 DB 评论补到原生评论后（原生优先/只补缺/count max/truncated 重算，失败静默）；
   `snsEnable=true` 时默认启用，`snsDbRead=true` 支持仅 DB 模式，`snsProbe=true` 可调探针。App 无额外调用；
-  DB 32 位 `comment_id`（4.2.0.17 真机 35）已手动抓包确认可作 `reply_comment_id`，JSON 带
-  `comment_id_confirmed`；P7 自动回复已真机生成 c131。`comment_id_unconfirmed` 只留旧 schema/回退。
+  DB 32 位 `comment_id`（4.2.0.17 真机实测）已手动抓包确认可作 `reply_comment_id`，JSON 带
+  `comment_id_confirmed`；P7 自动回复已真机生成 c<id3>。`comment_id_unconfirmed` 只留旧 schema/回退。
 - **评论 / 回复（P4，v3.6）**：`SnsClient.comment` → `POST /sns/comment`（固定 `confirm:true`）；
   `MomentsStore.submitComment` 校验功能/写开关/1000 字/`comment_ready` 后发送，成功把回包合并进列表与
   当前详情（`comment_id` / `comment` 存在时用服务端结果，否则本地回显 `local-` 前缀并等待下次详情刷新），
@@ -704,8 +704,8 @@ id != active 或 active == _unassigned
   （native refresh，已合并 sync 评论）→ `SnsInteractionPlanner` 选候选（评论名单好友新动态 / 回复自己动态下
   的评论 / 回复别人对自己评论的回复；聊天黑名单硬门槛、可放宽回复范围为所有好友）。「回复我的评论」
   同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，避免 native 回包缺少父评论时漏判；**4.2.0.17
-  Type=11 hint 本身无正文、不直接进入候选；sns.db 只读补全把正文补进 timeline，32 位 comment_id=35 已确认
-  可作 reply_comment_id，P7 自动回复已生成 c131、页面闭环（Mac UI 不触发 0xd2）**。
+  Type=11 hint 本身无正文、不直接进入候选；sns.db 只读补全把正文补进 timeline，32 位 comment_id=<id> 已确认
+  可作 reply_comment_id，P7 自动回复已生成 c<id3>、页面闭环（Mac UI 不触发 0xd2）**。
   → `SnsMomentVision`（整组图片一次分析，失败回退逐张，覆盖全部图片）+ 会话人格/旧 memories → AI 正文 → `SnsClient.comment`。
   `SnsInteractionLedger` 按账号持久化已处理键、自己的评论 ID、每天次数/最近时间/单帖回复数/启用时间，
   失败 10 分钟退避、最多 3 次；只在提交成功后计数。**启用时间跨 App/机器人重启保留**（不再启动重置）：
@@ -862,7 +862,7 @@ Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Ke
   会回包成功但目标好友看不到），修正后仍需用好友账号做一次真机确认；公共可见性契约见 [sns.md](sns.md) §0/§4.6。
   `/sns/sync` 的 CmdBuf 外层信封已按真机样本（2026-11-09）解码：cmd45 正常，cmd46 仅 Type 1/2/3 可解，
   评论并入缓存并由 timeline 合并；**好友回复机器人评论实测为 Type=11、无正文，hint 本身只触发静默刷新；
-  正文由 sns.db 只读补全，32 位 comment_id=35 已确认可作 reply_comment_id，P7 自动回复已生成 c131、
+  正文由 sns.db 只读补全，32 位 comment_id=<id> 已确认可作 reply_comment_id，P7 自动回复已生成 c<id3>、
   页面闭环（Mac UI 不触发 0xd2；仅 4.2.0.17/依赖 key 缓存）**。WS 推送仍未实现，
   主动同步触发时机仍受微信影响，App 另有时间线 diff 兜底。
   其它版本/`ReferAction` 组合与 like/objectop 仍待真机。详见 [sns.md](sns.md) §0、§8。

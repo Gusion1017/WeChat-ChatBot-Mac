@@ -666,7 +666,7 @@ hook/script.js（微信进程）
 - **当前真机状态（2026-11-09，4.2.0.17）**：**sns.db schema/评论读取已真机验证**；首次冷启动若
   `db-keys.json` 无 sns key，会返回 `sns_db_key_missing`（`key_status` 见上），需用户在微信
   **打开一次朋友圈**触发 sns.db 的 CCCrypt 后重试。key 捕获后跨 bridge 重启回灌。
-- **comment_id 确认标记**：4.2.0.17 的 `SnsMessage_tmp3.comment_id`（32 位，真机 35）已通过手动回复抓包
+- **comment_id 确认标记**：4.2.0.17 的 `SnsMessage_tmp3.comment_id`（32 位，真机实测）已通过手动回复抓包
   确认可作 `reply_comment_id`（请求 `ReplyCommentID=<id>`、`ReplyCommentID2=0`，服务端生成 c<id1>）；
   `comment64_id` 有效时也视为 confirmed。DB 评论 JSON 带 `comment_id_confirmed:true` 与 `source:"db"`；
   `comment_id_unconfirmed` 仅保留给旧 schema/回退，不用于 4.2.0.17 的 `SnsMessage_tmp3`。App 对原生评论
@@ -698,7 +698,7 @@ hook/script.js（微信进程）
 - 时间线返回的 `comments` 可能被截断（`comments_truncated:true`）；展开时调用 `/sns/detail` 尝试补齐
   （当前主动路径未打通，实际回退时间线缓存，见 §4.3）。
 - `comment_id` 优先 64 位字段；`comment64_id` 有效时视为服务端语义（confirmed）。
-- DB 补全的 32 位列（4.2.0.17 真机 35）已手动抓包确认可作 `reply_comment_id`，JSON 带
+- DB 补全的 32 位列（4.2.0.17 真机实测）已手动抓包确认可作 `reply_comment_id`，JSON 带
   `comment_id_confirmed:true` 与 `source:"db"`；`comment_id_unconfirmed` 只保留给旧 schema/回退。
   App 原生评论直接信任服务端 ID，DB 评论仅 confirmed 可自动/手动回复；两列都为 0 时 `comment_id` 为空且不加标记。
 - 回复评论额外带 `reply_to`（被回复评论 ID）、`reply_to_user_id`（被回复者 user id，可能为 wxid）

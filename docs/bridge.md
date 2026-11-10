@@ -317,14 +317,14 @@ Content-Type: application/json
 | POST | `/sns/detail` | 单条详情；主动补齐不可用（Mac UI 不触发 0xd2 objectdetail，路线已放弃），请求失败后回退时间线缓存（`source=cache`，见 sns.md §4.3/§8）；sns.db 只读评论补全已真机端到端验证（正文 + P7 自动回复） |
 | POST | `/sns/media` | 图片下载到当前账号 `sns-media/`，返回 `file://` 路径（复用已解密文件时顶层返回 `cached=true`）；时间线注册 raw media（url/key/token）+ ISAAC-64 解密，同参数复用已解密文件，网络错误/5xx 重试一次 |
 | POST | `/sns/sync` | 增量同步；返回 `events` / `commands` / `cursor`。`CmdBuf` 先剥外层信封 `{1: len, 2: payload}`：cmd45（SnsObject）正常解为新动态；cmd46（SnsActionGroup）的 Type 1/2/3 解为点赞/评论，**Type=11 只产 `sns_comment_hint`**（无正文，不写缓存；hint 本身不能直接自动回复）。Mac UI 不触发 0xd2，回复正文由 sns.db 只读补全，32 位 comment_id 已确认可作 reply_comment_id；其余未知命令计入 `unsupported_cmd_count` |
-| POST | `/sns/db/schema` | sns.db 只读 schema 探针（仅 `snsProbe=true` 或版本 JSON `snsDbRead=true`）；返回脱敏 `tables`/`page_count`/`key_source`/`decrypt_ms`/`wal_applied`，不返回 key/内容；解密切到容器 tmp、查完删除。冷启动无 key 时 `sns_db_key_missing`（打开朋友圈触发 CCCrypt 后回灌）；timeline 补全在 `snsEnable=true` 时自动启用，`snsDbRead=true` 支持仅 DB 模式；真机已端到端验证（读到回复正文，P7 自动回复 c131、页面 5 条评论闭环；仅 4.2.0.17） |
+| POST | `/sns/db/schema` | sns.db 只读 schema 探针（仅 `snsProbe=true` 或版本 JSON `snsDbRead=true`）；返回脱敏 `tables`/`page_count`/`key_source`/`decrypt_ms`/`wal_applied`，不返回 key/内容；解密切到容器 tmp、查完删除。冷启动无 key 时 `sns_db_key_missing`（打开朋友圈触发 CCCrypt 后回灌）；timeline 补全在 `snsEnable=true` 时自动启用，`snsDbRead=true` 支持仅 DB 模式；真机已端到端验证（读到回复正文，P7 自动回复 c<id3>、页面评论闭环；仅 4.2.0.17） |
 | POST | `/sns/db/comments` | 仅 `snsProbe=true` 的调试卷；请求 `{"post_ids":["<uint64>"]}`（1–50），返回 `comments{post_id:[snsCommentJSON]}`；不返回 key/原始行。timeline 自动补全不依赖该端点 |
 | POST | `/sns/post`、`/sns/comment`、`/sns/like`、`/sns/objectop` | 写接口：写开关默认关时 404。post 文字发布（partial/public 联调）已真机验证；comment 为 App 评论/回复入口（`confirm:true`，需 0xD5 句柄，缺失时 503 `sns_comment_unavailable`），回包与写前缓存合并并尽力返回 `comment_id`；like/objectop 只有接口与用例，App 暂不调用（hook 任务表未配置 0xDA objectop 锚点，取消赞/删除类请求当前返回 503 `sns_channel_unconfigured`） |
 
 - 所有 `/sns/*` 仅支持 POST、要求 Bearer token；功能关闭时 404，未授权 401，微信未就绪映射
   503、回包/发送失败 502、超时 504（响应统一 `{"status":"failed","code":...,"error":"..."}`）。
 - **DB 补全评论字段**：`comment` 可带可选 `comment_id_confirmed:true` 与 `source:"db"`；4.2.0.17 的
-  `SnsMessage_tmp3.comment_id`（32 位，真机 35）已手动抓包确认可作 `/sns/comment` 的 `reply_comment_id`，
+  `SnsMessage_tmp3.comment_id`（32 位，真机实测）已手动抓包确认可作 `/sns/comment` 的 `reply_comment_id`，
   `comment64_id` 有效时也 confirmed。`comment_id_unconfirmed` 只保留给旧 schema/回退；两列均为 0 时
   comment_id 为空。原生评论直接信任服务端 ID（短数字 3/35/67/99/131 正常）。
 - **评论/点赞句柄**：hook 的 slot13 捕获覆盖 0xD3/0xD6/0xD1/0xD5；首次评论前需用户在微信里手动点一次
@@ -355,7 +355,7 @@ Content-Type: application/json
 - **sns.db 只读补全**：`sns_db_schema_test.go` 覆盖 schema 探针 404/Bearer/keys 剥离/key_missing；
   `sns_db_comments_test.go` 覆盖 signed `feed_id`、`SnsMessage_tmp3` 行映射、timeline 合并（原生优先/只补缺/
   count/truncated）、DB 不可用静默降级、同一 32 位 `comment_id` 的多条正文保留；`/sns/db/comments` 仅 `snsProbe`。
-  真机已端到端验证：读到两条回复正文，P7 自动回复 c131（reply_to=99、reply_to_user_id=A）、页面 5 条评论；边界仅 4.2.0.17/依赖 key 缓存。
+  真机已端到端验证：读到两条回复正文，P7 自动回复 c<id3>（reply_to=<id>、reply_to_user_id=<uid>）、页面评论；边界仅 4.2.0.17/依赖 key 缓存。
 - **无 Gadget**：`-gadget_addr` 指向无监听端口时，进程约 0.07 秒内 `exit 1`，打印
   `FATAL ... 附加失败`，不挂起、不开端口、不重试（退出前会先创建 `./log/macos.log`）。
   因为 HTTP 监听在 Gadget attach 成功之后才启动，无 Gadget 时无法对真实进程测 401。
@@ -435,7 +435,7 @@ Content-Type: application/json
 17. **朋友圈同步（CmdBuf 信封已解码，回复仍受限）**：`/sns/sync` 先剥 `CmdBuf` 外层信封再解码；cmd45 正常，
     cmd46 的 Type 1/2/3 产生点赞/评论事件，评论并入缓存并由 timeline 合并。真机样本（2026-11-09）同时确认
     **好友回复机器人评论为 Type=11、无 Content/CommentID，hint 本身只触发静默刷新，不能直接自动回复**；
-    正文由 sns.db 只读补全，32 位 comment_id=35 已确认可作 reply_comment_id，P7 自动回复已生成 c131、
+    正文由 sns.db 只读补全，32 位 comment_id=<id> 已确认可作 reply_comment_id，P7 自动回复已生成 c<id3>、
     页面闭环。边界：仅 4.2.0.17、依赖 sns key 缓存、其它 schema 可能不同。`bridge/sns_sync_envelope_test.go` 覆盖信封/Type 1-3/合并/去重；主动同步
     已实现请求体重放（首次用捕获体、之后替换 KeyBuf），是否稳定触发 0xd6 仍受微信时机影响。WS 推送未实现，
     App 另有时间线 diff 的 `source=fallback` 兜底，不做界面自动化。

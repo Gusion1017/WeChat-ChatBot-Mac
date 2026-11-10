@@ -22,7 +22,7 @@ func TestSNSDbSignedFeedID(t *testing.T) {
 		{"42", "42", true},
 		{"9223372036854775807", "9223372036854775807", true},
 		{"9223372036854775808", "-9223372036854775808", true},
-		{"15051131911065449117", "-3395612162644102499", true},
+		{"15040000000000000001", "-3406744073709551615", true},
 		{"18446744073709551615", "-1", true},
 		{"", "", false},
 		{"abc", "", false},
@@ -123,7 +123,7 @@ func TestSNSTimelineMergesDbComments(t *testing.T) {
 		config.ImagePath = oldImagePath
 	})
 
-	obj := snsTestObject(15051131911065449117, "post")
+	obj := snsTestObject(15040000000000000001, "post")
 	// 原生 count=3、列表只带 1 条：补入 DB 回复后应仍 truncated=true。
 	obj.CommentCount = 3
 	obj.CommentUserList = []SNSCommentInfo{{
@@ -156,7 +156,7 @@ func TestSNSTimelineMergesDbComments(t *testing.T) {
 			"ok":    true,
 			"count": 1,
 			"rows": []map[string]any{{
-				"feed_id":        "-3395612162644102499",
+				"feed_id":        "-3406744073709551615",
 				"content":        "回复正文",
 				"from_username":  "wxid_friend",
 				"from_nickname":  "好友",
@@ -199,7 +199,7 @@ func TestSNSTimelineMergesDbComments(t *testing.T) {
 	if snsJSONNumber(p0["comment_count"]) != 3 || p0["comments_truncated"] != true {
 		t.Fatalf("count/truncated 错误: count=%v truncated=%v", p0["comment_count"], p0["comments_truncated"])
 	}
-	if len(gotIDs) != 1 || gotIDs[0] != "-3395612162644102499" {
+	if len(gotIDs) != 1 || gotIDs[0] != "-3406744073709551615" {
 		t.Fatalf("batch feed_id 错误: %v", gotIDs)
 	}
 
