@@ -26,7 +26,7 @@ struct PersonasView: View {
                     EmptyState(
                         symbol: "person.crop.circle",
                         title: "还没有人格",
-                        message: "人格决定 AI 的系统提示词与模型覆盖，可被会话引用。",
+                        message: "人格保存系统提示词与可选模型覆盖，可在会话中选用。",
                         actionTitle: "创建第一个人格"
                     ) {
                         addPersona()
@@ -52,13 +52,7 @@ struct PersonasView: View {
             InlineNotice(
                 kind: .info,
                 title: "人格如何生效",
-                message: "优先级：会话单独设置 > 机器人默认人格 > 全局默认。人格的系统提示词会直接发送给模型。"
-            )
-
-            InlineNotice(
-                kind: .info,
-                title: "人格是模板",
-                message: "人格设定是每个会话唯一的人设来源；修改后立即对所有使用该人格的会话生效，记忆页不再复制人设卡。"
+                message: "会话单独设置优先，未设置时使用默认人格。修改人格会立即影响所有使用它的会话。"
             )
         }
         .sheet(item: $editingPersona) { persona in
@@ -79,7 +73,7 @@ struct PersonasView: View {
             }
             Button(L("取消"), role: .cancel) { pendingDelete = nil }
         } message: { _ in
-            Text(L("使用该人格的会话会自动回退到默认人格。"))
+            Text(L("使用该人格的会话会回退到默认人格；若删除的是默认人格，会自动改用第一个人格。"))
         }
     }
 
@@ -114,10 +108,10 @@ struct PersonasView: View {
     private func save(_ persona: Persona) {
         if let index = store.personas.firstIndex(where: { $0.id == persona.id }) {
             store.personas[index] = persona
-            toast.show("人格已保存", tone: .success)
+            toast.show(L("人格已保存"), tone: .success)
         } else {
             store.personas.append(persona)
-            toast.show("人格已添加", tone: .success)
+            toast.show(L("人格已添加"), tone: .success)
         }
         if persona.isDefault || store.settings.bot.defaultPersonaID == nil {
             setDefaultSilently(persona)
@@ -149,7 +143,7 @@ struct PersonasView: View {
             }
         }
         store.persist()
-        toast.show("人格已删除", tone: .info, symbol: "trash")
+        toast.show(L("人格已删除"), tone: .info, symbol: "trash")
     }
 }
 
@@ -208,7 +202,7 @@ struct PersonaEditorSheet: View {
 
                     FormField(
                         label: "系统提示词",
-                        hint: "描述角色、语气、禁忌与回答长度。"
+                        hint: "描述人格、语气、禁忌与回答长度。"
                     ) {
                         TextEditor(text: $draft.systemPrompt)
                             .font(.body)
@@ -225,7 +219,7 @@ struct PersonaEditorSheet: View {
 
                     FormField(
                         label: "覆盖模型",
-                        hint: "留空跟随通道；温度在「AI 模型 → 模型温度」中按模型统一配置"
+                        hint: "留空跟随通道；温度在「AI 模型 → 模型温度」中统一配置"
                     ) {
                         TextField(
                             "例如 deepseek-chat",
@@ -252,7 +246,7 @@ struct PersonaEditorSheet: View {
                 Spacer()
                 Button(L("取消")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(isNew ? "添加人格" : "保存") { save() }
+                Button(L(isNew ? "添加人格" : "保存")) { save() }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .keyboardShortcut(.defaultAction)

@@ -25,11 +25,11 @@ GADGET_SRC="${WECHAT_GADGET_SRC:-$ROOT_DIR/hook/gadget/FridaGadget.dylib}"
 CONFIG_SRC="${WECHAT_GADGET_CONFIG:-$ROOT_DIR/hook/gadget/FridaGadget.config}"
 INJECTOR="$ROOT_DIR/tools/inject_load_dylib.py"
 BACKUP_ROOT="${WECHAT_BACKUP_DIR:-$HOME/Library/Application Support/WeChatAI/backups}"
-SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.0.12}"
-SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270348}"
+SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.0.17}"
+SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270353}"
 # 已知可用版本（version:build），首个为默认目标。未显式设置 WECHAT_SUPPORTED_VERSION/BUILD 时，
 # 历史版本仍可安装，避免新增默认版本后旧版向导/Hook 安装被误拒。
-KNOWN_VERSION_PAIRS="4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341 4.1.15.55:270135 4.1.12.53:269365"
+KNOWN_VERSION_PAIRS="4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341 4.1.15.55:270135 4.1.12.53:269365"
 LOAD_PATH="@executable_path/../Frameworks/FridaGadget.dylib"
 
 ACTION="${1:-status}"
@@ -37,9 +37,13 @@ shift || true
 FORCE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --app) APP="$2"; shift 2 ;;
+    --app)
+      [ $# -ge 2 ] || { echo "ERROR: --app needs a path" >&2; exit 2; }
+      APP="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
-    --backup-dir) BACKUP_ROOT="$2"; shift 2 ;;
+    --backup-dir)
+      [ $# -ge 2 ] || { echo "ERROR: --backup-dir needs a directory" >&2; exit 2; }
+      BACKUP_ROOT="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -50,6 +54,18 @@ MAIN_EXE="$APP/Contents/MacOS/WeChat"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 note() { echo "[wechat-hook] $*" >&2; }
+
+# /usr/bin/otool、/usr/bin/python3 都是 xcode-select 的 shim：Command Line Tools
+# 未安装时直接执行会弹系统安装框。先明确报错，避免状态/安装命令「卡住」或在
+# 无工具链的机器上给出难以理解的失败。restore 不依赖 CLT（ditto/codesign 是
+# 系统自带），必须保持可用——它是装坏微信后的唯一恢复路径。
+command_line_tools_available() {
+  /usr/bin/xcrun --find otool >/dev/null 2>&1
+}
+require_command_line_tools() {
+  command_line_tools_available \
+    || die "Command Line Tools not found (otool). Run: xcode-select --install"
+}
 
 bundle_version() {
   /usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' "$PLIST" 2>/dev/null \
@@ -202,6 +218,14 @@ do_install() {
   fi
 
   ensure_backup
+  local backup
+  backup="$(backup_path)"
+  # 修改前确认备份可解压：安装失败时用户只能靠这份备份还原，损坏的备份
+  # 等于没有回滚路径（还原命令也会因预检失败而拒绝动 App）。
+  if [ -x /usr/bin/unzip ]; then
+    /usr/bin/unzip -tq "$backup" >/dev/null 2>&1 \
+      || die "backup archive is corrupt or unreadable; refusing to modify $APP: $backup"
+  fi
 
   local ent
   ent="$(entitlements_path)"
@@ -234,9 +258,13 @@ do_install() {
 
   /usr/bin/codesign --verify --strict "$APP" || die "signature verification failed after install"
   gadget_installed || die "load command injection failed"
-  note "disabling Sparkle automatic update checks (best effort)"
-  /usr/bin/defaults write com.tencent.xinWeChat SUEnableAutomaticChecks -bool false 2>/dev/null || true
-  /usr/bin/defaults write com.tencent.xinWeChat SUAutomaticallyUpdate -bool false 2>/dev/null || true
+  # 只对标准安装路径改微信偏好；用 --app 指向备份副本/测试 bundle 时不应影响
+  # 本机真实微信的更新设置。
+  if [ "$APP" = "/Applications/WeChat.app" ]; then
+    note "disabling Sparkle automatic update checks (best effort)"
+    /usr/bin/defaults write com.tencent.xinWeChat SUEnableAutomaticChecks -bool false 2>/dev/null || true
+    /usr/bin/defaults write com.tencent.xinWeChat SUAutomaticallyUpdate -bool false 2>/dev/null || true
+  fi
 
   note "OK. Launch WeChat, then start the bridge."
   print_status
@@ -250,19 +278,28 @@ do_restore() {
   local backup
   backup="$(backup_path)"
   [ -s "$backup" ] || die "no backup found: $backup"
+  # 先校验备份 zip 可读，再删除现有 App；否则备份损坏时会把唯一可用的微信
+  # 删掉后才失败（还原失败没有回滚路径）。
+  if [ -x /usr/bin/unzip ]; then
+    /usr/bin/unzip -tq "$backup" >/dev/null 2>&1 \
+      || die "backup archive is corrupt or unreadable; refusing to touch $APP: $backup"
+  fi
   note "restoring official WeChat from $backup"
   rm -rf "$APP"
   /usr/bin/ditto -x -k "$backup" "$(dirname "$APP")"
   /usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
   /usr/bin/codesign --verify --strict "$APP" || die "restored app failed signature verification"
   note "restore complete: official signature is back."
-  print_status
+  # 没有 CLT 时不要调用 print_status（otool/python3 会触发系统安装弹窗）。
+  if command_line_tools_available; then
+    print_status
+  fi
 }
 
 case "$ACTION" in
-  status) print_status ;;
+  status) require_command_line_tools; print_status ;;
   backup) do_backup ;;
-  install) do_install ;;
+  install) require_command_line_tools; do_install ;;
   restore) do_restore ;;
   *) die "unknown action: $ACTION (status|backup|install|restore)" ;;
 esac

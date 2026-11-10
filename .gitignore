@@ -63,6 +63,9 @@ r3-seed.json
 # ---------------------------------------------------------------------------
 app/.build
 app/.build-*
+# 根目录误建的构建缓存（如从仓库根直接 swift build）
+/.build
+/.build-*
 app/.swiftpm
 .swiftpm/
 DerivedData/
@@ -71,6 +74,7 @@ DerivedData/
 *.dSYM/
 coverage/
 *.profraw
+*.profdata
 
 # ---------------------------------------------------------------------------
 # 构建产物 / 运行时依赖（由脚本重新生成或下载）
@@ -95,10 +99,18 @@ docs/images/
 # 截图 / 录屏：仓库默认不发布界面或真机截图
 screenshots/
 Screen Shot*.png
+Screenshot*.png
 截屏*.png
+屏幕截图*.png
 *.mov
 *.mp4
+*.mkv
 *.heic
+
+# 微信附件 / 音视频：真机数据，不入库
+*.dat
+*.flac
+*.ogg
 
 # ---------------------------------------------------------------------------
 # Python / 本地环境与密钥
@@ -119,7 +131,12 @@ pyvenv.cfg
 # ---------------------------------------------------------------------------
 *.pem
 *.key
+*.p12
+*.mobileprovision
+id_rsa*
+.netrc
 token.txt
+db-keys.json.old
 voices.json
 prompt.txt
 

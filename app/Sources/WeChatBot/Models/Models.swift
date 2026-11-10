@@ -6,6 +6,7 @@ import SwiftUI
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case conversations
+    case moments
     case bot
     case ai
     case personas
@@ -19,6 +20,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: L("总览")
         case .conversations: L("会话")
+        case .moments: L("朋友圈")
         case .bot: L("机器人")
         case .ai: L("AI 模型")
         case .personas: L("人格设定")
@@ -32,6 +34,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: "rectangle.grid.2x2"
         case .conversations: "bubble.left.and.bubble.right"
+        case .moments: "photo.on.rectangle.angled"
         case .bot: "bolt.horizontal.circle"
         case .ai: "sparkles"
         case .personas: "person.crop.circle.badge.quote"
@@ -42,7 +45,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     }
 
     static var main: [SidebarItem] {
-        [.dashboard, .conversations]
+        [.dashboard, .conversations, .moments]
     }
 
     static var automation: [SidebarItem] {
@@ -857,9 +860,9 @@ enum HookState: String, Codable, Hashable {
         case .installed: L("已安装")
         case .wechatNotRunning: L("微信未运行")
         case .waitingForGadget: L("等待注入")
-        case .bridgeStarting: L("桥接启动中")
+        case .bridgeStarting: L("bridge 启动中")
         case .connected: L("已连接")
-        case .failed: "异常"
+        case .failed: L("异常")
         }
     }
 }
@@ -972,7 +975,7 @@ extension WorkingHours {
     /// 未启用时统一为「不限时段」，启用但没有有效星期时直接说明不会生效。
     var summaryText: String {
         guard enabled else { return L("不限时段") }
-        guard !validWeekdays.isEmpty else { return L("未选择任何星期，不会生效") }
+        guard !validWeekdays.isEmpty else { return L("未选择星期，不会生效") }
         return "\(UIFormat.weekdaySummary(validWeekdays)) \(timeRangeText)"
     }
 
@@ -1126,16 +1129,16 @@ enum VoiceComputeDevice: String, Codable, CaseIterable, Hashable, Identifiable, 
     /// 设置页「运行设备」行的一句说明。
     var shortDescription: String {
         switch self {
-        case .gpu: L("使用 Apple GPU（MLX）合成，速度最快（默认）")
-        case .cpu: L("MLX CPU 后端，短句可能数分钟，仅建议排障或无 GPU 环境使用；合成可能超时并改发文字")
+        case .gpu: L("使用 Apple GPU（MLX）合成，速度最快")
+        case .cpu: L("CPU 极慢，仅建议排障使用")
         }
     }
 
     /// segmented 选择器的悬停说明。
     var help: String {
         switch self {
-        case .gpu: L("默认：MLX 走 Apple GPU，GPU 预热与合成最快")
-        case .cpu: L("MLX CPU 后端，短句可能数分钟，仅建议排障或无 GPU 环境使用；合成可能超时并改发文字")
+        case .gpu: L("默认使用 Apple GPU 加速预热与合成；无 GPU 时才建议改用 CPU")
+        case .cpu: L("CPU 后端短句可能数分钟，且合成可能超时并改发文字")
         }
     }
 
@@ -1375,6 +1378,16 @@ struct BotSettings: Codable, Hashable {
     /// 随账号 `profile.json` 保存；缺键不会影响旧配置解码。
     var memory: MemorySettings?
 
+    /// 朋友圈设置（2026-11-07 起，契约见 docs/sns.md §6.2）。nil 表示旧配置，
+    /// 默认关闭（功能与写操作都关闭、同步间隔 60s、可见性部分可见/仅私聊对象）。
+    var sns: SnsSettings?
+
+    /// 朋友圈设置的读写入口：nil 时返回默认值并收敛同步间隔。
+    var snsSettings: SnsSettings {
+        get { (sns ?? SnsSettings()).sanitized }
+        set { sns = newValue.sanitized }
+    }
+
     /// 记忆设置的读写入口：nil 时返回默认值并收敛范围。
     var memorySettings: MemorySettings {
         get { (memory ?? MemorySettings.default).sanitized }
@@ -1590,6 +1603,7 @@ extension BotSettings {
         case defaultProviderID, defaultPersonaID, pat, wakeWindow, voice, memory
         case imageFetchEnabled, selfMentionNames, whitelistEntries, blacklistEntries
         case whitelistConversations, blacklistConversations, whitelistUsers, blacklistUsers
+        case sns
     }
 
     init(from decoder: Decoder) throws {
@@ -1626,6 +1640,7 @@ extension BotSettings {
         wakeWindow = try? container.decodeIfPresent(WakeWindowSettings.self, forKey: .wakeWindow)
         voice = try? container.decodeIfPresent(VoiceSettings.self, forKey: .voice)
         memory = try? container.decodeIfPresent(MemorySettings.self, forKey: .memory)
+        sns = try? container.decodeIfPresent(SnsSettings.self, forKey: .sns)
         imageFetchEnabled = try? container.decodeIfPresent(Bool.self, forKey: .imageFetchEnabled)
         selfMentionNames = try? container.decodeIfPresent(
             [String: String].self, forKey: .selfMentionNames)

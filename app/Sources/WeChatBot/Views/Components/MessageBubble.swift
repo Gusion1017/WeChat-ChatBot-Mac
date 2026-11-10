@@ -445,13 +445,13 @@ struct MessageBubble: View, Equatable {
 
     private var accessibilityDescription: String {
         var parts: [String] = []
-        parts.append(message.isOutgoing ? "我发送" : "\(message.displaySender) 发送")
+        parts.append(message.isOutgoing ? L("我发送") : Lf("%@ 发送", message.displaySender))
         switch message.kind {
         case .text: parts.append(message.text)
         case .image:
-            parts.append("图片")
+            parts.append(L("图片"))
             if let description = imageDescription {
-                parts.append("识图描述 \(description)")
+                parts.append(Lf("识图描述 %@", description))
             }
         case .voice:
             parts.append(voiceDurationLabel)
@@ -460,14 +460,23 @@ struct MessageBubble: View, Equatable {
             } else if message.voiceTranscriptState == .failed {
                 parts.append(L("转写失败"))
             }
-        case .emoji: parts.append("表情 \(message.text)")
-        case .file: parts.append("文件 \(fileName)")
-        case .video: parts.append("视频")
-        case .link: parts.append("链接 \(message.text)")
+        case .emoji: parts.append(Lf("表情 %@", message.text))
+        case .file: parts.append(Lf("文件 %@", fileName))
+        case .video: parts.append(L("视频"))
+        case .link: parts.append(Lf("链接 %@", message.text))
         case .system: parts.append(message.text)
         }
+        if message.isOutgoing {
+            switch message.status {
+            case .generating: parts.append(L("生成中"))
+            case .pending: parts.append(L("待发送"))
+            case .sent: parts.append(L("已发送"))
+            case .failed: parts.append(L("发送失败"))
+            case .received: break
+            }
+        }
         parts.append(UIFormat.stamp(message.timestamp))
-        return parts.joined(separator: "，")
+        return parts.joined(separator: L10n.listSeparator)
     }
 }
 
@@ -532,6 +541,6 @@ struct DateSeparator: View, Equatable {
             Rectangle().fill(Theme.hairline).frame(height: 1)
         }
         .padding(.vertical, 8)
-        .accessibilityLabel(L("日期 \(UIFormat.stamp(date))"))
+        .accessibilityLabel(Lf("日期 %@", UIFormat.stamp(date)))
     }
 }

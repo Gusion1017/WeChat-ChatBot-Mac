@@ -93,7 +93,7 @@ struct ProviderRow: View {
                     streamPill
                 }
 
-                if let detail = testState.detail {
+                if let detail = testState.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.caption2)
                         .foregroundStyle(testState.isFailure ? Theme.danger : Theme.success)
@@ -115,7 +115,7 @@ struct ProviderRow: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.mini)
-                    .help(provider.enabled ? "停用此通道" : "启用此通道")
+                    .help(L(provider.enabled ? "停用此通道" : "启用此通道"))
                     .accessibilityLabel(Lf("启用 %@", provider.name))
                 }
 
@@ -134,8 +134,14 @@ struct ProviderRow: View {
                     }
                     .buttonStyle(.glass)
                     .disabled(!canDelete)
-                    .help(canDelete ? "删除通道" : "至少保留一个通道")
+                    .help(L(canDelete ? "删除通道" : "至少保留一个通道"))
                     .accessibilityLabel(L("删除通道"))
+                }
+
+                if !canDelete {
+                    Text(L("至少保留一个通道"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
         }

@@ -270,7 +270,7 @@ struct MemoryView: View {
             }
             Button(L("取消"), role: .cancel) {}
         } message: {
-            Text(L("整个角色目录会移到废纸篓（记忆 + 全量记录）。人格设定不受影响；下次机器人回复时会重建空记忆卡。"))
+            Text(L("整个角色目录（记忆与全量记录）会移到废纸篓。人格设定不受影响；下次回复时会重建空记忆卡。"))
         }
         .confirmationDialog(
             "为现有会话创建记忆卡？",
@@ -280,7 +280,7 @@ struct MemoryView: View {
             Button(L("创建记忆卡")) { performCreateMissingCards() }
             Button(L("取消"), role: .cancel) {}
         } message: {
-            Text(L("将为还没有记忆卡的现有微信会话创建记忆卡；建卡后会自动补总结最近一批旧聊天（最多 500 条），更早的历史仍可在各角色中导入旧记忆。"))
+            Text(L("将为还没有记忆卡的现有会话创建记忆卡，并自动补总结最近最多 500 条旧聊天；更早历史可手动导入。"))
         }
     }
 
@@ -303,7 +303,7 @@ struct MemoryView: View {
                     EmptyState(
                         symbol: "person.crop.rectangle.stack",
                         title: "选择一个角色",
-                        message: "从左侧选择会话角色查看记忆；点「全部角色」才会打开聚合视图。",
+                        message: "从左侧选择角色查看记忆卡；「全部角色」为聚合视图。",
                         actionTitle: "查看全部角色"
                     ) {
                         selectCharacter(nil)
@@ -329,6 +329,7 @@ struct MemoryView: View {
                 Text(L("角色"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                HelpTip(text: "机器人随消息自动创建记忆卡；系统会话、公众号和关闭 AI 的会话除外。后台会把聊天内容提取成记忆，首次还会补总结最近一批历史聊天。")
                 Spacer()
                 Text(Lf("%d 个", characters.all.count))
                     .font(.caption2.monospacedDigit())
@@ -353,7 +354,7 @@ struct MemoryView: View {
                         .foregroundStyle(Theme.accent)
                     Text(L("还没有记忆卡"))
                         .font(.caption.weight(.semibold))
-                    Text(L("机器人收到消息后会自动创建（系统会话、公众号、关闭 AI 的会话除外）。"))
+                    Text(L("机器人收到消息后会自动创建；系统会话、公众号和关闭 AI 的会话除外。"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -394,7 +395,7 @@ struct MemoryView: View {
                 counterBadge("star.fill", count: characters.totalImportant, color: Theme.violet)
                 counterBadge("checklist", count: characters.totalTodo, color: Theme.accent)
                 Spacer()
-                Text(Lf("%d 条记忆", characters.totalActive))
+                Text(Lf("%d 条生效记忆", characters.totalActive))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -416,7 +417,7 @@ struct MemoryView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L("全部角色"))
                         .font(.caption.weight(.medium))
-                    Text(Lf("%d 个会话角色 · %d 条记忆",
+                    Text(Lf("%d 个会话角色 · %d 条生效记忆",
                             characters.all.count, characters.totalActive))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -434,7 +435,7 @@ struct MemoryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(L("聚合显示所有角色的记忆；选择具体角色后可查看全量记录与导出"))
+        .help(L("聚合所有角色的记忆；全量记录与导出需先选择具体角色。"))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
@@ -529,7 +530,7 @@ struct MemoryView: View {
 
     /// 左栏第二行：人格名 · 会话类型（标题、类型、人格名与计数都由 CharacterSummary 提供）。
     private func rowSubtitle(_ summary: CharacterSummary) -> String {
-        let persona = summary.personaName.isEmpty ? L("未命名角色") : summary.personaName
+        let persona = summary.personaName.isEmpty ? L("未命名人格") : summary.personaName
         return persona + " · " + summary.kind.label
     }
 
@@ -591,11 +592,14 @@ struct MemoryView: View {
                         }
                     }
 
-                    Text(headerContext(cards))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 3) {
+                        Text(headerContext(cards))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        HelpTip(text: "人格统一在「人格设定」中维护，记忆库只读展示。")
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -654,7 +658,7 @@ struct MemoryView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .help(L("更多：预览注入 / 导入旧记忆 / 为缺失会话创建记忆卡 / 删除记忆卡"))
+                    .help(L("更多操作"))
                 }
                 .fixedSize()
             }
@@ -679,7 +683,7 @@ struct MemoryView: View {
             : cards.title
         let date = cards.summary?.lastUpdated
         let updated = date.map { UIFormat.relativeShort($0, now: cards.now) } ?? "—"
-        return Lf("人设：%@（人格设定）· 更新 %@", name, updated)
+        return Lf("人格：%@ · 更新 %@", name, updated)
     }
 
     private func memoryDisabledNotice(_ cards: MemoryCardSnapshot) -> some View {
@@ -687,7 +691,7 @@ struct MemoryView: View {
             Image(systemName: "pause.circle.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.warning)
-            Text(L("记忆功能已关闭：不提取、不召回；已保存的记忆仍可浏览、编辑和导出。"))
+            Text(L("记忆功能已关闭：不提取、不召回；已保存的记忆仍可查看与导出。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -727,6 +731,12 @@ struct MemoryView: View {
             Text(Lf("显示 %d / %d 条", cards.visible.count, cards.totalLoaded))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+            if cards.isAggregate {
+                Text(L("聚合视图：新增、导出与全量记录需先选择角色"))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 6)
             if store.isLoadingCharacter {
                 ProgressView().controlSize(.small)
@@ -770,7 +780,7 @@ struct MemoryView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help(L("排序方式：综合权重（默认）/ 最近更新 / 重要度"))
+        .help(L("按综合权重、最近更新或重要度排序"))
         .accessibilityLabel(Lf("排序方式：%@", sortMode.label))
     }
 
@@ -809,7 +819,7 @@ struct MemoryView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(L("编辑、置顶或召回都会改变权重锚点；来源与召回次数不会因编辑丢失。"))
+            Text(L("编辑、置顶或召回都会改变权重；来源与召回次数不会因编辑丢失。"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -859,8 +869,8 @@ struct MemoryView: View {
             if cards.isAggregate, cards.characterTitles.isEmpty {
                 EmptyState(
                     symbol: "brain.head.profile",
-                    title: "还没有记忆卡",
-                    message: "机器人收到消息后会自动创建记忆卡（系统会话、公众号、关闭 AI 的会话除外），之后每批维护把聊天内容提取成原子记忆；首次维护还会补总结最近一批历史聊天。",
+                    title: "还没有可聚合的角色",
+                    message: "机器人收到消息后会自动创建记忆卡；也可在「更多」中为现有会话手动创建。",
                     actionTitle: "刷新"
                 ) {
                     refresh()
@@ -929,9 +939,9 @@ struct MemoryView: View {
 
     private func emptyMessage(_ cards: MemoryCardSnapshot) -> String {
         if cards.hasSearch {
-            return L("尝试其它关键词；搜索匹配正文与关键词。也可以点「显示全部」清除筛选。")
+            return L("换一个关键词，或点「显示全部」清除筛选。")
         }
-        return L("切换其它筛选条件，或点「显示全部」回到全部记忆；已归档与已被取代的记忆在对应筛选中查看。")
+        return L("切换其它筛选条件，或点「显示全部」；已归档与已被取代的记忆在对应筛选中。")
     }
 
     // MARK: - Snapshot derivation
@@ -1168,7 +1178,7 @@ struct MemoryView: View {
                     symbol: updated.pinned ? "pin.fill" : "pin.slash"
                 )
             } else {
-                toast.show(L("保存记忆失败，请查看日志"), tone: .error)
+                toast.show(L("保存记忆失败，请重试；详情见运行日志"), tone: .error)
             }
         }
     }
@@ -1185,7 +1195,7 @@ struct MemoryView: View {
                     symbol: updated.archived ? "archivebox" : "tray.and.arrow.up"
                 )
             } else {
-                toast.show(L("保存记忆失败，请查看日志"), tone: .error)
+                toast.show(L("保存记忆失败，请重试；详情见运行日志"), tone: .error)
             }
         }
     }
@@ -1242,7 +1252,7 @@ struct MemoryView: View {
         Task {
             guard let text = await store.exportCharacter(
                 conversationID: conversationID, format: format) else {
-                toast.show(L("导出失败：没有可导出的记忆卡"), tone: .error)
+                toast.show(L("导出失败：没有可导出的记忆卡，请重新选择角色后重试。"), tone: .error)
                 return
             }
             presentSavePanel(text: text, format: format, title: title)
@@ -1483,7 +1493,7 @@ private struct RecallPreviewSheet: View {
             InlineNotice(
                 kind: .info,
                 title: "只读预览",
-                message: "预览不会累加召回次数，也不会修改记忆内容；关闭记忆功能后仍可用于检查。"
+                message: "预览不会累加召回次数或修改记忆；关闭记忆功能后仍可使用。"
             )
 
             HStack(spacing: 8) {

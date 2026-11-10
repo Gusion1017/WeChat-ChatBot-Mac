@@ -2,17 +2,18 @@ import Foundation
 import XCTest
 @testable import WeChatAI
 
-/// 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 R3 产品接入的配置层测试：
+/// 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 R3 产品接入的配置层测试：
 /// - 旧 config.json（无 enableNativeSend）必须能解码且默认开启 R3；
 /// - 两个受支持版本的版本文件都能生成对应的运行期配置，且只覆盖 App 指定的键；
 /// - 4.1.12 及更早版本保持 legacy 发送，不进入 R3 覆盖。
 final class NativeSendConfigTests: XCTestCase {
-    /// R3 发送支持的微信版本（历史 4.1.15.55、4.2.0.5、4.2.0.9 与当前 4.2.0.12）。
+    /// R3 发送支持的微信版本（当前默认目标 4.2.0.17，历史 4.2.0.12、4.2.0.9、4.2.0.5、4.1.15.55）。
     private static let r3Versions: [(version: String, build: String)] = [
-        ("4.1.15.55", "270135"),
-        ("4.2.0.5", "270341"),
+        ("4.2.0.17", "270353"),
+        ("4.2.0.12", "270348"),
         ("4.2.0.9", "270345"),
-        ("4.2.0.12", "270348")
+        ("4.2.0.5", "270341"),
+        ("4.1.15.55", "270135")
     ]
 
     func testNativeSendVersionGateCoversHistoricalAndCurrentVersions() {
@@ -27,8 +28,8 @@ final class NativeSendConfigTests: XCTestCase {
             "版本号命中即可，不依赖 build 字段"
         )
         XCTAssertTrue(
-            NativeSendVersionSupport.supports(version: "4.2.0.12", build: ""),
-            "当前默认目标 4.2.0.12 必须启用 R3 发送"
+            NativeSendVersionSupport.supports(version: "4.2.0.17", build: ""),
+            "当前默认目标 4.2.0.17 必须启用 R3 发送"
         )
         XCTAssertFalse(
             NativeSendVersionSupport.supports(version: "4.1.12.53", build: "269365"),

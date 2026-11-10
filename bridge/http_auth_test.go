@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,4 +190,90 @@ func readBody(t *testing.T, resp *http.Response) string {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(b)
+}
+
+// TestSendHandlerIgnoresSegmentsWithoutData 覆盖 message 数组里的 null / 缺 data 段：
+// 旧实现直接解引用 v.Data 会 panic，handler 被 net/http 中断，客户端拿不到 JSON 错误。
+// 新行为：跳过坏段；没有可发送内容时仍返回 {"status":"ok"}（不启动 worker，不发送）。
+func TestSendHandlerIgnoresSegmentsWithoutData(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	withToken(t, token)
+
+	srv := httptest.NewServer(http.HandlerFunc(sendHandler))
+	defer srv.Close()
+	url := srv.URL + "/send_private_msg"
+
+	bodies := []string{
+		`{"user_id":"wxid_x","message":[null]}`,
+		`{"user_id":"wxid_x","message":[{"type":"text"}]}`,
+		`{"user_id":"wxid_x","message":[{"type":"at"}]}`,
+		`{"user_id":"wxid_x","message":[{"type":"reply"}]}`,
+		`{"user_id":"wxid_x","message":[{"type":"image"}]}`,
+	}
+	for _, body := range bodies {
+		resp := doRequest(t, http.MethodPost, url, "Bearer "+token, body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("body %s: status = %d, want 200", body, resp.StatusCode)
+		}
+		if got := readBody(t, resp); !strings.Contains(got, `"status":"ok"`) {
+			t.Fatalf("body %s: response = %q, want status ok", body, got)
+		}
+	}
+}
+
+// TestListenAndServeReturnsErrorOnBusyPort 覆盖「端口被占用」：main 依赖
+// listenAndServe 返回错误后以非 0 退出，否则 App 会把启动失败当成正常停止。
+func TestListenAndServeReturnsErrorOnBusyPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	if err := listenAndServe(ln.Addr().String()); err == nil {
+		t.Fatal("listenAndServe on busy port returned nil, want error")
+	}
+}
+
+// TestWebSocketSurvivesMalformedSendAction 覆盖 WS 动作参数错误：单条 send_* 解析失败
+// 不应关闭连接（旧行为 return 会让 App 断线、丢事件），后续动作仍可正常回包。
+func TestWebSocketSurvivesMalformedSendAction(t *testing.T) {
+	withToken(t, "")
+	srv := httptest.NewServer(http.HandlerFunc(handleWebSocket))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial %s: %v", wsURL, err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{
+		"action": "send_private_msg",
+		"echo":   "bad-1",
+		"params": map[string]any{"user_id": "wxid_x", "message": 123},
+	}); err != nil {
+		t.Fatalf("write bad action: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"action": "get_login_info",
+		"echo":   "ok-2",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("write follow-up: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read follow-up response (connection closed?): %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", raw, err)
+	}
+	if got["echo"] != "ok-2" {
+		t.Fatalf("echo = %v, want ok-2 (first action should not kill connection)", got["echo"])
+	}
 }

@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # Build the native SwiftUI app and package it as a self-contained .app bundle.
+#
+# 用法：
+#   bash scripts/build_app.sh                         # 构建并打包 dist/WeChat AI.app
+#   SWIFT_DISABLE_SANDBOX=1 bash scripts/build_app.sh # 受限沙箱（CI / Agent）关闭 SwiftPM sandbox
+#
+# 前置：可用的 swift 工具链（Xcode 27 / CLT）与 app/。bridge/onebot、Frida Gadget 或
+# hook/versions 缺失时只打印 WARNING，仍会产出 App（对应运行期功能可能不可用）。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,7 +14,11 @@ APP_NAME="WeChat AI"
 BUNDLE_ID="com.gusionw.wechatai"
 DIST_DIR="$ROOT_DIR/dist"
 BUNDLE="$DIST_DIR/$APP_NAME.app"
-SCRATCH="$ROOT_DIR/app/.build-release"
+SCRATCH="${BUILD_SCRATCH:-$ROOT_DIR/app/.build-release}"
+# 默认目标微信版本。仓库里必须带对应的 Hook 版本 JSON，否则 App 对当前微信
+# 会显示「Hook 版本文件未就绪」，无法安装/启动 Hook（发布包尤其不能缺）。
+DEFAULT_HOOK_VERSION="4.2.0.17"
+DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_0_17_mac.json"
 
 say() { echo "[build-app] $*" >&2; }
 fail() { echo "[build-app] ERROR: $*" >&2; exit 1; }
@@ -50,6 +61,16 @@ for lang in en zh-Hans; do
     cp "$strings" "$BUNDLE/Contents/Resources/$lang.lproj/Localizable.strings"
   fi
 done
+# InfoPlist.strings（Finder/系统显示名等）按语言复制；SwiftUI 侧可能后续新增语言，
+# 这里用通配符，文件不存在时跳过（显示名回退 Info.plist）。
+for info_strings in "$ROOT_DIR"/app/Packaging/*.lproj/InfoPlist.strings; do
+  [ -f "$info_strings" ] || continue
+  lang="$(basename "$(dirname "$info_strings")")"
+  lang="${lang%.lproj}"
+  [ -n "$lang" ] || continue
+  mkdir -p "$BUNDLE/Contents/Resources/$lang.lproj"
+  cp "$info_strings" "$BUNDLE/Contents/Resources/$lang.lproj/InfoPlist.strings"
+done
 
 # Runtime resources (bridge + hook + installer).
 RES="$BUNDLE/Contents/Resources"
@@ -68,6 +89,10 @@ if [ -f "$ROOT_DIR/hook/script.js" ]; then
 elif [ -f "$ROOT_DIR/bridge/script.js" ]; then
   cp "$ROOT_DIR/bridge/script.js" "$RES/bridge/script.js"
 fi
+if [ ! -f "$DEFAULT_HOOK_JSON" ]; then
+  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_0_17_mac.json"
+  say "WARNING: 该 App 会对 ${DEFAULT_HOOK_VERSION} 显示「Hook 版本文件未就绪」，无法安装/启动 Hook；发布前必须补齐（package_release.sh 会直接失败）。"
+fi
 if compgen -G "$ROOT_DIR/hook/versions/*.json" >/dev/null; then
   cp "$ROOT_DIR"/hook/versions/*.json "$RES/hook/versions/"
 else
@@ -80,7 +105,11 @@ if [ -f "$ROOT_DIR/hook/gadget/FridaGadget.dylib" ]; then
 else
   say "WARNING: FridaGadget.dylib missing; run scripts/fetch_gadget.sh"
 fi
-cp "$ROOT_DIR/hook/gadget/FridaGadget.config" "$RES/hook/gadget/FridaGadget.config"
+if [ -f "$ROOT_DIR/hook/gadget/FridaGadget.config" ]; then
+  cp "$ROOT_DIR/hook/gadget/FridaGadget.config" "$RES/hook/gadget/FridaGadget.config"
+else
+  say "WARNING: FridaGadget.config missing; hook install will be unavailable"
+fi
 cp "$ROOT_DIR/tools/inject_load_dylib.py" "$RES/tools/inject_load_dylib.py"
 cp "$ROOT_DIR/tools/manage_wechat.sh" "$RES/tools/manage_wechat.sh"
 cp "$ROOT_DIR/tools/install_gadget.sh" "$RES/tools/install_gadget.sh"

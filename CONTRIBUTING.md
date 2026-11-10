@@ -14,10 +14,10 @@
 | --- | --- | --- |
 | 硬件 | Apple Silicon（arm64） | Intel Mac 不在支持范围 |
 | macOS | 26 或更高 | `app/Packaging/Info.plist` 中 `LSMinimumSystemVersion = 26.0` |
-| Xcode | 27 | Swift 6.2 工具链；`app/Package.swift` 使用 Swift 5 语言模式 |
+| Xcode | 27（已验证 27.1） | 工具链 Swift 6.4；`app/Package.swift` 的 `swift-tools-version` 为 6.2，使用 Swift 5 语言模式 |
 | Go | 1.25 | 仅构建 bridge 需要；`scripts/build_bridge.sh` 固定使用 Go 1.25.14 |
 | Frida Gadget | 17.8.0 | 用 `bash scripts/fetch_gadget.sh` 下载并校验 SHA256 |
-| 微信 | 4.2.0.12 (270348)、4.2.0.9 (270345)、4.2.0.5 (270341)、4.1.15.55 (270135) 或 4.1.12.53 (269365) | 仅真机验证需要；其他版本未验证 |
+| 微信 | 4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345)、4.2.0.5 (270341)、4.1.15.55 (270135) 或 4.1.12.53 (269365) | 当前源码范围；仅真机验证需要，其他版本未验证。3.1.6 发布包不含 4.2.0.17 与朋友圈 |
 | Python 3 | 可选 | `devtools/` Mock 与 `tools/` 辅助脚本 |
 
 ## 2. 本地构建与测试
@@ -43,7 +43,7 @@ open "$HOME/Applications/WeChat AI.app"
 ```bash
 cd app
 swift build
-swift test                                  # 当前 128 项
+swift test                                  # 全量单测：837 项执行（835 通过 / 2 项按环境跳过 / 0 失败）
 swift test --scratch-path .build-verify     # 并行开发时避免构建锁冲突
 ```
 
@@ -57,6 +57,9 @@ bash scripts/build_bridge.sh
 cd bridge
 go test ./... && gofmt -l .
 ```
+
+当前测试基线：Swift 837 项执行（835 通过 / 2 项按环境跳过 / 0 失败；41 个测试文件）；Go 311 项用例
+（179 顶层 + 132 子测试，0 失败；19 个 `_test.go`）。
 
 提交前跑质量门禁（脚本语法、文档链接、hook/bridge 副本一致性、Swift 测试）：
 
@@ -91,10 +94,13 @@ bash scripts/clean.sh --yes
   必须**先更新文档，再改代码**，并在 PR 中链接对应文档。
 - 新增文档要在 [`docs/README.md`](docs/README.md) 的索引表登记；相对链接需通过
   `python3 scripts/check_docs.py`。
-- **截图不入库**：仓库不包含界面 / 真机截图（`docs/images/` 已被 gitignore）。本地留存请放
-  `_research/`，不要提交；如确需随文档发布，先开 issue 讨论脱敏与体积问题。
+- **改用户可见文案前先读 [`docs/copy-style.md`](docs/copy-style.md)**：术语表、句式、`HelpTip` 问号提示
+  与 `en.lproj` 本地化要求；改中文源串必须同步补英文翻译。
+- **截图不入库**：仓库不包含界面 / 真机截图（`docs/images/` 已被 gitignore）。本地留存请放仓库外的
+  本机归档区，不要提交；如确需随文档发布，先开 issue 讨论脱敏与体积问题。
 - Hook 适配结论必须注明微信版本、验证日期与验证方式；未在真机验证的地址不要标记为“可用”。
-  **具体地址、结构偏移、密钥派生与发送任务构造不写入公开文档**（见 [`docs/architecture.md`](docs/architecture.md) 的安全边界）。
+  **具体地址、结构偏移、密钥派生与发送任务构造不写入公开文档**（见 [`SECURITY.md`](SECURITY.md)
+  「安全边界」与 [`docs/README.md`](docs/README.md)「安全披露边界」）。
 - 接口契约以 [`docs/architecture.md`](docs/architecture.md) 为准；模块细节见
   [`core-services.md`](docs/core-services.md)、[`bridge.md`](docs/bridge.md)。
 
@@ -114,15 +120,15 @@ bash scripts/clean.sh --yes
 ## 5. 代码风格
 
 - **Swift**：4 空格缩进；保持现有 Swift 5 语言模式；UI 遵循 [`docs/ui-design.md`](docs/ui-design.md)
-  的设计 token 与组件边界；新增并发代码注意 `@MainActor` / `Sendable` 约束；不引入 WebView / Electron
-  类重依赖。
+  的设计 token 与组件边界，文案遵循 [`docs/copy-style.md`](docs/copy-style.md)；新增并发代码注意
+  `@MainActor` / `Sendable` 约束；不引入 WebView / Electron 类重依赖。
 - **Go**：以 `gofmt` 为准；提交前跑 `go vet` / `go test`；新增 HTTP 接口必须保持
   `127.0.0.1` 绑定与 Bearer 鉴权。
 - **Frida JS**：`hook/script.js` 是唯一事实来源；`bridge/script.js` 是 bridge 运行时从当前目录
   读取的副本，修改后必须运行 `bash scripts/sync_hook_script.sh`（`--check` 校验一致性），
   App 打包时也优先使用 `hook/script.js`。改动需注明目标微信版本并附真机日志。
-- **Shell**：`bash` + `set -euo pipefail`；脚本需可重复执行；删除类操作默认 dry-run，
-  必须显式 `--yes` 才执行。
+- **Shell**：`bash` + `set -euo pipefail`（`check.sh` 等聚合脚本用 `set -uo pipefail` 汇总失败）；
+  脚本需可重复执行；删除类操作默认 dry-run，必须显式 `--yes` 才执行。
 - **Markdown**：中文、相对链接、表格优先；不要插入含真实隐私信息的截图。
 
 ## 6. 禁止入库清单
@@ -134,7 +140,7 @@ bash scripts/clean.sh --yes
 - 运行时依赖：`hook/gadget/FridaGadget.dylib`（用 `scripts/fetch_gadget.sh` 重新下载）
 - 数据与归档：`*.sqlite` / `*.sqlite-shm` / `*.sqlite-wal`、`*.zip` / `*.dmg`、`*.dSYM/`、
   `DerivedData/`、`*.xcarchive` / `*.xcresult`
-- 本地研究证据：`_research/`、`_research/archive/`、`/versions/`
+- 本地研究证据（已移到仓库外本机归档）：`_local/`、`_research/`（含 `archive/`）、根目录 `versions/`
 - 密钥与凭据：`.env`、API Key、OneBot token 导出、Cookie、证书、登录二维码截图
 - 真实微信数据：聊天记录备份、数据库文件、导出文件、界面截图
 

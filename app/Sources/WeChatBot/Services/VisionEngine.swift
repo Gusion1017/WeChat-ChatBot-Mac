@@ -108,9 +108,16 @@ enum VisionSupport {
 
     /// 构造一次视觉请求：单条 user 消息 = 提示词 + 图片 data URL。
     static func requestMessages(prompt: String, imageDataURL: String) -> [AIMessage] {
+        requestMessages(prompt: prompt, imageDataURLs: [imageDataURL])
+    }
+
+    /// 多图一次请求：朋友圈同一条动态的全部图片放进同一条 user 消息，
+    /// 让视觉模型能把整组图片作为一个整体理解（而不是逐张失去上下文）。
+    static func requestMessages(prompt: String, imageDataURLs: [String]) -> [AIMessage] {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = trimmed.isEmpty ? VisionSettings.defaultPrompt : trimmed
-        return [.user(text, images: [imageDataURL])]
+        guard !imageDataURLs.isEmpty else { return [.user(text)] }
+        return [.user(text, images: imageDataURLs)]
     }
 
     /// 清洗模型返回的描述：折叠空白、去掉包裹引号、限制长度。

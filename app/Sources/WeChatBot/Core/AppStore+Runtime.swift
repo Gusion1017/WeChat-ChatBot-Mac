@@ -95,6 +95,20 @@ final class RuntimeCoordinator {
     let ruleEngine = RuleEngine()
     let chatEngine: ChatEngine
     let scheduler = SchedulerService()
+    /// 朋友圈自动发布调度器（P6）：按设置的时间/频率、针对每个私聊对象生成并发布。
+    private var snsPublishScheduler: SnsPublishScheduler?
+    /// 自动发布调度器当前使用的配置签名：只有影响排程的字段变化时才重建循环。
+    private var snsSchedulerSignature: String?
+    /// 朋友圈 AI 自动互动调度器（评论 / 回复）。
+    private var snsInteractionScheduler: SnsInteractionScheduler?
+    /// 自动互动调度器当前使用的配置签名。
+    private var snsInteractionSchedulerSignature: String?
+    /// 朋友圈图片识别缓存（自动互动生成评论时使用；只驻留内存）。
+    private let snsMomentVision = SnsMomentVision()
+    /// 朋友圈内容写入对应好友记忆卡（纯本机；不发网络请求、不调用 AI）。
+    private let snsMemoryRecorder: SnsMemoryRecorder
+    /// 启动 bridge 时实际下发的朋友圈运行期配置签名；用于提示「改动需重启机器人生效」。
+    private var appliedSNSRuntimeSignature: String?
     /// DeepSeek 余额查询客户端（电量读取是 IOKit 同步调用，不需要长驻对象）。
     let deepSeekBalanceClient = DeepSeekBalanceClient()
 
@@ -120,10 +134,15 @@ final class RuntimeCoordinator {
     private var voiceTranscriptionAttempted: Set<String> = []
     /// 上一次声明的「语音转写总开关」，用于设置关闭时取消未完成的获取请求。
     private var lastVoiceTranscriptionEnabled: Bool?
-    /// 本次 App 会话是否已因句柄缺失自动弹过「捕获发送句柄」引导。
-    private var didAutoPromptVoiceSetup = false
-    /// 运行时启动后等待 hook 就绪的句柄检测任务（bridge 刚启动时 /voice_status 可能暂不可用）。
-    private var voiceSetupWatchTask: Task<Void, Never>?
+    /// 本次机器人运行是否已自动弹过统一「捕获发送句柄」引导。
+    /// 每次 `startRuntime` 重置；用户手动打开只影响本次运行，不会吞掉下一次启动的自动提示。
+    private var didAutoPromptCaptureSetup = false
+    /// 运行时启动后的统一捕获检测任务（等待 bridge 就绪后判定一次）。
+    private var captureSetupWatchTask: Task<Void, Never>?
+    /// 捕获检测任务是否仍在等待：避免 OneBot 连接回调重复启动多个 watch。
+    private var captureSetupWatchRunning = false
+    /// 本次运行是否由 App 下发了 R3 原生发送配置；bridge 未就绪时用于判断是否值得等待文字句柄。
+    private var nativeSendConfiguredForRun = false
     private var memoryMaintenanceInFlight: Set<String> = []
     /// 维护任务运行期间又有新消息：任务结束后补跑一次，避免最后一条消息没同步。
     private var memoryMaintenancePending: Set<String> = []
@@ -135,6 +154,8 @@ final class RuntimeCoordinator {
     private var memoryPartialFlushRequested: Set<String> = []
     /// 启动后补跑一次记忆维护（完成上次运行遗留的历史补总结/待提取）。
     private var memoryStartupCatchUpTask: Task<Void, Never>?
+    /// 演练模式跳过朋友圈记忆写入时只记一条日志，避免每次刷新刷屏。
+    private var didLogDryRunMemorySkip = false
     /// 空闲兜底延迟：群里安静下来之后再总结「没攒够一批」的消息。
     private static let memoryIdleFlushDelay: Duration = .seconds(300)
     /// 停止/切号代际：定时器与启动补跑在挂起返回后据此丢弃过期回调。
@@ -187,6 +208,7 @@ final class RuntimeCoordinator {
         self.hookManager = HookManager(wechatPath: store.settings.hook.wechatPath)
         let engine = MemoryEngine(characters: characterStore, aiClient: aiClient)
         self.memoryEngine = engine
+        self.snsMemoryRecorder = SnsMemoryRecorder(characters: CharacterStore.shared)
         self.chatEngine = ChatEngine(
             memory: memory,
             aiClient: aiClient,
@@ -882,7 +904,7 @@ final class RuntimeCoordinator {
 
     // MARK: Start / stop
 
-    /// 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 使用 R3 原生文本发送（由 App 设置开启）；
+    /// 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 使用 R3 原生文本发送（由 App 设置开启）；
     /// 4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
     /// 首次使用 R3 前需要在本机微信手动发一条消息以捕获发送句柄。
     /// 刷新 bridge `/voice_status`（登录稳定倒计时、文本/语音句柄、CdnManager）。
@@ -905,41 +927,135 @@ final class RuntimeCoordinator {
         }
     }
 
-    /// 运行时启动后检查一次语音发送句柄：已开启语音回复但缺少文本/语音句柄时，
-    /// 自动弹出捕获引导（每个 App 会话最多一次，避免轮询/重启反复打扰）。
-    private func promptVoiceSetupIfNeeded() {
-        guard !didAutoPromptVoiceSetup,
-              store.settings.bot.voiceReplyEnabled,
-              store.voiceRuntimeStatus.needsHandleCapturePromptOnStartup
-        else { return }
-        didAutoPromptVoiceSetup = true
-        store.isVoiceSetupPromptPresented = true
-        log(.info, "Voice", "语音回复已开启，但发送句柄缺失；已弹出捕获引导")
-    }
-
-    /// bridge 刚启动时 hook 可能尚未连接，`/voice_status` 会短暂不可用；
-    /// 这里在后台等待它就绪后再判断一次，避免「启动时检测」因为太早而永远不触发。
-    private func startVoiceSetupWatchIfNeeded() {
-        guard store.settings.bot.voiceReplyEnabled, !didAutoPromptVoiceSetup else { return }
-        voiceSetupWatchTask?.cancel()
-        voiceSetupWatchTask = Task { [weak self] in
-            // 最多约 60 秒（20 × 3s）：微信登录/加载较慢时也能覆盖。
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled, let self else { return }
-                guard self.store.settings.bot.voiceReplyEnabled else { return }
-                await self.refreshVoiceStatus()
-                let status = self.store.voiceRuntimeStatus
-                if status.needsHandleCapturePromptOnStartup {
-                    self.promptVoiceSetupIfNeeded()
-                    return
+    /// 机器人启动后的统一捕获检测：立即检测一次，bridge/hook 未就绪时每 3s 重试，最多约 60s。
+    ///
+    /// 由 `startBot` 在 `isBotRunning = true` 之后调用（每次启动都会重新检测）；检测范围包括
+    /// R3 文字句柄、语音句柄，以及朋友圈 timeline/post 样本。`didAutoPromptCaptureSetup`
+    /// 只保证同一次机器人运行内不重复弹窗；用户手动打开不会吞掉下一次启动的提示。
+    ///
+    /// 朋友圈样本自 v3.3 起会持久化到账号目录，bridge 重启后可恢复；只有真正缺失时
+    /// （微信重启/首次使用/发布样本未捕获）才提示。
+    func startCaptureSetupWatchIfNeeded() {
+        guard !didAutoPromptCaptureSetup, !captureSetupWatchRunning else { return }
+        captureSetupWatchRunning = true
+        captureSetupWatchTask?.cancel()
+        captureSetupWatchTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.captureSetupWatchRunning = false }
+            for attempt in 0..<20 {
+                if attempt > 0 {
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
                 }
-                if status.available {
-                    // hook 已响应：句柄齐全，或 R3/版本不满足（另有状态文案），无需继续等待。
+                switch await self.evaluateCaptureSetupOnStartup() {
+                case .prompt, .done:
                     return
+                case .wait:
+                    continue
                 }
             }
+            self.log(.info, "Runtime", "启动捕获检测结束：60 秒内未拿到可靠的语音/朋友圈就绪状态，跳过自动提示")
         }
+    }
+
+    /// 检测一次启动捕获状态；`.wait` 表示 bridge/hook 尚未就绪，需要继续等待。
+    private func evaluateCaptureSetupOnStartup() async -> CaptureSetupStartupEvaluation {
+        guard !didAutoPromptCaptureSetup else { return .done }
+        // 运行中被停止（切换账号/退出）时不再提示。
+        guard isRuntimeRunning() else { return .done }
+
+        let voiceEnabled = store.settings.bot.voiceReplyEnabled
+        let snsSettings = store.settings.bot.snsSettings
+        let momentsEnabled = snsSettings.enabled
+
+        await refreshVoiceStatus()
+        let voiceStatus = store.voiceRuntimeStatus
+
+        var momentsStatusKnown = false
+        var momentsPrimed = false
+        var momentsWritable = false
+        var commentReady = false
+        if momentsEnabled {
+            store.prepareMoments()
+            // 只信本次请求成功返回的状态：上一次运行留下的 status 不能代表新 bridge 的样本。
+            if let status = await store.moments.fetchPrimingStatusForStartup() {
+                momentsStatusKnown = true
+                momentsPrimed = status.isPrimed
+                momentsWritable = status.writeReady
+                commentReady = status.commentReady
+            }
+        }
+        // 开启「自动互动（评论/回复）」后，评论句柄（0xD5）与读/写样本一样是必需前置；
+        // 演练模式不真正发送，不要求提前捕获。
+        let commentRequired = snsSettings.enabled
+            && snsSettings.writeEnabled
+            && snsSettings.interaction.enabled
+            && snsSettings.interaction.isActive
+            && !store.settings.bot.dryRun
+
+        // bridge 可用时以 `/voice_status.configured` 为准（App 下发 R3 时一定带 r3VoiceSend）；
+        // bridge 尚未就绪时用启动阶段下发的配置推断，决定是否要等文字句柄状态。
+        let nativeSendEnabled = voiceStatus.available
+            ? voiceStatus.configured
+            : (nativeSendConfiguredForRun || voiceStatus.configured)
+
+        let evaluation = CaptureSetupPlan.startupEvaluation(
+            voiceReplyEnabled: voiceEnabled,
+            momentsEnabled: momentsEnabled,
+            nativeSendEnabled: nativeSendEnabled,
+            voiceStatus: voiceStatus,
+            momentsStatusKnown: momentsStatusKnown,
+            momentsPrimed: momentsPrimed,
+            momentsWriteEnabled: snsSettings.writeEnabled,
+            momentsWritable: momentsWritable,
+            commentCaptureRequired: commentRequired,
+            commentReady: commentReady
+        )
+        guard evaluation == .prompt else { return evaluation }
+
+        var reasons: [String] = []
+        if nativeSendEnabled, voiceStatus.available, !voiceStatus.textSeed {
+            reasons.append("文字句柄缺失")
+        }
+        if voiceEnabled, voiceStatus.available, voiceStatus.configured, voiceStatus.voiceSend,
+           !voiceStatus.voiceSeed {
+            reasons.append("语音句柄缺失")
+        }
+        if momentsEnabled, momentsStatusKnown,
+           CaptureSetupPlan.needsMomentsCapturePrompt(
+               momentsEnabled: true,
+               momentsStatusKnown: true,
+               momentsPrimed: momentsPrimed,
+               writeEnabled: snsSettings.writeEnabled,
+               writeReady: momentsWritable
+           ) {
+            reasons.append("朋友圈样本缺失")
+        }
+        if commentRequired, momentsStatusKnown, !commentReady {
+            reasons.append("评论句柄缺失")
+        }
+        // 请求期间机器人可能已被停止/切号：不要在停止后再弹窗。
+        guard !Task.isCancelled, isRuntimeRunning() else { return .done }
+        presentCaptureSetupPrompt(reason: reasons.isEmpty ? "捕获样本缺失" : reasons.joined(separator: "、"))
+        return .done
+    }
+
+    /// 弹出统一捕获弹窗；同一次机器人运行内只提示一次。
+    private func presentCaptureSetupPrompt(reason: String) {
+        guard !didAutoPromptCaptureSetup else { return }
+        didAutoPromptCaptureSetup = true
+        if store.isCaptureSetupPromptPresented {
+            log(.info, "Runtime", "「捕获发送句柄」弹窗已打开（\(reason)），本次运行不再重复提示")
+            return
+        }
+        store.isCaptureSetupPromptPresented = true
+        log(.info, "Runtime", "已弹出「捕获发送句柄」引导（\(reason)）")
+    }
+
+    /// 用户手动打开统一弹窗（语音/朋友圈开关、语音面板「查看步骤…」）同样算本次运行已提示，
+    /// 避免同一次运行内启动检测再弹一次；下次启动会重新检测。
+    func noteCaptureSetupPromptPresented() {
+        didAutoPromptCaptureSetup = true
     }
 
     private func nativeSendConfigOverrides() async -> [String: String] {
@@ -953,7 +1069,11 @@ final class RuntimeCoordinator {
         )
         guard isR3Supported else { return [:] }
         if store.settings.hook.enableNativeSend {
-            log(.info, "Hook", "微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12：启用 R3 原生发送（首次使用前需在本机微信手动发一条消息以捕获发送句柄）")
+            log(.info, "Hook", "微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55：启用 R3 原生发送（首次使用前需在本机微信手动发一条消息以捕获发送句柄）")
+            let snsSettings = store.settings.bot.snsSettings
+            if snsSettings.enabled {
+                log(.info, "SNS", "朋友圈功能已开启（首次使用前需在本机微信打开一次朋友圈以捕获任务句柄）")
+            }
             var overrides = [
                 "enableSend": "true",
                 "req2bufSendMode": "r3",
@@ -963,9 +1083,23 @@ final class RuntimeCoordinator {
                 // 2026-10-26 真机：官方 24k SILK 编码 + 上传/R3 发送已能正常播放。
                 "r3VoiceSend": "true"
             ]
+            // 朋友圈（docs/sns.md §6）：SNS 通道依赖 R3；关闭原生发送时强制关闭。
+            let sns = store.settings.bot.snsSettings
+            let snsReadable = sns.enabled
+            overrides["snsEnable"] = snsReadable ? "true" : "false"
+            overrides["snsWrite"] = (snsReadable && sns.writeEnabled) ? "true" : "false"
+            // v2.7 起主动读取不再依赖「允许发布」：捕获到真实请求体后 timeline 可原生刷新；
+            // 未捕获请求体时 bridge 自动回退被动缓存（不会发无效的最小请求体）。
+            overrides["snsReadMode"] = snsReadable ? "native" : "off"
+            // v2 不再把「可发时段」下发给 bridge：时段由 App 排程器精确执行，bridge 侧若是全局时段，
+            // 会把同一账号的确认草稿发布也一起拦掉（例如自动发布时段 09:00–22:00 时，23:00 确认草稿被 409）。
+            // bridge 只保留全局每日上限与最小间隔兜底（下方两个键）。
+            // bridge 侧是全局兜底（不限单对象）；每个对象的每日上限/最小间隔由 App 调度器执行。
+            overrides["snsPostDailyLimit"] = "50"
+            overrides["snsPostMinIntervalMs"] = "60000"
             return overrides
         } else {
-            log(.warning, "Hook", "微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12：R3 原生发送已关闭，主动发送不可用（接收不受影响）")
+            log(.warning, "Hook", "微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55：R3 原生发送已关闭，主动发送不可用（接收不受影响）")
             return [
                 "enableSend": "false",
                 "req2bufSendMode": "off",
@@ -979,6 +1113,14 @@ final class RuntimeCoordinator {
         guard !store.isSwitchingAccount else { throw RuntimeError.accountSwitching }
         guard !store.isBotRunning, oneBotClient == nil, !runtimeStarting else { return }
         runtimeStarting = true
+        didAutoPromptCaptureSetup = false
+        nativeSendConfiguredForRun = false
+        captureSetupWatchRunning = false
+        // 上一次运行留下的 `/sns/status` 不能代表新 bridge：启动时先清空，
+        // 由本次启动检测重新查询，避免面板/捕获引导短暂显示旧就绪状态。
+        store.moments.resetRuntimeReadiness()
+        // 启动过程中自动同步还没到可用的时刻；收尾成功后再置为 true。
+        store.moments.setRuntimeActive(false)
         defer { runtimeStarting = false }
 
         // 微信可能在上次 App 启动后才换号：启动 bridge 前再检测一次，
@@ -1025,6 +1167,9 @@ final class RuntimeCoordinator {
         }
         if store.settings.hook.autoStartBridge {
             let overrides = await nativeSendConfigOverrides()
+            // R3 关闭时也会返回 enableSend=false 等覆盖项，必须按 enableSend 判断，
+            // 否则 bridge 未就绪时会误以为需要等文字句柄而空等 60s。
+            nativeSendConfiguredForRun = overrides["enableSend"] == "true"
             do {
                 try await hookManager.startBridge(
                     host: store.settings.onebot.host,
@@ -1043,6 +1188,10 @@ final class RuntimeCoordinator {
         } else {
             log(.info, "Bot", "未启用自动启动 bridge，等待外部 bridge 提供 \(store.settings.onebot.host):\(store.settings.onebot.port)")
         }
+        appliedSNSRuntimeSignature = store.settings.hook.autoStartBridge
+            ? Self.snsRuntimeSignature(store.settings)
+            : nil
+        store.snsBridgeConfigStale = false
 
         let configuration = OneBotClient.Configuration(
             host: store.settings.onebot.host,
@@ -1056,6 +1205,14 @@ final class RuntimeCoordinator {
             Task { @MainActor [weak self, weak client] in
                 guard let self, let client, self.oneBotClient === client else { return }
                 await self.handle(event: event)
+            }
+        }
+
+        // 朋友圈 WS 事件：仅当功能开启时交给 MomentsStore（切号后旧 client 事件丢弃）。
+        client.onSNSEvent = { [weak self, weak client] event in
+            Task { @MainActor [weak self, weak client] in
+                guard let self, let client, self.oneBotClient === client else { return }
+                self.store.moments.ingest(event: event)
             }
         }
         client.onStateChange = { [weak self] state in
@@ -1082,9 +1239,10 @@ final class RuntimeCoordinator {
         }
         oneBotClient = client
         startedOneBotConfiguration = configuration
-        await refreshVoiceStatus()
-        promptVoiceSetupIfNeeded()
-        startVoiceSetupWatchIfNeeded()
+        // 语音面板的首屏状态：捕获检测本身在 startBot 置运行状态后另行执行。
+        if store.settings.bot.voiceReplyEnabled {
+            await refreshVoiceStatus()
+        }
         store.imageFetcher.configure(
             fetch: { [weak self] bridgeMessageID in
                 guard let client = self?.oneBotClient else { throw OneBotError.notRunning }
@@ -1137,6 +1295,10 @@ final class RuntimeCoordinator {
             }
         )
         await scheduler.start(tasks: normalizedSchedules)
+        snsSchedulerSignature = Self.snsSchedulerSignature(store.settings)
+        startSNSPublishSchedulerIfNeeded()
+        snsInteractionSchedulerSignature = Self.snsInteractionSchedulerSignature(store.settings)
+        startSNSInteractionSchedulerIfNeeded()
         // 记忆维护补跑：完成上次运行遗留的历史聊天补总结与不足一批的待提取。
         scheduleStartupMemoryCatchUp()
 
@@ -1144,7 +1306,747 @@ final class RuntimeCoordinator {
         scheduleStatsPersist()
         // 防睡眠只在机器人运行期间生效；设置页对未运行时的修改会提示「启动机器人后生效」。
         SleepPreventionCenter.shared.setRuntimeActive(true)
+        // 朋友圈页可见时的自动同步只在 bridge 运行时发请求（停止后循环保留、等待重启）。
+        store.moments.setRuntimeActive(true)
         log(.info, "Bot", "机器人运行时已启动（\(configuration.host):\(configuration.port)）")
+    }
+
+    // MARK: 朋友圈自动发布
+
+    /// 设置页「重置今日计数」后立即按当前设置重排：清空 ledger 后，
+    /// 今天剩余时刻要重新进入等待，否则调度器还停在「明天第一个时刻」。
+    func rebuildSNSPublishScheduler() {
+        snsSchedulerSignature = Self.snsSchedulerSignature(store.settings)
+        startSNSPublishSchedulerIfNeeded()
+    }
+
+    /// 重建自动发布调度器（幂等）：只有「总开关 + 写开关 + 自动发布 + 非演练 + R3 + 已选对象」
+    /// 全部满足时才真正创建；否则停止并留下可解释的日志。
+    private func startSNSPublishSchedulerIfNeeded() {
+        snsPublishScheduler?.stop()
+        snsPublishScheduler = nil
+        // 只在机器人运行（或正在启动）时创建调度器：设置页在机器人停止时改设置不应悄悄启动定时外发。
+        guard store.isBotRunning || runtimeStarting else {
+            log(.debug, "SNS", "机器人未运行，自动发布调度未启动")
+            return
+        }
+        let settings = store.settings
+        let sns = settings.bot.snsSettings
+        guard sns.enabled, sns.writeEnabled, sns.publish.enabled else { return }
+        // 演练模式不直接禁用调度：只生成只读演练草稿，不发送（见 onDraft）。
+        guard settings.hook.enableNativeSend else {
+            log(.warning, "SNS", "自动发布需要开启 R3 原生发送；已跳过调度")
+            return
+        }
+        let selected = Set(sns.publish.targetUserIDs)
+        guard !selected.isEmpty else {
+            log(.info, "SNS", "自动发布未选择发布对象；已跳过调度")
+            return
+        }
+        let ledger = store.snsPublishLedger()
+        // 发布动作（MomentsStore.publish）负责记账；这里保证它和调度器读的是同一个实例，
+        // 否则「从未打开过朋友圈页」的自动发布不会写 ledger，日上限/最小间隔会被绕过。
+        store.moments.publishLedger = ledger
+        let scheduler = SnsPublishScheduler(
+            settingsProvider: { [weak store] in
+                store?.settings.bot.snsSettings ?? SnsSettings()
+            },
+            targetsProvider: { [weak store] in
+                guard let store else { return [] }
+                let chosen = Set(store.settings.bot.snsSettings.publish.targetUserIDs)
+                return store.conversations.compactMap { conversation in
+                    guard conversation.kind == .direct, conversation.aiEnabled else { return nil }
+                    let userID = conversation.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !userID.isEmpty, !userID.hasSuffix("@chatroom") else { return nil }
+                    guard chosen.contains(userID) else { return nil }
+                    return SnsPublishTarget(
+                        userID: userID,
+                        displayName: conversation.displayTitle,
+                        conversationID: conversation.id
+                    )
+                }
+            },
+            draftProvider: { [weak self] target in
+                guard let self else { return .skipped() }
+                return await self.composeSNSPublishDraft(for: target)
+            },
+            publishHandler: { [weak store] text, target in
+                guard let store else { return false }
+                let recipient = SnsPublishRecipient(userID: target.userID, displayName: target.displayName)
+                // 自动发布恒为「部分可见（仅该好友）」：不跟随 defaultVisibility，
+                // 避免历史 private 配置导致「仅自己可见」却记成成功。
+                return await store.moments.publish(text: text, recipient: recipient, visibility: .partial)
+            },
+            ledger: ledger,
+            dryRunProvider: { [weak store] in
+                store?.settings.bot.dryRun ?? false
+            },
+            onDraft: { [weak store] text, target in
+                store?.snsOutbox.add(SnsPendingDraft(
+                    text: text,
+                    targetUserID: target.userID,
+                    targetName: target.displayName,
+                    isDryRun: true,
+                    scheduledLabel: Date().formatted(date: .abbreviated, time: .shortened)
+                ))
+            },
+            onRunCompleted: { [weak store] summary in
+                store?.snsPublishRun = summary
+            },
+            logger: { [weak self] message in
+                self?.log(.info, "SNS", message)
+            }
+        )
+        scheduler.start()
+        snsPublishScheduler = scheduler
+        log(.info, "SNS", "自动发布调度已启动（对象 \(selected.count) 人）")
+    }
+
+    // MARK: 朋友圈自动互动（AI 评论 / 回复）
+
+    /// 重建自动互动调度器（幂等）：只在机器人运行、功能/写开关/互动开关打开、
+    /// 互动名单非空、R3 原生发送开启且启用至少一种动作时创建。
+    private func startSNSInteractionSchedulerIfNeeded() {
+        snsInteractionScheduler?.stop()
+        snsInteractionScheduler = nil
+        let settings = store.settings
+        // 退出演练模式时丢弃演练专用记录：真实账本从未被演练污染，这里只清彩排痕迹。
+        // 放在所有 guard 之前：关掉演练但写操作/名单/动作被关闭时没有调度器，
+        // 也要清掉演练记录（否则这些记录会一直留到下次演练）。
+        if !settings.bot.dryRun {
+            let ledger = store.snsInteractionLedger()
+            Task { await ledger.clearDryRunState() }
+        }
+        guard store.isBotRunning || runtimeStarting else {
+            log(.debug, "SNS", "机器人未运行，自动互动调度未启动")
+            return
+        }
+        let sns = settings.bot.snsSettings
+        let interaction = sns.interaction.sanitized
+        guard sns.enabled, sns.writeEnabled, interaction.enabled else {
+            // 关闭自动互动时清空「启用时间」：下次开启只处理新内容，不回头评论历史动态。
+            if !interaction.enabled {
+                let ledger = store.snsInteractionLedger()
+                Task { await ledger.clearStartDate() }
+            }
+            return
+        }
+        guard interaction.hasAction else {
+            log(.info, "SNS", "自动互动未启用任何动作；已跳过调度")
+            return
+        }
+        guard interaction.hasTargets else {
+            log(.info, "SNS", "自动互动未选择互动名单；已跳过调度")
+            return
+        }
+        guard settings.hook.enableNativeSend else {
+            log(.warning, "SNS", "自动互动需要开启 R3 原生发送；已跳过调度")
+            return
+        }
+
+        let snsClient = SnsClient(configuration: SnsClientConfiguration(onebot: settings.onebot))
+        let ledger = store.snsInteractionLedger()
+        let scheduler = SnsInteractionScheduler(
+            configurationProvider: { [weak store] in
+                guard let store else {
+                    return SnsInteractionScheduler.Configuration(
+                        snsEnabled: false,
+                        writeEnabled: false,
+                        nativeSendEnabled: false,
+                        dryRun: false,
+                        interaction: SnsInteractionSettings(),
+                        blockedUserIDs: []
+                    )
+                }
+                let settings = store.settings
+                return SnsInteractionScheduler.Configuration(
+                    snsEnabled: settings.bot.snsSettings.enabled,
+                    writeEnabled: settings.bot.snsSettings.writeEnabled,
+                    nativeSendEnabled: settings.hook.enableNativeSend,
+                    dryRun: settings.bot.dryRun,
+                    interaction: settings.bot.snsSettings.interaction,
+                    blockedUserIDs: Set(settings.bot.effectiveBlacklist)
+                )
+            },
+            snapshotProvider: { [weak self] in
+                // 主动刷新（native）才能拿到最新内容；bridge 在样本失效时会回退被动缓存，
+                // 调度器据此跳过本轮，避免把旧缓存当成新动态去评论。
+                let status = try await snsClient.fetchStatus()
+                // 先 best-effort 拉一次增量同步：bridge 解码出的评论事件会并入其时间线缓存，
+                // 随后的 timeline 才能带回「别人回复我的评论」这类 native 回包几乎不含的内容
+                // （native timeline 通常只有极少数评论，机器人自己的评论也常常不在里面）。
+                if let sync = try? await snsClient.fetchSync(waitMS: 0),
+                   !sync.events.isEmpty, let self {
+                    // 页面可见时即时回显；MomentsStore 按事件 ID 去重，重复轮询不会重复计数。
+                    self.store.moments.ingest(events: sync.events)
+                }
+                let page = try await snsClient.fetchTimeline(
+                    maxID: "0",
+                    firstPageMD5: "",
+                    session: "",
+                    refresh: true,
+                    limit: 20
+                )
+                // 读到的好友动态顺手写入对应记忆卡；即使本轮没有可互动候选也照常记录。
+                await self?.ingestMomentsMemory(posts: page.posts, selfUserID: status.account)
+                return SnsInteractionScheduler.Snapshot(
+                    selfID: status.account,
+                    commentReady: status.commentReady,
+                    canRefreshNatively: status.canRefreshNatively,
+                    pageSource: page.source,
+                    posts: page.posts
+                )
+            },
+            draftProvider: { [weak self] candidate in
+                await self?.composeSNSInteractionDraft(candidate)
+            },
+            submitHandler: { [weak store] candidate, text in
+                let result = try await snsClient.comment(
+                    postID: candidate.post.id,
+                    text: text,
+                    replyCommentID: candidate.comment?.commentID ?? ""
+                )
+                guard let store else { return result }
+                // 朋友圈页可见时即时回显；不触发手动评论面板的 loading/error 状态。
+                store.moments.ingestAutoComment(
+                    postID: candidate.post.id,
+                    commentID: result.commentID,
+                    text: text,
+                    replyTo: candidate.comment,
+                    createTime: result.comment?.createTime
+                )
+                return result
+            },
+            ledger: ledger,
+            accountProvider: { [weak store] in store?.activeAccountID ?? "" },
+            onActivity: { [weak store] activity in
+                store?.recordSNSInteractionActivity(activity)
+            },
+            onRunCompleted: { [weak store] summary in
+                store?.snsInteractionRun = summary
+            },
+            logger: { [weak self] message in
+                self?.log(.info, "SNS", message)
+            },
+            // 保留上次水位：机器人重启不把「启用时间」推到本次启动，避免停机期间收到的
+            // 回复/评论因早于水位而永远漏掉；由 maxAgeHours 与 handledKeys 控制时效与去重。
+            resetStartDateOnFirstCheck: false
+        )
+        scheduler.start()
+        snsInteractionScheduler = scheduler
+        log(.info, "SNS", "自动互动调度已启动（名单 \(interaction.targetUserIDs.count) 人，"
+            + "每 \(Int(interaction.effectiveCheckInterval)) 秒检查）")
+    }
+
+    /// 把时间线里读到的好友朋友圈动态写入其 v2 记忆卡。
+    ///
+    /// - 只写私聊且开启 AI 自动回复、不在聊天黑名单里的好友；自己/群聊/公众号跳过；
+    /// - 已存在的同一条动态按稳定 ID 去重，只有正文变得更丰富（如补上识图摘要）才更新；
+    /// - 不调用 AI、不发微信请求；失败只记日志，不影响朋友圈读取/自动互动。
+    func ingestMomentsMemory(
+        posts: [SnsPost],
+        selfUserID: String = "",
+        imageDescriptions: [String: [String]] = [:]
+    ) async {
+        guard !posts.isEmpty else { return }
+        // 切号期间角色目录正被 suspend/activate：此时开始写入会落到切换后的账号目录。
+        guard !store.isSwitchingAccount else { return }
+        let settings = store.settings
+        // 演练模式是只读彩排：不写记忆卡（页面刷新与自动互动识图都不写）。
+        guard SnsMemoryWritePolicy.allowsWrite(settings) else {
+            if settings.bot.dryRun, !didLogDryRunMemorySkip {
+                didLogDryRunMemorySkip = true
+                log(.debug, "Memory", "演练模式：跳过朋友圈记忆写入（关闭演练模式后恢复）")
+            }
+            return
+        }
+        let sns = settings.bot.snsSettings
+        let blocked = Set(settings.bot.effectiveBlacklist)
+        let conversations = store.conversations.filter { conversation in
+            guard conversation.kind == .direct, conversation.aiEnabled else { return false }
+            return !blocked.contains(conversation.id)
+        }
+        guard !conversations.isEmpty else { return }
+        let selfValue = selfUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSelf = selfValue.isEmpty ? selfID : selfValue
+        let personaProvider: @Sendable (Conversation) -> Persona? = { conversation in
+            settings.persona(id: conversation.personaID ?? settings.bot.defaultPersonaID)
+        }
+        let written = await snsMemoryRecorder.ingest(
+            posts: posts,
+            selfID: resolvedSelf,
+            conversations: conversations,
+            personaProvider: personaProvider,
+            settings: sns.memory,
+            memorySettings: settings.bot.memorySettings,
+            imageDescriptions: imageDescriptions
+        )
+        if written > 0 {
+            log(.debug, "Memory", "朋友圈记忆：写入/更新 \(written) 条（本次 \(posts.count) 条动态）")
+        }
+    }
+
+    /// 为一次自动互动生成评论/回复正文。
+    ///
+    /// - 通道/人格沿用该好友会话的配置（没有会话时回退全局默认）；
+    /// - 图片先经「AI 模型 → 识图模型」转成文字描述，识图未开启/失败时降级为纯文本；
+    /// - 纯图片动态在识图不可用时直接跳过，不猜内容；失败返回 nil 由调度器记账重试。
+    private func composeSNSInteractionDraft(
+        _ candidate: SnsInteractionCandidate
+    ) async -> SnsInteractionDraft? {
+        let settings = store.settings
+        let sns = settings.bot.snsSettings
+        let interaction = sns.interaction.sanitized
+        guard sns.enabled, sns.writeEnabled, interaction.enabled else { return nil }
+        let conversation = snsInteractionConversation(for: candidate)
+        let persona = settings.persona(
+            id: conversation?.personaID ?? settings.bot.defaultPersonaID
+        )
+        guard var provider = settings.provider(
+            id: conversation?.providerID ?? settings.bot.defaultProviderID ?? settings.ai.defaultProviderID
+        ) else {
+            log(.warning, "SNS", "自动互动缺少可用 AI 通道；已跳过")
+            return nil
+        }
+        if let model = conversation?.model?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !model.isEmpty {
+            provider.model = model
+        }
+        if let model = persona?.model?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !model.isEmpty {
+            provider.model = model
+        }
+
+        let hasText = !candidate.post.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        var imageDescriptions: [String] = []
+        var imageCount = 0
+        if interaction.useVision,
+           candidate.post.imageCount > 0,
+           settings.isVisionEnabled,
+           let visionProvider = settings.visionProvider {
+            let basePrompt = settings.ai.vision?.promptText ?? VisionSettings.defaultPrompt
+            let mediaClient = SnsClient(
+                configuration: SnsClientConfiguration(onebot: settings.onebot)
+            )
+            // 同一条动态的全部图片一次送入视觉模型；请求失败时 SnsMomentVision 会
+            // 自动退化为逐张识别（仍覆盖全部图片）。
+            let result = await snsMomentVision.analyze(
+                for: candidate.post,
+                mediaFetcher: { [mediaClient] index, variant in
+                    try await mediaClient.fetchMedia(
+                        postID: candidate.post.id,
+                        mediaIndex: index,
+                        variant: variant
+                    )
+                },
+                describer: { [aiClient] dataURLs in
+                    var requestProvider = settings.visionRequestProvider(from: visionProvider)
+                    var prompt = basePrompt
+                    if dataURLs.count > 1 {
+                        // 组图需要更多输出预算与更长等待；单张沿用识图设置的短超时。
+                        requestProvider.timeoutSeconds = min(
+                            max(visionProvider.timeoutSeconds, 30),
+                            90
+                        )
+                        requestProvider.maxTokens = min(max(visionProvider.maxTokens, 1200), 1600)
+                        prompt += "\n\n这是同一条朋友圈动态里的 \(dataURLs.count) 张图片。"
+                            + "请把它们放在一起理解，忽略上文「不超过 120 字」的限制："
+                            + "先用 1–2 句话概括整组图片记录的整体场景/事件，"
+                            + "再只补充对理解内容最关键的信息（人物关系、地点、正在做什么、图片里的重要文字）。"
+                            + "不要逐张罗列、不要写成长篇清单；总长度不超过 300 字，只输出分析，不要客套。"
+                    }
+                    let messages = VisionSupport.requestMessages(
+                        prompt: prompt,
+                        imageDataURLs: dataURLs
+                    )
+                    let response = try await aiClient.complete(
+                        messages: messages,
+                        provider: requestProvider,
+                        forceStream: false,
+                        thinking: VisionSupport.thinkingMode(for: requestProvider)
+                    )
+                    return response.text
+                }
+            )
+            imageDescriptions = result.descriptions
+            imageCount = result.imageCount
+        }
+        // 识图结果如果已生成，就把同一条动态的记忆正文升级为「文字 + 图片分析」；
+        // 记录器按稳定 ID 判断内容是否更丰富，不会重复新增。
+        if !imageDescriptions.isEmpty {
+            await ingestMomentsMemory(
+                posts: [candidate.post],
+                selfUserID: selfID,
+                imageDescriptions: [candidate.post.id: imageDescriptions]
+            )
+        }
+        // 没有文字、也没有图片分析时无话可说：不猜测内容（回复类互动有对方评论可接话）。
+        if candidate.kind == .commentOnPost, !hasText, imageDescriptions.isEmpty {
+            log(.debug, "SNS", "自动互动跳过：动态没有可用文字或图片分析")
+            return nil
+        }
+
+        var facts: [String] = []
+        if let conversation {
+            do {
+                let memories = try await memory.fetchMemoriesForPrompt(
+                    conversationID: conversation.id,
+                    limit: 4
+                )
+                facts = memories
+                    .prefix(4)
+                    .map { "- \($0.summary)" }
+                    .filter { $0.count > 2 }
+            } catch {
+                log(.debug, "SNS", "读取互动对象旧记忆失败，忽略：\(error.localizedDescription)")
+            }
+        }
+        // v2 记忆卡（含本机写入的「朋友圈」来源）也参与评论/回复生成；
+        // 旧 memories 表为空的新账号因此也能基于当前记忆自然接话。
+        if let conversation, settings.bot.memorySettings.enabled {
+            let recall = await memoryEngine.recall(
+                conversationID: conversation.id,
+                query: candidate.post.text,
+                settings: settings.bot.memorySettings,
+                recordAccess: false
+            )
+            for memory in recall.memories.prefix(4) {
+                let fact = "- " + memory.promptText(limit: 160)
+                if !facts.contains(fact) { facts.append(fact) }
+            }
+        }
+
+        let messages: [AIMessage] = [
+            .system(Self.snsInteractionSystemPrompt(persona: persona)),
+            .user(Self.snsInteractionUserPrompt(
+                candidate: candidate,
+                imageDescriptions: imageDescriptions,
+                facts: facts
+            ))
+        ]
+        var requestProvider = provider
+        requestProvider.stream = false
+        requestProvider.timeoutSeconds = min(max(provider.timeoutSeconds, 5), 45)
+        requestProvider.maxTokens = min(max(provider.maxTokens, 64), 600)
+        do {
+            let result = try await aiClient.complete(
+                messages: messages,
+                provider: requestProvider,
+                temperature: 0.85,
+                forceStream: false,
+                thinking: VisionSupport.thinkingMode(for: requestProvider)
+            )
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return SnsInteractionDraft(text: result.text, imageCount: imageCount)
+        } catch {
+            log(.warning, "SNS", "自动互动文案生成失败：\(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func snsInteractionConversation(for candidate: SnsInteractionCandidate) -> Conversation? {
+        let target = candidate.targetUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !target.hasSuffix("@chatroom") else { return nil }
+        return store.conversations.first { $0.kind == .direct && $0.id == target }
+    }
+
+    private static func snsInteractionSystemPrompt(persona: Persona?) -> String {
+        let base = persona?.systemPrompt ?? Persona.defaultSystemPrompt
+        return base + "\n\n你正在微信朋友圈里与好友互动（不是聊天窗口）。"
+            + "请像真人刷到这条朋友圈时随手留下的一句话："
+            + "只写一句，尽量 10–45 个汉字，不要长篇大论；"
+            + "把整组图片和正文当成一件事来回应，不要逐张描述、不要罗列；"
+            + "口语化、有情绪或有观察点，避免“照片中/这张图/第一张”这类分析腔；"
+            + "不暴露你是 AI、机器人或程序；不复述原文；不使用模板化客套；只输出正文。"
+    }
+
+    private static func snsInteractionUserPrompt(
+        candidate: SnsInteractionCandidate,
+        imageDescriptions: [String],
+        facts: [String]
+    ) -> String {
+        var lines: [String] = []
+        lines.append("【朋友圈动态】")
+        lines.append("作者：\(candidate.post.displayAuthorName)")
+        if candidate.post.createTime > 0 {
+            lines.append("发布时间：\(candidate.post.createDate.formatted(date: .abbreviated, time: .shortened))")
+        }
+        let rawText = candidate.post.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excerpt = rawText.count > 600 ? String(rawText.prefix(600)) + "…" : rawText
+        lines.append("正文：\(excerpt.isEmpty ? "（无文字）" : excerpt)")
+        if !imageDescriptions.isEmpty {
+            lines.append("【图片分析（仅供你理解，评论时不要复述、不要逐张描述）】")
+            lines.append(imageDescriptions.joined(separator: "；"))
+        }
+
+        let recent = candidate.post.comments.suffix(6)
+        if !recent.isEmpty {
+            lines.append("")
+            lines.append("【动态下的其它评论（仅供理解上下文，不要重复）】")
+            for comment in recent {
+                if comment.isReply, !comment.replyToName.isEmpty {
+                    lines.append("- \(comment.displayUserName) 回复 \(comment.replyToName)：\(comment.text)")
+                } else {
+                    lines.append("- \(comment.displayUserName)：\(comment.text)")
+                }
+            }
+        }
+        if let reply = candidate.comment {
+            lines.append("")
+            lines.append("【你要回复的评论】")
+            lines.append("\(reply.displayUserName)：\(reply.text)")
+        }
+        if !facts.isEmpty {
+            lines.append("")
+            lines.append("【你与对方的记忆（可自然融入，不要照搬）】")
+            lines.append(contentsOf: facts)
+        }
+        lines.append("")
+        switch candidate.kind {
+        case .commentOnPost:
+            lines.append("【任务】给上面这条动态写一条评论。10–45 个汉字，"
+                + "像朋友刷到朋友圈随口留的一句话：把整组图片和正文当成一个场景，"
+                + "只挑一个最有意思的细节或整体氛围来回应；不要逐张描述图片、"
+                + "不要罗列、不要总结全文，不要问太多问题。")
+        case .replyOnOwnPost:
+            lines.append("【任务】对方在上面这条（你发布的）动态下评论了你。回复对方这条评论："
+                + "10–45 个汉字，自然接话；结合对方的评论与图片整体氛围，"
+                + "不要逐张描述图片，不要复述对方原话。")
+        case .replyToMyComment:
+            lines.append("【任务】对方在别人的动态下回复了你的评论。回复对方这条回复："
+                + "10–45 个汉字，自然接话；结合对方的话与图片整体氛围，"
+                + "不要逐张描述图片；不要假装你是动态作者。")
+        }
+        lines.append("【语气参考（仅示意，不要照抄）】")
+        lines.append("- 这组日落也太治愈了")
+        lines.append("- 猫猫抢镜哈哈，下次带我一个")
+        lines.append("- 看饿了，这个氛围好舒服")
+        lines.append("只输出评论正文，不要“评论：/回复：”前缀，不要引号、@、标题或解释。")
+        return lines.joined(separator: "\n")
+    }
+
+    /// 设置变更后统一处理朋友圈运行期状态：
+    /// - 自动发布/自动互动调度器按各自签名重建（「先启动机器人再打开」也能立即生效）；
+    /// - bridge 运行期开关（`snsEnable`/`snsWrite`，以及由二者派生的 `snsReadMode`）
+    ///   只在启动时下发，改动后标记 `snsBridgeConfigStale`，由设置页提示「重启机器人后生效」。
+    private func synchronizeSNSRuntime() {
+        let settings = store.settings
+        store.snsBridgeConfigStale = appliedSNSRuntimeSignature
+            .map { $0 != Self.snsRuntimeSignature(settings) } ?? false
+
+        let publishSignature = Self.snsSchedulerSignature(settings)
+        if publishSignature != snsSchedulerSignature {
+            snsSchedulerSignature = publishSignature
+            startSNSPublishSchedulerIfNeeded()
+        }
+        let interactionSignature = Self.snsInteractionSchedulerSignature(settings)
+        if interactionSignature != snsInteractionSchedulerSignature {
+            snsInteractionSchedulerSignature = interactionSignature
+            startSNSInteractionSchedulerIfNeeded()
+        }
+    }
+
+    /// 影响自动互动调度器的字段签名；任何互动设置变化都重建（重建成本很低）。
+    private static func snsInteractionSchedulerSignature(_ settings: AppSettings) -> String {
+        let sns = settings.bot.snsSettings
+        let interaction = sns.interaction
+        return [
+            "\(sns.enabled)", "\(sns.writeEnabled)", "\(settings.hook.enableNativeSend)",
+            "\(settings.bot.dryRun)", "\(interaction.enabled)",
+            interaction.targetUserIDs.joined(separator: ","),
+            "\(interaction.commentOnNewPosts)", "\(interaction.replyToOwnPostComments)",
+            "\(interaction.replyToMyCommentReplies)", "\(interaction.replyScope.rawValue)",
+            "\(interaction.useVision)",
+            "\(interaction.maxPerDay)", "\(interaction.minIntervalMinutes)",
+            "\(interaction.maxAgeHours)", "\(interaction.maxRepliesPerPost)",
+            "\(interaction.checkIntervalSeconds)"
+        ].joined(separator: "|")
+    }
+
+    /// 设置页「立即检查」：不等轮询间隔，按当前设置检测并执行一轮自动互动。
+    func checkSNSInteractionsNow() async {
+        guard store.isBotRunning || runtimeStarting else {
+            var summary = SnsInteractionRunSummary(checkedAt: Date())
+            summary.firstError = "机器人未运行：启动机器人后才会执行自动互动"
+            store.snsInteractionRun = summary
+            return
+        }
+        // 设置刚改过时先按新设置重建调度器，避免「开启后立即检查」用到旧实例。
+        let signature = Self.snsInteractionSchedulerSignature(store.settings)
+        if signature != snsInteractionSchedulerSignature {
+            snsInteractionSchedulerSignature = signature
+            startSNSInteractionSchedulerIfNeeded()
+        }
+        guard let scheduler = snsInteractionScheduler else {
+            var summary = SnsInteractionRunSummary(checkedAt: Date())
+            summary.firstError = "自动互动未启动：请检查朋友圈/写开关/R3 原生发送/互动名单/动作开关"
+            store.snsInteractionRun = summary
+            return
+        }
+        await scheduler.performCheck()
+    }
+
+    /// 设置页「预览文案」：演练模式下立即为一个可用发布对象生成草稿并写入 outbox。
+    ///
+    /// 只读彩排：不发送、不写发布账本；正式模式（`dryRun=false`）直接拒绝，
+    /// 避免把预览入口变成绕过排程的手动发布。
+    func previewSNSPublishDraftNow() async -> String? {
+        let settings = store.settings
+        let sns = settings.bot.snsSettings
+        guard settings.bot.dryRun,
+              sns.enabled, sns.writeEnabled, sns.publish.enabled else {
+            return nil
+        }
+        let chosen = Set(sns.publish.sanitized.targetUserIDs)
+        guard let target = store.conversations.lazy.compactMap({ conversation -> SnsPublishTarget? in
+            guard conversation.kind == .direct, conversation.aiEnabled else { return nil }
+            let userID = conversation.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !userID.isEmpty, !userID.hasSuffix("@chatroom"), chosen.contains(userID) else { return nil }
+            return SnsPublishTarget(
+                userID: userID,
+                displayName: conversation.displayTitle,
+                conversationID: conversation.id
+            )
+        }).first else {
+            return nil
+        }
+        guard let text = (await composeSNSPublishDraft(for: target)).text else { return nil }
+        store.snsOutbox.add(SnsPendingDraft(
+            text: text,
+            targetUserID: target.userID,
+            targetName: target.displayName,
+            isDryRun: true,
+            scheduledLabel: L("手动预览")
+        ))
+        log(.info, "SNS", "演练草稿已手动预览：\(target.displayName)（未发布）")
+        return target.displayName
+    }
+
+    /// 影响「下一次何时发布」的字段签名；无关设置（如图片开关）变化不重建调度器。
+    private static func snsSchedulerSignature(_ settings: AppSettings) -> String {
+        let sns = settings.bot.snsSettings
+        let publish = sns.publish
+        let windows = publish.windows
+            .map { "\($0.startMinute)-\($0.endMinute)" }
+            .joined(separator: ",")
+        let times = publish.times.map { "\($0.minute)" }.joined(separator: ",")
+        return [
+            "\(sns.enabled)", "\(sns.writeEnabled)", "\(publish.enabled)",
+            publish.mode.rawValue, windows, times,
+            "\(publish.maxPerDay)", "\(publish.minIntervalMinutes)",
+            publish.targetUserIDs.joined(separator: ","),
+            "\(settings.bot.dryRun)", "\(settings.hook.enableNativeSend)"
+        ].joined(separator: "|")
+    }
+
+    /// 只在 bridge 启动时下发的朋友圈运行期开关签名（读取/写开关 + R3）。
+    /// R3 开关也参与：它决定 `snsEnable` 是否会被写进 bridge 的 hook 配置，
+    /// 运行期切换 R3 后必须重启机器人才能同步，面板要能提示「配置待生效」。
+    private static func snsRuntimeSignature(_ settings: AppSettings) -> String {
+        let sns = settings.bot.snsSettings
+        return "\(sns.enabled)|\(sns.writeEnabled)|\(settings.hook.enableNativeSend)"
+    }
+
+    /// 用会话人格 + 记忆卡生成一条朋友圈文案（只对该私聊对象可见）。
+    ///
+    /// 与识图 / 记忆提取 / 自动互动保持一致：DeepSeek 系通道显式关闭思考模式。
+    /// `deepseek-flash` 默认 thinking=enabled，推理 token 会挤占 `max_tokens`，
+    /// 最终 `content` 为空（2026-11-10 自动发布因此整轮跳过）。另外改走非流式，
+    /// 并像聊天回复一样对 `isRetryable` 错误（含空回包）按 `ai.retryCount` 重试；
+    /// 失败/跳过原因通过 `SnsDraftOutcome.failure` 回传给调度器展示。
+    private func composeSNSPublishDraft(for target: SnsPublishTarget) async -> SnsDraftOutcome {
+        let settings = store.settings
+        guard settings.bot.snsSettings.enabled,
+              settings.bot.snsSettings.writeEnabled else {
+            return .skipped(L("朋友圈功能或发布开关已关闭"))
+        }
+        let conversation = store.conversations.first(where: { $0.id == target.conversationID })
+        guard let provider = settings.provider(
+            id: conversation?.providerID ?? settings.bot.defaultProviderID
+        ) else {
+            log(.warning, "SNS", "自动发布缺少可用 AI 通道；跳过 \(target.displayName)")
+            return .skipped(L("缺少可用 AI 通道"))
+        }
+        let persona = settings.personas.first(where: {
+            $0.id == (conversation?.personaID ?? settings.bot.defaultPersonaID)
+        }) ?? settings.personas.first(where: \.isDefault) ?? settings.personas.first
+        let memories: [LongTermMemory]
+        do {
+            memories = try await memory.fetchMemoriesForPrompt(
+                conversationID: target.conversationID,
+                limit: 6
+            )
+        } catch {
+            log(.debug, "SNS", "读取旧记忆失败，继续尝试 v2 记忆卡：\(error.localizedDescription)")
+            memories = []
+        }
+        var facts = memories.map { "- \($0.summary)" }.filter { $0.count > 2 }
+        // v2 记忆卡（含「朋友圈」来源）也能作为自动发布文案的事实来源；
+        // 旧 memories 表为空的账号不再每轮都被跳过。
+        if settings.bot.memorySettings.enabled {
+            let recall = await memoryEngine.recall(
+                conversationID: target.conversationID,
+                query: "给\(target.displayName)看的朋友圈",
+                settings: settings.bot.memorySettings,
+                recordAccess: false
+            )
+            for memory in recall.memories.prefix(6) {
+                let fact = "- " + memory.promptText(limit: 160)
+                if !facts.contains(fact) { facts.append(fact) }
+            }
+        }
+        guard !facts.isEmpty else {
+            log(.info, "SNS", "自动发布跳过 \(target.displayName)：没有可用记忆卡内容")
+            return .skipped(L("没有可用记忆卡内容"))
+        }
+        let systemPrompt = (persona?.systemPrompt ?? Persona.defaultSystemPrompt)
+            + "\n\n你正在写一条只有一位微信好友可见的朋友圈（不是聊天回复）。"
+            + "要求：自然、口语化、60–120 个汉字；只基于下面提供的记忆事实；"
+            + "不暴露聊天原文、昵称、联系方式或其他隐私；不提及 AI、机器人或提示词；"
+            + "不要标题、不要话题标签、不要解释，只输出朋友圈正文。"
+        let userPrompt = "这位好友的记忆事实：\n" + facts.joined(separator: "\n")
+            + "\n\n请写一条给「\(target.displayName)」看的朋友圈。"
+        // 非流式 + 收紧超时：流式解析只累加 `delta.content`，思考增量不会产生正文；
+        // 非流式路径还会在 content 为空时回退 reasoning_content（见 `AIClient.performJSON`）。
+        var requestProvider = provider
+        requestProvider.stream = false
+        requestProvider.timeoutSeconds = min(max(provider.timeoutSeconds, 5), 45)
+        let thinking = VisionSupport.thinkingMode(for: requestProvider)
+        let maxRetries = max(0, settings.ai.retryCount)
+        var lastError: Error = AIError.emptyResponse(nil)
+        for attempt in 0...maxRetries {
+            do {
+                let result = try await aiClient.complete(
+                    messages: [.system(systemPrompt), .user(userPrompt)],
+                    provider: requestProvider,
+                    temperature: 0.8,
+                    forceStream: false,
+                    thinking: thinking
+                )
+                var text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                text = text.replacingOccurrences(of: "\n", with: " ")
+                if text.count > 120 {
+                    text = String(text.prefix(120))
+                }
+                guard text.count >= 10 else {
+                    log(.warning, "SNS", "自动发布跳过 \(target.displayName)：生成的文案过短（\(text.count) 字）")
+                    return .skipped(Lf("生成的文案过短（%d 字）", text.count))
+                }
+                return .success(text)
+            } catch is CancellationError {
+                return .skipped(L("AI 请求已取消"))
+            } catch {
+                lastError = error
+                let retryable = (error as? AIError)?.isRetryable ?? false
+                if !retryable || attempt == maxRetries { break }
+                let delay = 400 * (attempt + 1)
+                log(.debug, "SNS", "自动发布文案生成失败，\(delay)ms 后重试（\(attempt + 1)/\(maxRetries)）：\(error.localizedDescription)")
+                try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+            }
+        }
+        log(.warning, "SNS", "自动发布文案生成失败：\(lastError.localizedDescription)")
+        return .skipped(lastError.localizedDescription)
     }
 
     /// 处理启动阶段挂起的账号切换（adoptSelfID 在 startRuntime 中段发现账号不一致）。
@@ -1158,8 +2060,25 @@ final class RuntimeCoordinator {
     }
 
     func stopRuntime() async {
-        voiceSetupWatchTask?.cancel()
-        voiceSetupWatchTask = nil
+        snsPublishScheduler?.stop()
+        snsPublishScheduler = nil
+        snsSchedulerSignature = nil
+        snsInteractionScheduler?.stop()
+        snsInteractionScheduler = nil
+        snsInteractionSchedulerSignature = nil
+        snsMomentVision.clear()
+        // 保留「启用时间」水位：停机期间的新评论/回复在重启后仍可被识别（受 maxAgeHours
+        // 与 handledKeys 约束）；只有关闭互动/切号时才清空（见 startSNSInteractionSchedulerIfNeeded
+        // 与 switchAccount）。
+        appliedSNSRuntimeSignature = nil
+        store.snsBridgeConfigStale = false
+        // bridge 即将停止：清掉 SNS 就绪/加载状态（保留列表内容），避免设置面板与
+        // 捕获引导拿上一次运行的状态继续显示「已就绪」；同时停止自动同步发请求。
+        store.moments.setRuntimeActive(false)
+        store.moments.resetRuntimeReadiness()
+        captureSetupWatchTask?.cancel()
+        captureSetupWatchTask = nil
+        captureSetupWatchRunning = false
         oneBotClient?.stop()
         oneBotClient = nil
         startedOneBotConfiguration = nil
@@ -1285,6 +2204,8 @@ final class RuntimeCoordinator {
             store.accountSwitchPending = false
         }
         accountEpoch &+= 1
+        // 切号按产品约定重置互动水位（旧账号命名空间）；新账号的账本本身是独立的。
+        await store.snsInteractionLedger().clearStartDate()
 
         let previousID = AccountProfile.activeID
         let wasRunning = oneBotClient != nil
@@ -1398,8 +2319,9 @@ final class RuntimeCoordinator {
         selfMentionBackfillTask = nil
         statsFlushTask?.cancel()
         statsFlushTask = nil
-        voiceSetupWatchTask?.cancel()
-        voiceSetupWatchTask = nil
+        captureSetupWatchTask?.cancel()
+        captureSetupWatchTask = nil
+        captureSetupWatchRunning = false
         inFlightConversations.removeAll()
         visionAttempted.removeAll()
         pendingImageFetchIDs.removeAll()
@@ -1415,7 +2337,8 @@ final class RuntimeCoordinator {
         memoryPartialFlushRequested.removeAll()
         lastSchedulerTasks = []
         lastVoiceTranscriptionEnabled = nil
-        didAutoPromptVoiceSetup = false
+        didAutoPromptCaptureSetup = false
+        store.isCaptureSetupPromptPresented = false
         contactDirectory = nil
         lastContactDirectoryFailureReason = nil
         pendingAccountSwitch = nil
@@ -1443,6 +2366,11 @@ final class RuntimeCoordinator {
         case .connected:
             hookManager.setGatewayConnected(true)
             log(.info, "OneBot", "WebSocket 已连接")
+            // bridge/hook 可能在启动检测的 60s 窗口之后才完全就绪：
+            // 连接成功时补一次检测（已提示过或已有 watch 在跑时会被 guard 跳过）。
+            if store.isBotRunning {
+                startCaptureSetupWatchIfNeeded()
+            }
         case .connecting:
             hookManager.setGatewayConnected(false, detail: "正在连接 bridge…")
             log(.debug, "OneBot", "正在连接…")
@@ -1891,6 +2819,7 @@ final class RuntimeCoordinator {
     /// 语音获取成功：写入 16k WAV 路径与时长并落库，随后在独立任务里转写，
     /// 不阻塞 `VoiceFetcher` 队列（下一条语音可以继续下载）。
     private func applyFetchedVoice(request: VoiceFetcher.Request, result: VoiceFetchResult) async {
+        // 账号代次/账号 ID 用于写库/转写前的二次校验：获取语音是异步的，期间可能已切号。
         let accountID = AccountProfile.activeID
         let epoch = accountEpoch
         guard !store.isSwitchingAccount else { return }
@@ -1917,6 +2846,9 @@ final class RuntimeCoordinator {
             }
             if message.voiceTranscriptState == .done { message.voiceTranscriptState = .pending }
         }
+        // 写库期间可能已开始切号：旧账号的语音结果不能再更新新账号的消息/转写状态。
+        guard !store.isSwitchingAccount, epoch == accountEpoch,
+              accountID == AccountProfile.activeID else { return }
         guard updated != nil else {
             log(.debug, "Media", "语音已获取，但消息已不存在，跳过转写（\(request.chatMessageID)）")
             pendingVoiceTranscriptionIDs.remove(request.chatMessageID)
@@ -1960,10 +2892,15 @@ final class RuntimeCoordinator {
         messageID: String,
         force: Bool = false
     ) async {
+        let accountID = AccountProfile.activeID
+        let epoch = accountEpoch
         guard let message = await voiceMessage(conversationID: conversationID, messageID: messageID) else {
             pendingVoiceTranscriptionIDs.remove(messageID)
             return
         }
+        // 读取期间可能已切号：旧账号的语音不能转写到新账号的库/内存。
+        guard !store.isSwitchingAccount, epoch == accountEpoch,
+              accountID == AccountProfile.activeID else { return }
         guard message.kind == .voice else {
             pendingVoiceTranscriptionIDs.remove(messageID)
             return
@@ -2000,6 +2937,8 @@ final class RuntimeCoordinator {
             let transcription = try await store.voiceTranscription.transcribe(
                 fileURL: URL(fileURLWithPath: path)
             )
+            guard !store.isSwitchingAccount, epoch == accountEpoch,
+                  accountID == AccountProfile.activeID else { return }
             await applyVoiceTranscription(
                 conversationID: conversationID,
                 messageID: messageID,
@@ -2008,6 +2947,8 @@ final class RuntimeCoordinator {
         } catch {
             let errorText = (error as? VoiceTranscriptionError)?.errorDescription
                 ?? error.localizedDescription
+            guard !store.isSwitchingAccount, epoch == accountEpoch,
+                  accountID == AccountProfile.activeID else { return }
             _ = await updateVoiceMessage(conversationID: conversationID, messageID: messageID) {
                 $0.voiceTranscriptState = .failed
             }
@@ -2825,7 +3766,10 @@ final class RuntimeCoordinator {
                 epoch: epoch
             )
             guard epoch == accountEpoch else { return }
-            ruleEngine.noteReply(conversationID: conversation.id)
+            // 演练不消耗真实回复冷却/每分钟上限：否则彩排之后真正回复会被无谓节流。
+            if !plan.dryRun {
+                ruleEngine.noteReply(conversationID: conversation.id)
+            }
             log(.info, "AI", "\(conversation.displayTitle) 生成回复（\(Int(plan.latencyMs))ms，tokens \(plan.usage.totalTokens)，\(evaluation.triggerLabel)）")
         } catch {
             guard epoch == accountEpoch else { return }
@@ -2850,28 +3794,9 @@ final class RuntimeCoordinator {
             var text = "（dry-run）将回复：\(plan.fullText)"
             if mention != nil { text += "（第一条回复会 @ 拍的人）" }
             log(.info, "Bot", "\(text)（未实际发送）")
-            let message = ChatMessage(
-                id: "dry-\(UUID().uuidString)",
-                conversationID: conversation.id,
-                senderID: "system",
-                senderName: "系统",
-                direction: .system,
-                kind: .system,
-                text: text,
-                timestamp: Date(),
-                status: .sent
-            )
-            appendMessage(message)
-            if let updatedConversation = updateConversationAfterSend(conversation: conversation, message: message) {
-                do {
-                    // Message + refreshed conversation preview in one transaction.
-                    try await memory.upsertConversationAndMessages(updatedConversation, [message])
-                } catch {
-                    log(.warning, "Database", "写入 dry-run 消息失败：\(error.localizedDescription)")
-                }
-            } else {
-                await persistMessage(message)
-            }
+            // 演练只写一条 system 提示用于核对，不更新会话预览/最近消息时间，也不重排会话列表：
+            // 否则会话列表会把彩排当成一次真实回复，和「演练不落地」的语义冲突。
+            await appendSystemNotice(text, conversationID: conversation.id)
             completeReplyProgress(conversationID: conversation.id, note: "演练完成（未实际发送）")
             return
         }
@@ -3568,6 +4493,13 @@ final class RuntimeCoordinator {
             log(.warning, "Scheduler", "定时任务「\(task.name)」的会话不存在：\(task.conversationID)")
             return
         }
+        // 演练模式不真正外发：定时任务是自动发送，与自动回复同属「演练不落地」的范围。
+        // 只写运行日志（含目标与内容摘要），不写会话消息、不改会话预览。
+        if store.settings.bot.dryRun {
+            let preview = String(task.content.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
+            log(.info, "Scheduler", "演练模式：定时任务「\(task.name)」将发送给 \(conversation.displayTitle)（未实际发送）：\(preview)")
+            return
+        }
         log(.info, "Scheduler", "执行定时任务「\(task.name)」→ \(conversation.displayTitle)")
         await sendOutgoingText(task.content, conversation: conversation, epoch: accountEpoch)
     }
@@ -3623,6 +4555,9 @@ final class RuntimeCoordinator {
             }
         }
 
+        // 朋友圈：自动发布调度器按签名重建；bridge 侧开关改动标记「重启后生效」。
+        synchronizeSNSRuntime()
+
         // AI 模型页保存通道/Key 后立即重查余额（不必等 5 分钟轮询）。
         let fingerprint = store.providers
             .map { "\($0.id)|\($0.kind.rawValue)|\($0.enabled)|\($0.apiKeyReference)|\($0.baseURL)" }
@@ -3671,7 +4606,7 @@ final class RuntimeCoordinator {
                 temperature: store.settings.ai.temperature(forModel: model),
                 forceStream: false
             )
-            let summary = "连接成功 · \(result.model) · \(Int(result.latencyMs))ms · tokens \(result.usage.totalTokens)"
+            let summary = "\(result.model) · \(Int(result.latencyMs)) ms · \(result.usage.totalTokens) tokens"
             log(.info, "AI", "测试「\(provider.name)」：\(summary)")
             return .success(summary)
         } catch {
@@ -3869,7 +4804,9 @@ final class RuntimeCoordinator {
         for conversation in createdConversations {
             scheduleMemoryMaintenance(
                 conversationID: conversation.id,
-                activationTimestamp: conversation.lastMessageAt ?? Date()
+                activationTimestamp: conversation.lastMessageAt ?? Date(),
+                // 用户在记忆页手动补建卡片：即使当前处于演练模式也照常补跑维护。
+                allowDuringDryRun: true
             )
         }
         guard created > 0 else { return 0 }
@@ -4156,9 +5093,14 @@ final class RuntimeCoordinator {
     private func scheduleMemoryMaintenance(
         conversationID: String,
         activationTimestamp: Date? = nil,
-        resetIdleFlush: Bool = true
+        resetIdleFlush: Bool = true,
+        allowDuringDryRun: Bool = false
     ) {
         guard store.settings.bot.memorySettings.enabled else { return }
+        // 演练模式不进入记忆：不建卡、不同步全量互动、不提取记忆（关闭演练后恢复）。
+        // 用户在记忆页手动补建卡片的操作显式传 allowDuringDryRun，不受此限制。
+        let allows = allowDuringDryRun || !store.settings.bot.dryRun
+        guard allows else { return }
         guard let conversation = store.conversations.first(where: { $0.id == conversationID }) else { return }
         if resetIdleFlush {
             scheduleMemoryIdleFlush(conversationID: conversationID)
@@ -4183,10 +5125,14 @@ final class RuntimeCoordinator {
                    generation == self.memoryLifecycleGeneration {
                     if self.memoryMaintenancePending.remove(conversationID) != nil {
                         self.scheduleMemoryMaintenance(
-                            conversationID: conversationID, resetIdleFlush: false)
+                            conversationID: conversationID,
+                            resetIdleFlush: false,
+                            allowDuringDryRun: allowDuringDryRun)
                     } else if self.memoryPartialFlushRequested.contains(conversationID) {
                         self.scheduleMemoryMaintenance(
-                            conversationID: conversationID, resetIdleFlush: false)
+                            conversationID: conversationID,
+                            resetIdleFlush: false,
+                            allowDuringDryRun: allowDuringDryRun)
                     }
                 }
             }
@@ -4198,7 +5144,8 @@ final class RuntimeCoordinator {
                 settings: settings,
                 provider: provider,
                 epoch: epoch,
-                generation: generation
+                generation: generation,
+                allowDuringDryRun: allowDuringDryRun
             )
         }
         memoryMaintenanceTasks[conversationID] = task
@@ -4222,10 +5169,14 @@ final class RuntimeCoordinator {
         settings: AppSettings,
         provider: AIProvider?,
         epoch: UInt64,
-        generation: UInt64
+        generation: UInt64,
+        allowDuringDryRun: Bool
     ) async {
         // 空闲兜底的请求在本轮开头消费：任何早退都不能把它留给 defer 触发重排。
         let wantsPartialFlush = memoryPartialFlushRequested.remove(conversation.id) != nil
+        // 演练模式不进入记忆：任务可能在开启演练前已排队，执行前再确认一次；
+        // 用户在记忆页手动补建卡片时显式允许。
+        guard allowDuringDryRun || !store.settings.bot.dryRun else { return }
         guard epoch == accountEpoch,
               generation == memoryLifecycleGeneration,
               // 用户可能已删除会话/记忆卡：旧快照不能重新建卡（避免「复活」）。
@@ -4254,6 +5205,7 @@ final class RuntimeCoordinator {
                 return
             }
         }
+        guard allowDuringDryRun || !store.settings.bot.dryRun else { return }
         // 同步失败时不做历史补总结/提取：否则 historyCount==0 会误写完成标记，
         // 等同步恢复后旧聊天永远补不回来（只保留待重试状态）。
         guard await syncCharacterInteractions(conversation: conversation) else {
@@ -4265,6 +5217,7 @@ final class RuntimeCoordinator {
               store.conversations.contains(where: { $0.id == conversation.id }) else { return }
 
         var changed = false
+        guard allowDuringDryRun || !store.settings.bot.dryRun else { return }
         // ② 建卡前的历史互动只进过全量记录：第一次维护时补总结最近一批。
         if let history = await memoryEngine.extractHistoryIfNeeded(
             conversation: conversation,
@@ -4611,6 +5564,9 @@ extension AppStore {
             settings.bot.enabled = true
             persist()
             appendLog(.info, "Bot", "机器人已启动")
+            // `isBotRunning` 已置位：此时再启动捕获检测，避免首轮请求落空时因运行状态为 false
+            // 提前结束等待（朋友圈样本检测曾因此在启动后永远不弹）。
+            coordinator.startCaptureSetupWatchIfNeeded()
         } catch {
             isBotRunning = false
             settings.bot.enabled = false
@@ -4651,6 +5607,120 @@ extension AppStore {
     func refreshVoiceStatus() async {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.refreshVoiceStatus()
+    }
+
+    /// 开启语音回复后检测一次：不能发送语音时打开统一「捕获发送句柄」弹窗。
+    func promptCaptureSetupAfterVoiceToggle() async {
+        guard settings.bot.voiceReplyEnabled else { return }
+        await refreshVoiceStatus()
+        guard !voiceRuntimeStatus.canSendVoice() else { return }
+        presentCaptureSetupPrompt()
+    }
+
+    /// 开启朋友圈后检测 readiness：读取或发布样本未就绪时打开统一「捕获发送句柄」弹窗。
+    func promptCaptureSetupAfterMomentsToggle() async {
+        guard settings.bot.snsSettings.enabled else { return }
+        // 弹窗里的文字条目也要用到 /voice_status 的 textSeed（语音未开启时同样查询）。
+        await refreshVoiceStatus()
+        prepareMoments()
+        await moments.refreshPrimingStatus()
+        if CaptureSetupPlan.needsMomentsCapturePrompt(
+            momentsEnabled: true,
+            momentsStatusKnown: moments.status != nil,
+            momentsPrimed: moments.status?.isPrimed == true,
+            writeEnabled: settings.bot.snsSettings.writeEnabled,
+            writeReady: moments.status?.writeReady == true
+        ) {
+            presentCaptureSetupPrompt()
+        }
+    }
+
+    /// 开启「自动互动（评论/回复）」后检测评论句柄：未捕获时打开统一「捕获发送句柄」弹窗。
+    ///
+    /// 评论句柄（0xD5）与朋友圈读取/发布样本是三条独立通道；此前只有设置页的 inline 提示，
+    /// 用户很容易以为「打开朋友圈」就够用了。这里在开关打开时立即检测一次并给出可行动引导。
+    func promptCaptureSetupAfterInteractionToggle() async {
+        let sns = settings.bot.snsSettings
+        guard sns.enabled, sns.writeEnabled, sns.interaction.enabled,
+              !settings.bot.dryRun, sns.interaction.isActive else { return }
+        // 弹窗里的文字条目也要用到 /voice_status 的 textSeed（语音未开启时同样查询）。
+        await refreshVoiceStatus()
+        prepareMoments()
+        await moments.refreshPrimingStatus()
+        guard moments.status != nil else { return }
+        guard CaptureSetupPlan.needsCommentCapturePrompt(
+            commentCaptureRequired: true,
+            commentStatusKnown: true,
+            commentReady: moments.status?.commentReady == true
+        ) else { return }
+        presentCaptureSetupPrompt()
+    }
+
+    /// 手动打开统一「捕获发送句柄」弹窗（语音面板「查看步骤…」）。
+    func presentCaptureSetupPrompt() {
+        isCaptureSetupPromptPresented = true
+        RuntimeRegistry.coordinator(for: self).noteCaptureSetupPromptPresented()
+    }
+
+    /// 设置页「立即检查」：触发一轮朋友圈自动互动（不等待轮询间隔）。
+    func checkSNSInteractionsNow() async {
+        guard let coordinator = RuntimeRegistry.existing(for: self) else {
+            var summary = SnsInteractionRunSummary(checkedAt: Date())
+            summary.firstError = "运行时尚未就绪，请稍后重试"
+            snsInteractionRun = summary
+            return
+        }
+        await coordinator.checkSNSInteractionsNow()
+    }
+
+    /// 设置页「预览文案」：演练模式下立即生成一条朋友圈草稿（不发送、不写计数）。
+    /// 返回草稿对应的目标显示名；失败/不可用时为 nil。
+    func previewSNSPublishDraftNow() async -> String? {
+        guard let coordinator = RuntimeRegistry.existing(for: self) else { return nil }
+        return await coordinator.previewSNSPublishDraftNow()
+    }
+
+    /// 清空自动互动账本（已处理动态/评论、频率计数与自己的评论 ID）与最近互动记录。
+    func resetSNSInteractionHistory() async {
+        await snsInteractionLedger().reset()
+        clearSNSInteractionActivity()
+        RuntimeRegistry.existing(for: self)?.log(.info, "SNS", "已清空朋友圈自动互动记录")
+    }
+
+    /// 今天的自动发布配额快照（只读本机 ledger，供设置页解释「为什么没有发送」）。
+    ///
+    /// 按已选发布对象聚合：`sentCount` 是今天已成功发布的总条数，`remainingCount`
+    /// 是各对象剩余额度之和；无上限时 `isUnlimited = true`。
+    func snsPublishTodayUsage() async -> SnsPublishTodayUsage {
+        let publish = settings.bot.snsSettings.publish.sanitized
+        let targets = publish.targetUserIDs
+        guard !targets.isEmpty else { return SnsPublishTodayUsage() }
+        let unlimited = publish.mode == .windows && publish.isMaxPerDayUnlimited
+        // 无上限也受 bridge 每日 50 条兜底限制，容量按 dailyCapacity 计算，避免发满后
+        // 面板仍显示「无上限」而调度器已经跳到明天。
+        let capacity = publish.dailyCapacity
+        let ledger = snsPublishLedger()
+        var sentPerTarget: [Int] = []
+        sentPerTarget.reserveCapacity(targets.count)
+        for targetID in targets {
+            let state = await ledger.state(for: targetID)
+            sentPerTarget.append(state.count)
+        }
+        return SnsPublishTodayUsage.aggregate(
+            capacityPerTarget: capacity,
+            isUnlimited: unlimited,
+            sentPerTarget: sentPerTarget
+        )
+    }
+
+    /// 只清掉今天本机的自动发布计数（设置页「重置今日计数」）。
+    /// 不会立即发送；清空后按当前设置重建调度器，让今天剩余时刻重新生效。
+    func resetSNSPublishTodayUsage() async {
+        let targets = settings.bot.snsSettings.publish.sanitized.targetUserIDs
+        await snsPublishLedger().clearToday(targetIDs: targets)
+        let coordinator = RuntimeRegistry.existing(for: self)
+        coordinator?.rebuildSNSPublishScheduler()
+        coordinator?.log(.info, "SNS", "已重置今日朋友圈发布计数；下一个排程时刻仍按设置执行")
     }
 
     /// 查询本机中文语音识别资源状态（「机器人 → 语音」区展示下载引导）。

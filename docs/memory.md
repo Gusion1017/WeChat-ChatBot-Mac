@@ -45,7 +45,7 @@ accounts/<微信账号 id>/
 ```
 
 - **一个微信会话一个目录**：私聊、群聊按会话 ID 建目录；首条消息落库后由后台**自动创建**（不阻塞回复，不要求机器人先回复），
-  `filehelper` 等系统会话与公众号不自动建卡，手动「为现有会话创建记忆卡」仍可补建；首次维护补总结建卡前历史（最多 500 条，§7.2）。
+  `filehelper` 等系统会话与公众号不自动建卡，手动「为现有会话创建记忆卡」可补建公众号等（系统会话仍跳过）；首次维护补总结建卡前历史（最多 500 条，§7.2）。
 - **新卡默认空**：创建时只建 `memory.sqlite` 与 meta（`conversation_id` / `conversation_title` / `conversation_kind` /
   `persona_id` / `persona_name`、`last_extracted_at`、`history_cutoff_at`），不写「角色名/初始设定」行；之后按 §7 批量提取、首次维护补总结（§7.2），
   也可手动新增/导入旧记忆。
@@ -111,7 +111,7 @@ CREATE TABLE memories (
     pinned             INTEGER NOT NULL DEFAULT 0, -- 用户置顶：不衰减、优先召回
     archived           INTEGER NOT NULL DEFAULT 0, -- 归档：默认不召回，仍可查看/导出
     superseded_by      TEXT,                       -- 被哪条新记忆取代
-    supersedes         TEXT,                       -- 取代了哪条旧记忆
+    supersedes         TEXT,                       -- 取代了哪条/哪些旧记忆（多个用逗号分隔）
     superseded_at      REAL,
     source             TEXT NOT NULL DEFAULT 'extraction', -- extraction|manual|legacy-import
     source_message_ids TEXT NOT NULL DEFAULT '',   -- JSON 数组字符串
@@ -121,7 +121,7 @@ CREATE TABLE memories (
     updated_at         REAL NOT NULL,
     last_accessed_at   REAL
 );
-CREATE INDEX idx_memories_recall
+CREATE INDEX idx_character_memories_recall
     ON memories (archived, superseded_by, kind, category, updated_at DESC);
 
 CREATE TABLE interactions (
@@ -134,10 +134,10 @@ CREATE TABLE interactions (
     timestamp   REAL NOT NULL,          -- 消息时间；提取游标用它，不随清空消息重置
     created_at  REAL NOT NULL
 );
-CREATE INDEX idx_interactions_time ON interactions (timestamp DESC);
+CREATE INDEX idx_character_interactions_time ON interactions (timestamp DESC, id DESC);
 ```
 
-- `kind` 与 `importance/pinned`：`pinned` 永久且最高优先；`importance >= 7` 视为「重要」（慢衰减），其余为「普通」。
+- `kind` 与 `importance/pinned`：`pinned` 永久且最高优先；`importance >= importanceThreshold`（默认 7）视为「重要」（慢衰减），其余为「普通」。
 - 「最近记忆」不是存储类型：创建/最近访问在 `recentWindowHours`（默认 72h）内的记忆进入「最近」组并享受权重加成。
 - 记忆正文：普通记忆 ≤ 300 字（提取时裁剪）、手动新增可到 2000 字；`compressed_content` 用于提示词与摘要，原文不丢。
 
@@ -191,13 +191,13 @@ decay       = 1                                                             // p
 score       = max(0.0001, base × recency × usage × decay)
 ```
 
-- `kind` 在写入时计算：`pinned` 或 `importance >= 7` → `important`，否则 `normal`。
+- `kind` 在写入时计算：`pinned` 或 `importance >= importanceThreshold`（默认 7）→ `important`，否则 `normal`。
 - 每次召回 `access_count + 1`、刷新 `last_accessed_at`（best-effort，不改正文/`updated_at`）。
 - 置顶/取消置顶、修改重要度会重算 `kind` 并刷新 `updated_at`，时间衰减从头计算。
 
 ### 5.2 自动归档
 
-- 每次成功提取后 best-effort 执行 `archiveStale`：条件为 `kind = normal`、未置顶、未归档、未被取代、最近活动（`created_at`/
+- 每次成功提取后（`autoArchive` 开启时）best-effort 执行 `archiveStale`：条件为 `kind = normal`、未置顶、未归档、未被取代、最近活动（`created_at`/
   `updated_at`/`last_accessed_at` 取最晚）距今超过 `archiveAfterDays`（默认 90 天）、`access_count < 3`；动
   作是 `archived = 1`，正文超过 300 字时用确定性压缩器写 `compressed_content`（保留原文，提示词只用压缩版）。
 - 归档记忆不自动召回，但「已归档」筛选可见、可恢复、可导出；不做自动删除。
@@ -234,6 +234,9 @@ score       = max(0.0001, base × recency × usage × decay)
 
 - `MemorySettings.enabled = true` 时，每次消息落库后调用 `scheduleMemoryMaintenance`（后台任务，按会话去重，不阻塞回复）。
   会话还没有记忆卡且属于可采集范围（`MemoryCapturePolicy`：非系统会话、非公众号、该会话未关闭 AI）→ 先自动建卡再维护。
+- **演练模式（`bot.dryRun`）不进入记忆**：不建卡、不同步互动、不提取；回复生成也不建卡、不累计召回权重。
+  记忆页手动「为缺失会话创建记忆卡」不受限制。关闭演练后恢复；演练生成的回复以 system 消息保存，
+  本就不参与提示词与提取，真实收到的消息会在关闭演练后的下一次维护中正常处理。
 - 维护任务：① `syncInteractions`：首次回填该会话最多 5000 条历史进 `interactions`，之后按 `interactions_synced_at` 游标增量同步（单批 500 条）；
   ② 历史补总结（§7.2）；③ `pendingInteractions` 取 `(timestamp, id) > meta.last_extracted_at` 的互动，升序单批最多 40 条（复合游标避免同秒被
   LIMIT 截断的忙群消息漏提取）；④ 未处理条数 `< extractionBatchSize`（默认 8）→ 不提取；⑤ AI 提取 → 合并/取代 → 推进游标；⑥ 归档维护并记日志。
@@ -287,7 +290,7 @@ score       = max(0.0001, base × recency × usage × decay)
 - **相对时间按消息发送时间解析**：提示词每行以 `[yyyy-MM-dd HH:mm]` 开头，历史补总结还会给出消息时间范围；「今晚/这周末」不能按当前时间或对话顺序揣测。
 - 已经过去的事件、过期/完成的计划与待办不输出为 `todo/decision`；确有长期价值的用 `fact` 以过去时记录（「当时约定…」），不编造日期；与已有记忆矛盾时用
   `supersedes`，不要改写旧记忆；没有值得长期记住的内容时返回 `{"memories":[]}`（也要推进游标）。
-- 解析器容错：去掉 Markdown 围栏，截取第一个 `{` 到最后一个 `}`；字段缺失/类型错误逐条丢弃；超长裁剪；非法 JSON 走本地兜底。
+- 解析器容错：去掉 Markdown 围栏，截取第一个 `{` 到最后一个 `}`；字段缺失/类型错误按默认值回退（无 `content` 的条目丢弃）；超长裁剪；非法 JSON 走本地兜底。
 
 ### 7.4 提取上下文
 
@@ -311,7 +314,7 @@ score       = max(0.0001, base × recency × usage × decay)
    最多 4 条；
 4. **补位**：仍未达到 `maxRecallCount` 时按 score 降序补齐（最多 12 条）。
 
-- 过滤：`archived = 0`、`superseded_by IS NULL`；去重：同一 `id` 只出现一次，正文完全相同只保留最高分一条（全局与会话重复时只注入一条）。
+- 过滤：`archived = 0`、`superseded_by IS NULL`；去重：同一 `id` 只出现一次，正文归一化后相同只保留先入选的一条（全局与会话重复时只注入一条）。
 - token 控制：注入正文 ≤ `maxRecallCharacters`（默认 1200）；超限按最近 → 重要 → 相关 保留，低优先级丢弃并在段尾注明省略条数；单条超 240 字
   优先用 `compressed_content`，否则截断并加「…」。
 - 空记忆卡（含只有全局卡为空）直接返回空召回，不注入任何占位行；全局记忆不会覆盖同正文的会话记忆。
@@ -324,11 +327,11 @@ score       = max(0.0001, base × recency × usage × decay)
 记忆上下文（最近/重要/相关；已被取代的记忆不注入）：
 - [事实·最近·重要度 6] 用户喜欢猫
 - [全局·事实·重要度 8] 用户是 GPL-3.0 项目的维护者
-- [待办·重要·置顶] 下次提醒用户更新微信版本
-- [经验·相关] 用户发梗图时适合用玩梗风格回复
+- [待办·置顶·重要度 10] 下次提醒用户更新微信版本
+- [经验·重要度 4] 用户发梗图时适合用玩梗风格回复
 ```
 
-- 全局记忆在类别前加「全局」；其它标签规则不变。
+- 标签只由类别、「全局」、置顶/重要/最近之一与重要度组成，没有单独「相关」标签；全局记忆在类别前加「全局」。
 - 人格正文来自**人格设定**（`Persona.systemPrompt`），不再有每会话人设卡正文；人格缺失时回退 `Persona.defaultSystemPrompt`。
 - 保留群聊身份硬约束：从**本会话 + 全局**记忆卡的置顶/重要/fact 记忆里解析 `wxid：称呼`，在 system prompt 末尾追加「本轮发言人身份」；群聊玩笑/
   临时外号不能覆盖。
@@ -337,14 +340,14 @@ score       = max(0.0001, base × recency × usage × decay)
 ### 8.3 手动注入/查看
 
 - 不开放微信 `/记忆` 指令（2026-10-28 确认）。
-- App 记忆面板：置顶记忆 = 永久优先召回；「预览注入 / 召回测试」输入一句模拟消息，显示按当前会话生成的记忆上下文与字符估算；支持把记忆标记为 `archived`、
+- App 记忆面板：置顶记忆 = 永久优先召回；「预览注入 / 召回测试」输入一句模拟消息，显示按当前会话生成的记忆上下文；支持把记忆标记为 `archived`、
   `pinned`，调整重要度（≥ 阈值即「重要」），或编辑正文/类别/关键词。
 
 ## 9. 对话上下文与短期窗口
 
 - 对话历史仍取最近 `min(maxContextMessages, 10)` 条，保持现有行为；
 - v2 不再把短期窗口外的消息批量改写成一条摘要；它们进入 `interactions`，由 §7 的批量提取生成原子记忆；
-- 旧 `ChatEngine.summarizeOverflow` / `MemoryStore` 旧记忆方法保留给旧单测与只读兼容，运行时不调用；
+- 旧 `ChatEngine.summarizeOverflow` 与 v1 召回链保留给旧单测与只读兼容，聊天回复运行时不调用（v1 旧表读取仅剩「导入旧记忆」与朋友圈文案的补充来源，同时会读 v2 记忆卡，见 §13）；
 - 群聊发言人标注、语音转写、图片描述、引用文本规则不变。
 
 ## 10. App 记忆面板（记忆库页）
@@ -356,15 +359,17 @@ score       = max(0.0001, base × recency × usage × decay)
   刷新/创建/删除记忆卡后保持「无选择」，不自动跳回聚合。
 - 记忆卡模式 = 左侧角色列表 + 右侧记忆卡：
   - 左栏：`全部角色`（聚合）+ 固定「全局共享 / 所有会话共享」行（globe 图标，位于会话角色之上）+ 各会话（标题/类型/人格名/记忆数/重要数/待办数），
-    支持按标题/人格名搜索；无记忆卡时整页空状态，提供「为现有会话创建记忆卡」（建卡后回填全量互动并补总结最多 500 条旧聊天）。
+    支持按标题/人格名搜索；无记忆卡时整页空状态，工具栏「更多」提供「为缺失会话创建记忆卡」（建卡后回填全量互动并补总结最多 500 条旧聊天）。
   - 右栏顶部：会话标题/类型、人格名（来自人格设定）、更新时间；全局行显示「全局共享」「注入所有会话」。没有「人设卡」按钮/sheet，无重复统计行；
-    总数只在工具栏副标题（`N 个记忆卡 · N 条生效记忆`，包含全局卡），筛选数量在 chip 上。聚合 header 为「聚合 N 个会话角色 · 全局记忆同时并入」。
+    总数只在工具栏副标题（`N 个记忆卡 · N 条生效记忆 · 本地 SQLite`，包含全局卡），筛选数量在 chip 上。聚合 header 为「聚合 N 个会话角色 · 全局记忆同时并入」。
   - 按钮：`全量记录`、`导出`、`更多`（预览注入 / 导入旧记忆 / 为缺失会话创建记忆卡 / 删除记忆卡）；设置入口在工具栏齿轮；聚合视图隐藏或禁用角色专属按钮。
     全局卡禁用「全量记录」「删除记忆卡」，可导出/新增/编辑/置顶/压缩/删除单条记忆。
   - 筛选：全部 / 最近 72h / 重要 / 待办 / 事实 / 决策 / 经验 / 已归档 / 已被取代；排序：综合权重（默认）/ 最近更新 / 重要度；搜索正文/关键词。
-  - 卡片：正文、类别、置顶/重要、重要度、权重、合并次数、召回次数、来源（自动提取/手写/旧记忆导入）、`已被取代`；菜单：编辑、置顶/取消、归档/恢复、
+  - 卡片：正文、类别、置顶/重要、重要度、权重、合并次数、召回次数、来源（自动提取/手写/旧记忆导入/**朋友圈**）、`已被取代`；菜单：编辑、置顶/取消、归档/恢复、
     压缩、取消取代、删除。所有记忆都可编辑/删除；新增记忆预填当前会话，类别默认 fact、来源 manual。
-- 全量记录 sheet：`interactions` 列表（时间/方向/发言人/正文），搜索、上限 1000 条；首次打开角色时自动补齐最多 5000 条历史互动，之后增量同步；
+  - **朋友圈来源**：好友朋友圈正文由 SNS 运行时写入（`source=moments`，见 [`sns.md`](sns.md) §1.6），与聊天提取的记忆同库同权；
+    可在卡片上编辑/删除/归档。删除后同一条动态若再次读到会按动态 ID 重新写入（幂等 ID，不做永久忽略名单）。
+- 全量记录 sheet：`interactions` 列表（时间/方向/发言人/正文），搜索、上限 1000 条；首次打开角色时自动补齐最多 5000 条历史互动，之后由记忆维护按游标增量同步；
   sheet 内不提供删除（随记忆卡删除）。
 - 导出：Markdown / JSON，`NSSavePanel` 保存，人格内容来自当前人格设定；全局卡可导出（无会话时用默认人格），不导出全量记录。
   - Markdown：角色信息 + 人设（摘要/系统提示词/模型）+ 分类记忆（重要项带标记）+ 已归档/已被取代 + 全量互动；
@@ -380,7 +385,7 @@ score       = max(0.0001, base × recency × usage × decay)
 ### 10.2 空状态与错误
 
 - 未选择角色：左栏可见，右栏「选择一个角色」并提示点「全部角色」才打开聚合。
-- 无记忆卡：说明「机器人收到消息后自动创建（系统会话、公众号、关闭 AI 的会话除外）」，可直接「为现有会话创建记忆卡」并补总结（§7.2）。
+- 无记忆卡：说明「机器人收到消息后自动创建（系统会话、公众号、关闭 AI 的会话除外）」，工具栏「更多」可「为缺失会话创建记忆卡」并补总结（§7.2）。
 - 有卡但 0 条记忆：聚合显示「记忆卡还是空的」、单角色「这个角色还没有记忆」并给「新增记忆」、全局卡「全局记忆还是空的」（只支持手动维护）。
 - 某筛选为空：说明条件并提供「显示全部」；0 条≠读取失败，数据库/目录失败仍用 Toast + 日志。
 
@@ -404,6 +409,9 @@ score       = max(0.0001, base × recency × usage × decay)
 
 所有数值写入前收敛到范围；NaN 回退默认。设置变更下一轮回复生效，不需要重启。
 
+朋友圈内容写入记忆不是本表字段，而是 `bot.sns.memory`（默认开、可关闭、可决定是否写入图片分析），
+契约见 [`sns.md`](sns.md) §1.6 / §6.2；全局 `bot.memory.enabled=false` 或演练模式开启时 SNS 也不写。
+
 ## 12. 生命周期、账号切换与并发
 
 - `CharacterStore` 是 actor，按需打开 `memory.sqlite`，LRU 缓存最多 4 个连接；未打开/切号中显式报 `notActive`，按 best-effort 处理。
@@ -413,23 +421,24 @@ score       = max(0.0001, base × recency × usage × decay)
   `memory.switchToActiveAccountDatabase()`；④ `characterStore.activate()` 指向新账号的 `characters/`；
   ⑤ 清空内存中的角色/记忆状态并重新加载。
 - 维护任务按会话去重，切号/关闭机器人时取消；关键 await 后比对 `accountEpoch`，避免 A 的提取结果写进 B。
-- 删除会话/记忆卡在 actor 内串行；目录移动用 `FileManager.trashItem`（失败则删除并记日志）。
+- 删除会话/记忆卡在 actor 内串行；目录移动用 `FileManager.trashItem`（失败则直接删除）。
 
 ## 13. 旧数据与兼容
 
-- 旧 `memories` / `memory_state` 表**保留只读**，不再写入；旧方法与单测保留、运行时不调用；升级不删除/改写旧数据。
-- 启动/记忆页不再加载旧长期记忆运行时数组（`longTermMemories` 及 CRUD 已移除）；唯一读取入口是「导入旧记忆」。
+- 旧 `memories` / `memory_state` 表**保留只读**，不再写入；旧方法与单测保留，聊天回复运行时不调用（朋友圈文案除外，见下）；升级不删除/改写旧数据。
+- 启动/记忆页不再加载旧长期记忆运行时数组（`longTermMemories` 及 CRUD 已移除）；聊天回复不再读旧表，读取入口为「导入旧记忆」。朋友圈自动发布/自动互动的文案生成仍优先读旧 `memories`（`MemoryStore.fetchMemoriesForPrompt`），**并已并行接入 v2 记忆卡召回**（`MemoryEngine.recall`，含本机写入的「朋友圈」来源），旧表为空的新账号不再被跳过。
 - 人格设定仍在 `profile.json`（`personas`）；旧 `persona.md` 不再读取，创建/加载记忆卡时 best-effort 移到废纸篓，自定义正文不采用。
 - 旧卡 `kind='origin'` 行在打开数据库时迁移（§4.3）：生成型删除、用户编辑过的转普通置顶手写记忆；新卡不再生成起点。
 - 导入旧记忆映射：`is_core = 1` → `kind = important`、`pinned = 1`、`importance = 8`；`source = manual` → `legacy-import`、重要度 6；
-  自动总结按 `- ` 拆成多条并用关键词启发式分类（提醒/下次→todo；约定/决定→decision；喜欢/叫/是→fact；规律/经验→lesson；默认 fact）；
+  自动总结按 `- ` 拆成多条并用关键词启发式分类（提醒/记得/下次/待办/未完成/别忘/回头→todo；约定/决定/说好/答应/以后/计划/定了→decision；
+  规律/经验/一般/通常/每次/看来/适合/不要→lesson；其余默认 fact）；
   正文 > 300 字截断；相同正文按 0.92 折叠；不改旧表。
 - `c-__global__` 与普通角色卡同在账号 `characters/` 下，切号后使用新账号自己的全局记忆，不跨账号共享。
 - 回滚：旧表/旧代码仍在，可读旧记忆；新 `characters/` 旧版不识别，不影响启动。
 
 ## 14. 验证
 
-单测（`app/Tests/WeChatAITests/CharacterMemoryTests.swift`、`ChatEngineV2Tests.swift`，临时目录，不碰真实网络/数据），当前 `swift test` **619 项**（2 项按环境跳过），覆盖：
+单测（`app/Tests/WeChatAITests/CharacterMemoryTests.swift`、`ChatEngineV2Tests.swift`、`SnsMemoryIngestorTests.swift`，临时目录，不碰真实网络/数据），当前 `swift test` **879 项**（877 通过 / 2 项按环境跳过），覆盖：
 
 - 目录 key 编码/超长哈希；建卡只生成 `memory.sqlite`（无 `persona.md`）、新卡 0 条记忆、meta 与 `last_extracted_at` 初始化、再次 ensure 不清记忆。
 - schema、interactions upsert 与去重、`(timestamp, id)` 复合游标、字段裁剪、首次回填/增量同步。
@@ -443,7 +452,7 @@ score       = max(0.0001, base × recency × usage × decay)
 
 ```bash
 cd app && SWIFT_DISABLE_SANDBOX=1 swift build --build-tests
-cd app && SWIFT_DISABLE_SANDBOX=1 swift test          # 619 项（2 项按环境跳过）
+cd app && SWIFT_DISABLE_SANDBOX=1 swift test          # 879 项（2 项按环境跳过）
 bash scripts/check.sh                                 # 文档/脚本/符号检查
 ```
 

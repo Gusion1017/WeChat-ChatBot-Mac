@@ -44,14 +44,14 @@ struct LogsView: View {
         .sheet(isPresented: $showClearConfirm) {
             ConfirmSheet(
                 title: "清空运行日志",
-                message: "将清空 App 内存中的日志缓冲（最多 2000 条）。已落盘的日志文件不受影响。",
+                message: "将清空 App 内存中的日志（最多 2000 条）。已写入磁盘的日志文件不受影响。",
                 details: ["清空后无法恢复。", "如需保留，请先使用「导出」保存日志文件。"],
                 confirmTitle: "清空",
                 cancelTitle: "取消"
             ) {
                 store.clearLogs()
                 refreshFeed()
-                toast.show("运行日志已清空", tone: .info, symbol: "trash")
+                toast.show(L("运行日志已清空"), tone: .info, symbol: "trash")
             }
         }
     }
@@ -63,7 +63,7 @@ struct LogsView: View {
             Button {
                 togglePause()
             } label: {
-                Label(isPaused ? "继续" : "暂停", systemImage: isPaused ? "play.fill" : "pause.fill")
+                Label(L(isPaused ? "继续" : "暂停"), systemImage: isPaused ? "play.fill" : "pause.fill")
             }
             .buttonStyle(.glass)
 
@@ -128,7 +128,7 @@ struct LogsView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .font(.caption2)
-                    .help(L("新日志到达时自动滚动到底部"))
+                    .help(L("有新日志时自动滚动到底部"))
 
                 Spacer()
 
@@ -138,7 +138,7 @@ struct LogsView: View {
                         size: 6,
                         pulsing: !isPaused
                     )
-                    Text(L(isPaused ? "已暂停 · 显示暂停时的快照" : "实时更新"))
+                    Text(L(isPaused ? "已暂停 · 显示暂停时的日志" : "实时更新"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -292,7 +292,7 @@ struct LogsView: View {
         panel.allowedContentTypes = [.plainText, .log]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "wechatai-\(UIFormat.fileDate.string(from: Date())).log"
-        panel.title = "导出运行日志"
+        panel.title = L("导出运行日志")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let displayed = filteredLogs(in: isPaused ? pausedSnapshot : store.logs)
         let text = displayed.map(UIFormat.logLine).joined(separator: "\n")

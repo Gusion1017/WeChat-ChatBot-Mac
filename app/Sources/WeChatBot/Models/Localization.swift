@@ -40,6 +40,12 @@ enum L10n {
     private(set) nonisolated(unsafe) static var language: String = "zh-Hans"
     private nonisolated(unsafe) static var englishBundle: Bundle?
 
+    /// Composed-label separators: full-width Chinese punctuation in Chinese, ASCII in English.
+    /// Views that build VoiceOver strings or joined values by hand use these so a sentence
+    /// mix never leaks 「，」/「：」 into the English UI.
+    static var listSeparator: String { language == "en" ? ", " : "，" }
+    static var keyValueSeparator: String { language == "en" ? ": " : "：" }
+
     static func resolvedLanguage(_ raw: String) -> String {
         switch AppLanguage(rawValue: raw) ?? .system {
         case .simplifiedChinese:
@@ -81,6 +87,7 @@ enum L10n {
         // Specific composed sentences first.
         ("^(.*) 连接正常$", "$1 connected"),
         ("^(.*) 连接失败$", "$1 connection failed"),
+        ("^已删除聊天「(.*)」$", "Deleted chat “$1”"),
         ("^已重命名为「(.*)」$", "Renamed to “$1”"),
         ("^已恢复自动名称「(.*)」$", "Restored automatic name “$1”"),
         ("^已从 Keychain 删除 (.*) 的密钥$", "Deleted the key for $1 from Keychain"),
@@ -200,6 +207,7 @@ enum L10n {
         ("未检测到版本", "Version not detected"),
         ("^上次 (.*)$", "Last $1"),
         ("^下次 (.*)$", "Next $1"),
+        ("^(.*)（(.*)）→ (.*)$", "$1 ($2) → $3"),
         ("^(\\d+) 条 · (.*)$", "$1 items · $2"),
         ("无未读", "No unread"),
         ("群聊", "Group chat"),
@@ -256,6 +264,32 @@ enum L10n {
         ("缺少密钥", "Missing key"),
         ("已暂停", "Paused"),
         ("实时", "Live"),
+        // 朋友圈（Moments，2026-11）：动态/评论/点赞等组合字符串。
+        ("^(\\d+) 条动态 · (\\d+) 条更新$", "$1 moments · $2 updates"),
+        ("^(\\d+) 条动态$", "$1 moments"),
+        ("^(\\d+) 条新动态$", "$1 new moments"),
+        ("^(\\d+) 条评论 · (\\d+) 人赞过$", "$1 comments · $2 likes"),
+        ("^(\\d+) 条评论$", "$1 comments"),
+        ("^(\\d+) 人赞过$", "$1 likes"),
+        ("^已同步 (\\d+) 条更新$", "Synced $1 updates"),
+        ("^已更新 (.*)$", "Updated $1"),
+        ("^朋友圈请求失败：(.*)$", "Moments request failed: $1"),
+        ("^朋友圈返回内容无效：(.*)$", "Invalid Moments response: $1"),
+        ("^朋友圈内容解析失败：(.*)$", "Failed to parse Moments content: $1"),
+        ("^无法连接 bridge：(.*)$", "Can't connect to bridge: $1"),
+        ("^谁可以看：(.*)$", "Visible to: $1"),
+        ("^可见性：(.*)$", "Visibility: $1"),
+        ("^正文摘要：(.*)$", "Text summary: $1"),
+        ("^部分可见：(.*)$", "Partial: $1"),
+        // Composed labels (2026-11): fragments spliced in views before L() is applied.
+        // Keep these unanchored where a fragment can appear next to a status prefix.
+        ("以下 ID 同时出现在两个列表中，黑名单将生效：(.*)", "These IDs appear in both lists, so the blocklist takes precedence: $1"),
+        ("留空使用自动名称「(.*)」。", "Leave empty to use the automatic name “$1”."),
+        ("该名称是 ID 形式，会继续显示自动名称「(.*)」。", "This name is ID-shaped, so the automatic name “$1” stays."),
+        ("拟人化延迟", "Human-like delay · "),
+        ("第 (\\d+)/(\\d+) 段", "part $1/$2"),
+        ("等待 bridge 回执", "waiting for bridge receipt"),
+        ("R3 发送句柄未就绪（微信重启后需在本机微信手动发一条消息）", "R3 send handle not ready (after restarting WeChat, send a message manually on this Mac)"),
     ]
 
     private static func patternTranslate(_ text: String) -> String {

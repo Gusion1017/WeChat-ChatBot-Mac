@@ -62,9 +62,6 @@ struct CharacterFullArchive: View {
                 ProgressView().controlSize(.small)
             }
             Spacer()
-            Text(L("永久保存 · 不受清理聊天记录影响"))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 10)
@@ -82,7 +79,7 @@ struct CharacterFullArchive: View {
                 symbol: search.isEmpty ? "archivebox" : "magnifyingglass",
                 title: search.isEmpty ? "还没有全量记录" : "没有匹配的记录",
                 message: search.isEmpty
-                    ? "该会话的记忆卡会回填最多 5000 条历史消息，之后按游标增量同步。"
+                    ? "首次查看时会回填最多 5000 条历史互动。"
                     : "尝试其它关键词；搜索只匹配互动正文。"
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

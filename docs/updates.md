@@ -2,10 +2,10 @@
 
 > 本文是应用内更新的**现行契约**（docs-first）：GitHub Releases 检测、版本比较、自动检查、下载与 SHA256
 > 校验、原地安装、更新助手与失败回滚、安装门禁、错误提示和验收清单。服务定位见
-> [`core-services.md`](core-services.md) §5.12，页面交互见 [`ui-design.md`](ui-design.md) §5.9；
+> [`core-services.md`](core-services.md) §5.12，页面交互见 [`ui-design.md`](ui-design.md) §5.10；
 > 手动下载/覆盖安装的关系见 [`install.md`](install.md) §2.1。
 >
-> 发布状态：已发布的 **3.0.0** 不含「更新」分类，本文描述随下一版本提供的能力；旧版本仍按
+> 发布状态：应用内更新自 **3.1.0** 起提供，当前 **4.0.0** 已包含；更早版本仍按
 > [`install.md`](install.md) §2 手动下载覆盖安装。
 
 ## 1. 用户可感知行为
@@ -31,7 +31,7 @@
 | 仓库 | `Gusion1017/WeChat-ChatBot-Mac` |
 | 检查接口 | `GET https://api.github.com/repos/Gusion1017/WeChat-ChatBot-Mac/releases/latest` |
 | 鉴权 | 无鉴权、只读公开接口；不发送 API Key / Cookie |
-| 请求头 | `Accept: application/vnd.github+json`、`User-Agent: WeChatAI/<version>`、`X-GitHub-Api-Version: 2022-11-28` |
+| 请求头 | `Accept: application/vnd.github+json`、`User-Agent: WeChatAI/<version> (macOS; +https://github.com/Gusion1017/WeChat-ChatBot-Mac)`、`X-GitHub-Api-Version: 2022-11-28` |
 | 限流 | 未认证请求按来源 IP **60 次/小时**；`403` 且 `X-RateLimit-Remaining: 0`（或任意 `429`）视为限流 |
 | 无发布版本 | `404` → 「GitHub 上没有已发布的正式版本」 |
 | 响应使用字段 | `tag_name`、`name`、`body`、`html_url`、`published_at`、`assets[].name` / `browser_download_url` / `size` |
@@ -232,7 +232,7 @@ Gatekeeper 放行，见 §8。
 | --- | --- | --- |
 | ad-hoc 签名、未公证 | 替换后的新版本首次打开可能被 Gatekeeper 拦截 | 按 [`install.md`](install.md) §2 Gatekeeper 流程「仍要打开」；助手会移除新包 quarantine（失败只记日志），但不改变未公证事实 |
 | 需可写安装目录 | `/Applications` 属主异常或只读卷上不能原地更新 | 安装到 `~/Applications`，或修正目录权限后重试；不提供提权 |
-| 仅正式版、无增量更新 | 每次更新下载完整 `WeChat-AI-<version>.zip`（约 65MB） | 进度条展示大小；网络慢时等待完成 |
+| 仅正式版、无增量更新 | 每次更新下载完整 `WeChat-AI-<version>.zip`（约 70 MB / 66 MiB） | 进度条展示大小；网络慢时等待完成 |
 | 助手等待旧 PID 最多约 60 秒 | 旧 App 若未及时退出，助手按失败回滚 | 确保更新时 App 能正常退出；失败后查看 `update.log` |
 | 成功启动后无自动降级 | 新版本自身有问题时不会自动回滚 | 旧备份会在新版本**首次启动**时清理；需要保留旧版请更新前自行备份或重新下载旧版安装 |
 

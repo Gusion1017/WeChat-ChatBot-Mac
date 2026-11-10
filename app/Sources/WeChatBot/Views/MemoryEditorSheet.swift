@@ -44,8 +44,8 @@ struct MemoryEditorSheet: View {
 
             InlineNotice(
                 kind: .info,
-                title: isNew ? "手写记忆" : "记忆详情",
-                message: "来源与时间由系统记录；编辑后会刷新更新时间，时间衰减从头计算。"
+                title: "来源与时间",
+                message: "由系统记录，不能手动修改；编辑后会刷新更新时间并重新计算权重。"
             )
 
             contentEditor
@@ -111,7 +111,9 @@ struct MemoryEditorSheet: View {
                 }
                 .disabled(isSaving)
             HStack(spacing: 8) {
-                Text(L("例如：对方叫小林，喜欢猫；我们约好周五晚上讨论旅行计划。"))
+                Text(L(trimmedContent.isEmpty
+                    ? "请填写记忆内容。"
+                    : "例如：对方叫小林，喜欢猫；我们约好周五晚上讨论旅行计划。"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -145,8 +147,9 @@ struct MemoryEditorSheet: View {
 
     private var importanceRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 3) {
                 Text(L("重要度")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HelpTip(text: "重要度达到阈值时按「重要」慢衰减；置顶记忆不衰减。阈值可在「记忆设置」中调整。")
                 Spacer()
                 Text(String(format: "%.1f", importance))
                     .font(.caption.monospacedDigit().weight(.semibold))
@@ -165,7 +168,7 @@ struct MemoryEditorSheet: View {
             .accessibilityLabel(L("重要度"))
             .accessibilityValue(String(format: "%.1f", importance))
             Text(Lf(
-                "重要度 ≥ %.1f 时按「重要」慢衰减；置顶记忆不衰减。",
+                "≥ %.1f 视为「重要」，衰减更慢。",
                 settings.importanceThreshold
             ))
             .font(.caption2)
@@ -348,7 +351,7 @@ struct MemoryEditorSheet: View {
                 )
                 dismiss()
             } else {
-                toast.show(L("保存记忆失败，请查看日志"), tone: .error)
+                toast.show(L("保存记忆失败，请重试；详情见运行日志"), tone: .error)
             }
         }
     }

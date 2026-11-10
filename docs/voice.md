@@ -1,8 +1,11 @@
 # 语音能力（入站转写 / 出站合成）
 
-> 状态：**入站转写与出站语音发送均已在微信 4.2.0.5 真机打通**；目标微信 4.2.0.12（Hook/文本链路
-> 已真机验证，语音发送沿用同一链路，首次使用需手动发一条文字 + 一条语音捕获句柄），历史 4.2.0.9
-> 已验证文本链路。
+> **发布状态（2026-11-10）**：本文描述 **4.0.0**，已包含 4.2.0.17 适配（见 [`install.md`](install.md)）。
+>
+> 状态：**入站转写与出站语音发送均已在微信 4.2.0.5 真机打通**；目标微信 4.2.0.17（Hook/文本链路已于
+> 2026-11-07 真机验证；语音发送沿用同一链路但未在 4.2.0.17 复测），历史 4.2.0.12 / 4.2.0.9 已验证文本链路。
+> 首次使用或微信重启后仍需在本机微信手动发一条文字 + 一条语音捕获发送句柄；App 通过统一的
+> 「捕获发送句柄」弹窗提示（见 §4.1）。
 > macOS 26+ · 本地处理、数据不出设备 · 相关：[`architecture.md`](architecture.md)、[`bridge.md`](bridge.md)、
 > [`core-services.md`](core-services.md)、[`ui-design.md`](ui-design.md)
 
@@ -102,14 +105,17 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 ### 3.4 `GET|POST /voice_status`（Bearer）
 
 只读诊断：返回登录稳定门禁剩余毫秒数、文本/语音发送句柄与语音发送配置状态
-（App 显示倒计时与捕获引导用），不含地址与密钥。
+（「捕获发送句柄」弹窗与语音面板状态行使用），不含地址与密钥。
 
 ## 4. 设置
 
 > 语音设置面板只位于「机器人 → 语音」，复用共用组件 `VoiceSettingsPanel`；设置页不再提供
 > 「语音」分类，**会话详情菜单也不提供语音设置**：转写、语音回复、概率、对等、仅短回复、
-> 音色与运行设备均为全局设置。语音发送复用「R3 原生发送」开关，首次启用需捕获文本/语音句柄、
-> 显示启动倒计时，请先在本机微信手动发一条文字 + 一条语音；未就绪或发送失败时自动降级文字。
+> 音色与运行设备均为全局设置。语音发送复用「R3 原生发送」开关；首次启用或微信重启后需捕获
+> 文本/语音句柄，开启语音回复或机器人启动检测会打开统一的「捕获发送句柄」弹窗（见 §4.1）；
+> 未就绪或发送失败时自动降级文字。手动发一条语音时 hook 会克隆 uploadvoice 任务闭包并持久化
+> 语音句柄（与文本句柄同存于 `r3-seed.json`，按微信进程恢复）；朋友圈开启时统一弹窗会多一条
+> 「打开/发布一次朋友圈」，朋友圈读取/发布样本缺失也会参与启动检测（见 §4.1、[sns.md](sns.md) §2）。
 
 ### 4.1 界面（单模型）
 
@@ -133,10 +139,21 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 - **试听**：直接调用本地 Qwen3-TTS HTTP 服务（同音色/原生 24k WAV），本地 `AVAudioPlayer`
   播放，不发往微信、不联网；切换音色/运行设备、离开页面或再次点按即停止。全局只保留一个播放器。
 - **语音发送状态**：只在开启「允许语音回复」时出现。
-- **句柄引导**：开启「允许语音回复」时先刷新 `/voice_status`，未就绪即弹
-  `VoiceHandleSetupSheet`，展示原因（bridge 未连接、R3 未开启、版本不支持、登录预热中）并提供
-  「重新检测」；bridge 刚启动、hook 尚未连接时最多等约 60 秒再判断；bridge 启动后若已开启语音
-  回复且句柄缺失，自动提示一次（同一 App 会话最多一次）。
+- **句柄引导**：统一使用全局「捕获发送句柄」弹窗 `CaptureSetupSheet`（`CaptureSetupPlan` 判定条目/状态）：
+  - 条目按功能显示：「发一条文字」始终显示，`ready = voiceRuntimeStatus.textSeed`；「发一条语音」仅在
+    「允许语音回复」开启时显示，`ready = voiceSeed`；朋友圈条目只在朋友圈开启时显示。当前微信版本不支持
+    语音发送或 R3 未启用时，「发一条语音」显示「不可用」，且不会出现在状态行的「还差：…」里。
+  - 删除原「等待登录稳定」步骤；登录预热只作为状态行（仅语音开启且剩余 > 0 时显示倒计时），
+    状态还可能为「机器人未运行 / bridge 尚未就绪 / R3 原生发送未开启 / 当前版本不支持语音发送 /
+    还差：发一条语音（直接列出缺失条目）」。
+  - 开启「允许语音回复」时先刷新 `/voice_status`，不能发送语音即打开该弹窗。
+  - **机器人启动检测**：每次启动机器人都重新检测（bridge/hook 未就绪时每 3s 重试、最多约 60s），
+    只要发送通道可用且句柄/样本仍缺失就自动弹一次；同一次机器人运行内最多一次，不影响下次启动。
+    检测范围：R3 原生发送开启且文字句柄缺失（即使语音、朋友圈都关闭）、语音回复开启且语音句柄缺失、
+    朋友圈开启且读取样本（或开启发布后的 post 样本）缺失。用户手动打开弹窗只算本次运行已提示，
+    不会吞掉下一次启动的自动提示。
+  - 弹窗打开期间约 1s 轮询 `/voice_status`；「重新检测」立即刷新。语音面板只保留单行发送状态与
+    「重新检测 / 查看步骤…」入口，不再重复整段说明。
 
 `BotSettings.voice`（可选结构，缺键默认；旧配置完全兼容）：
 
@@ -160,8 +177,8 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 ## 5. 语音模型
 
 - **唯一语音模型是 Qwen3-TTS-1.7B**（`Qwen3-TTS-12Hz-1.7B-Base-bf16`，Apple MLX，依赖
-  `mlx-audio`）。安装根目录 `~/Library/Application Support/WeChatAI/cosyvoice/`（源码运行时为
-  `_local/cosyvoice/`），含 `venv-qwen3tts`、模型、`.installed-qwen3tts` 标记，`voices/` 保留；
+  `mlx-audio`）。安装根目录 `~/Library/Application Support/WeChatAI/cosyvoice/`（开发态默认
+  `<repo>/_local/cosyvoice`，首次安装时创建；仓库默认不包含该目录，已被 `.gitignore` 忽略），含 `venv-qwen3tts`、模型、`.installed-qwen3tts` 标记，`voices/` 保留；
   细节见 [`cosyvoice.md`](cosyvoice.md)。
 - **安装需用户显式确认**：在「机器人 → 语音 → 语音引擎与音色 → 运行环境与模型」点
   「下载并安装…」，确认框写明体积（约 4.7GB：模型 4.2GB + 依赖 0.5GB，运行时内存约 10GB）；
@@ -180,8 +197,8 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 - **数字/日期/电话**：旧引擎的 `rule_fsts`（`date-zh` / `phone-zh` / `number-zh`）已移除，Qwen3
   侧读法以实测为准；语音文本清洗仍在（Markdown/emoji/URL、`[语音 Ns]` 标注、`%` → 百分之、
   货币口语化，见 §2）。
-- **系统中文语音资源**：转写依赖系统语音资源，部分机器需先在 系统设置 → 辅助功能 → 朗读内容
-  下载中文语音；「机器人 → 语音」也提供「下载中文语音资源」按钮（`AssetInventory`），它与上表
+- **系统中文语音资源**：转写依赖系统语音资源，部分机器需先在 系统设置 → 通用 → 语言与地区 →
+  语音识别资源 下载中文语音；「机器人 → 语音」也提供「下载中文语音资源」按钮（`AssetInventory`），它与上表
   TTS 资源是两套独立资源。
 - 失败降级：模型未安装、运行环境/模型缺失、服务未启动、旧版 CosyVoice3 服务仍占用端口、合成失败或
   超时、发送句柄未就绪或微信侧拒绝时自动改发文字、不重试语音；可在「机器人 → 语音」重试安装/启动
@@ -216,9 +233,9 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
   20ms 帧再编码。真机验证 TTS 5s 语音有声音、内容正确、可正常停止。使用限制：
 
   1. 首次启用语音发送或微信重启后，需要在本机微信**手动发一条文字 + 一条语音**捕获句柄；
-     bridge 重启会自动恢复。
-  2. bridge 刚启动的 **60 秒内**登录尚未稳定，语音上传可能失败并降级文字；等待 60s 或先发一张
-     图片即可恢复。
+     bridge 重启会自动恢复。App 会用统一的「捕获发送句柄」弹窗提示（见 §4.1）。
+  2. bridge 刚启动的 **60 秒内**登录尚未稳定，语音上传可能失败并降级文字；弹窗/面板只以状态行展示
+     倒计时（不再作为独立步骤），等待或恢复后重新检测即可。
   3. 语音发送失败必须保持自动降级文字，不能重试语音（避免重复发送）。
   4. 发送后桌面微信可能不回显（与文本发送一致），以手机/对方客户端为准。
 
@@ -229,7 +246,8 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 - 音频、转写、参考音频（含 `refs/` 原始片段与合并 prompt）只存本机；日志不打印转写原文、
   音频字节、aeskey、CDN key。转写展示/记忆可分别关闭，删除消息/会话时随本地存储清理。
 - 首次启用或微信重启后需捕获发送句柄；默认 `replyEnabled=false`，句柄/倒计时未就绪时失败自动降级
-  文字。本地 TTS 引擎安装与模型下载是用户显式确认后的网络请求，不上传任何用户数据。
+  文字。App 用统一的「捕获发送句柄」弹窗提示（条目按语音/朋友圈开关显示），不控制微信界面。
+  本地 TTS 引擎安装与模型下载是用户显式确认后的网络请求，不上传任何用户数据。
 
 ## 9. 代码位置
 
@@ -239,10 +257,10 @@ AI 回复文本 → decideVoiceReply（开关/概率/对等/短回复/本地 TTS
 | Bridge | `bridge/voice.go`、`bridge/voice_test.go`、`bridge/incoming.go`、`bridge/http.go`、`bridge/main.go`、`bridge/param.go` |
 | STT | `app/Sources/WeChatBot/Services/VoiceTranscriptionService.swift`、`VoiceFetcher.swift` |
 | 回复决策 | `app/Sources/WeChatBot/Services/VoiceReplyDecision.swift` |
-| TTS | `app/Sources/WeChatBot/Services/VoiceSynthesisService.swift`、`VoiceSynthesisAudio.swift`、`VoiceSynthesisText.swift`；引擎选择见 `Models/Models.swift`（`VoiceEngine`）与 `Views/VoiceSettingsPanel.swift` |
+| TTS | `app/Sources/WeChatBot/Services/VoiceSynthesisService.swift`、`VoiceSynthesisAudio.swift`、`VoiceSynthesisText.swift`；Qwen3-TTS-1.7B 单模型（无引擎选择）；设置见 `Views/VoiceSettingsPanel.swift` |
 | 音色/试听 | `Services/VoicePreviewController.swift`（共享试听播放器，走当前引擎的本地 HTTP 服务） |
 | 本地 TTS | `Services/CosyVoice{Client,Runtime,Installer}.swift`、`Models/CosyVoiceVoice.swift`、`Models/CosyVoiceReference.swift`、`Services/CosyVoiceVoiceStore.swift`、`Views/Components/CosyVoiceVoiceManagerSheet.swift`、`devtools/cosyvoice/`、`scripts/{install,run}_cosyvoice.sh`；详见 [`cosyvoice.md`](cosyvoice.md) |
-| UI | `Views/VoiceSettingsPanel.swift`、`Views/Components/MessageBubble.swift`、`Views/ConversationsView.swift` |
+| UI | `Views/VoiceSettingsPanel.swift`、`Views/CaptureSetupSheet.swift`、`Views/Components/MessageBubble.swift`、`Views/ConversationsView.swift`；条目/状态判定见 `Models/CaptureSetup.swift` |
 | 数据 | `Models/Models.swift`、`Services/MemoryStore.swift`、`Core/AppStore+Runtime.swift` |
 
 ## 10. 测试
@@ -252,7 +270,7 @@ bash scripts/check.sh --with-go        # 静态 + Swift 全量 + Go
 cd app && SWIFT_DISABLE_SANDBOX=1 swift test --scratch-path .build-lead
 ```
 
-当前：Swift 619 项执行（617 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；含 Qwen3 GPU/CPU、参考音
-导入、语音合成/发送回归、记忆 v2）；Go 8 个 `_test.go` / 63 顶层 + 97 子测试通过；release App 约 168MB
-（不再静态链接 sherpa-onnx，二进制约 17MB）。语音实现细节见 `bridge/voice.go`、`bridge/voice_test.go`；
+当前：Swift **879 项**执行（877 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件；覆盖 Qwen3 GPU/CPU、参考音
+导入、语音合成/发送回归、记忆 v2、捕获句柄判定）；Go **312 项**用例（180 顶层 + 132 子测试，0 失败；`bridge/*_test.go` 19 个文件）；4.0.0 App 约 175MB（本机 `dist/` 实测；二进制约 21MB，
+不再静态链接 sherpa-onnx）。语音实现细节见 `bridge/voice.go`、`bridge/voice_test.go`；
 契约与限制见本文件与 [`bridge.md`](bridge.md)。

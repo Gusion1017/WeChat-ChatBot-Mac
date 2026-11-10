@@ -25,11 +25,8 @@ struct AIModelsView: View {
                     EmptyState(
                         symbol: "sparkles",
                         title: "还没有 AI 通道",
-                        message: "添加一个 OpenAI 兼容通道后，机器人才会生成回复。",
-                        actionTitle: "添加通道"
-                    ) {
-                        addProvider()
-                    }
+                        message: "添加一个 OpenAI 兼容通道后，机器人才会生成回复。"
+                    )
                 }
             } else {
                 VStack(spacing: 9) {
@@ -129,13 +126,12 @@ struct AIModelsView: View {
     private var defaultChannelCard: some View {
         SectionCard(
             title: "默认通道",
-            subtitle: "自动回复默认使用此通道",
             symbol: "star.fill",
             tint: Theme.warning
         ) {
             VStack(spacing: 0) {
                 SettingsRow(
-                    title: "默认通道",
+                    title: "回复通道",
                     subtitle: "自动回复使用此通道；停用或缺少密钥时无法生成回复。",
                     symbol: "star.fill",
                     tint: Theme.warning
@@ -177,7 +173,7 @@ struct AIModelsView: View {
             VStack(spacing: 0) {
                 SettingsRow(
                     title: "流式回复",
-                    subtitle: "关闭后所有通道都等待完整回复；开启时由各通道的「流式返回」决定。",
+                    subtitle: "关闭后所有通道等待完整回复；开启时按各通道设置。",
                     symbol: "waveform",
                     tint: Theme.info
                 ) {
@@ -189,7 +185,7 @@ struct AIModelsView: View {
                 SettingsDivider()
                 SettingsRow(
                     title: "失败重试",
-                    subtitle: "一次回复失败后额外重试的次数（0 = 不重试）。",
+                    subtitle: "失败后额外重试次数（0 = 不重试）。",
                     symbol: "arrow.clockwise",
                     tint: .secondary
                 ) {
@@ -212,13 +208,14 @@ struct AIModelsView: View {
     private var visionCard: some View {
         SectionCard(
             title: "识图模型",
-            subtitle: "可选：先让视觉模型描述图片，再把描述交给回复模型参考",
+            subtitle: "可选：先描述图片，再把描述交给回复模型参考",
             symbol: "eye.fill",
-            tint: Theme.info
+            tint: Theme.info,
+            help: "识图结果只保存在本机，并作为后续回复的上下文；建议选择支持图片输入的多模态模型。"
         ) {
             VStack(spacing: 0) {
                 if store.providers.isEmpty {
-                    Text(L("先添加通道并填写模型名称。"))
+                    Text(L("添加通道后可启用识图。"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -226,7 +223,7 @@ struct AIModelsView: View {
                 } else {
                     SettingsRow(
                         title: "启用识图",
-                        subtitle: "关闭时只显示图片占位，不发起视觉请求。",
+                        subtitle: "关闭后只显示图片占位，下方设置不可用。",
                         symbol: "eye.fill",
                         tint: Theme.info
                     ) {
@@ -256,7 +253,7 @@ struct AIModelsView: View {
                     SettingsDivider()
                     SettingsRow(
                         title: "识图模型覆盖",
-                        subtitle: "留空时跟随所选通道的模型；填写则覆盖，需支持 OpenAI 兼容的 image_url 输入。",
+                        subtitle: "留空跟随所选通道的模型；需支持 image_url 输入。",
                         symbol: "cpu",
                         tint: Theme.info
                     ) {
@@ -279,15 +276,6 @@ struct AIModelsView: View {
                             }
                         }
                     }
-                    Label(
-                        L("识图结果只保存在本机，并随消息作为后续回复的上下文；建议选择支持图片输入的多模态模型。"),
-                        systemImage: "info.circle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 2)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.vertical, -4)
@@ -299,9 +287,10 @@ struct AIModelsView: View {
     private var temperatureCard: some View {
         SectionCard(
             title: "模型温度",
-            subtitle: "按模型单独配置；未设置时不发送 temperature，使用模型自身默认值",
+            subtitle: "按模型单独配置；未设置时不发送 temperature",
             symbol: "thermometer.medium",
             tint: Theme.warning,
+            help: "温度范围 0–2：越低越稳定，越高越随机。列表包含通道与人格中实际使用的模型。",
             trailing: {
                 if hasCustomTemperatures {
                     Button(L("全部恢复默认")) {
@@ -315,7 +304,7 @@ struct AIModelsView: View {
             content: {
                 VStack(spacing: 0) {
                     if knownModels.isEmpty {
-                        Text(L("先添加通道并填写模型名称。"))
+                        Text(L("添加通道并填写模型后可按模型设置温度。"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -325,14 +314,6 @@ struct AIModelsView: View {
                             if index > 0 { SettingsDivider() }
                             modelTemperatureRow(model)
                         }
-                        SettingsDivider()
-                        Text(L("温度范围 0–2：越低越稳定克制，越高越随机发散；列表包含通道与人格中使用的模型。"))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.vertical, -4)
@@ -396,7 +377,7 @@ struct AIModelsView: View {
                     .help(L("恢复模型默认温度"))
                     .accessibilityLabel(Lf("恢复 %@ 默认温度", model))
                 } else {
-                    Button(L("自定义")) {
+                    Button(L("设置温度")) {
                         setModelTemperature(0.7, for: model)
                     }
                     .buttonStyle(.glass)
@@ -437,7 +418,7 @@ struct AIModelsView: View {
     private var securityCard: some View {
         SectionCard(
             title: "密钥与安全",
-            subtitle: "本机运行，不经过第三方服务器",
+            subtitle: "密钥只保存在本机 Keychain",
             symbol: "lock.shield.fill",
             tint: Theme.success
         ) {
@@ -591,7 +572,7 @@ struct AIModelsView: View {
         if let secret, !secret.isEmpty {
             do {
                 try store.saveAPIKey(secret, for: updated.id)
-                toast.show("API Key 已安全存入 Keychain", tone: .success, symbol: "key.fill")
+                toast.show("API Key 已存入 Keychain", tone: .success, symbol: "key.fill")
             } catch {
                 toast.show("通道已保存，但密钥写入失败：\(error.localizedDescription)", tone: .error, symbol: "key.slash")
             }
@@ -664,11 +645,9 @@ struct AIModelsView: View {
             let result = await store.testProvider(provider)
             switch result {
             case .success(let message):
-                testStates[provider.id] = .success(message.isEmpty ? "连接成功" : message)
-                toast.show("\(provider.name) 连接正常", tone: .success)
+                testStates[provider.id] = .success(message)
             case .failure(let error):
                 testStates[provider.id] = .failure(error.localizedDescription)
-                toast.show("\(provider.name) 连接失败", tone: .error)
             }
         }
     }

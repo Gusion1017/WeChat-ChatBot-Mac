@@ -70,7 +70,7 @@ struct CosyVoiceVoice: Identifiable, Codable, Hashable, Sendable {
         name = trimmedName.isEmpty
             ? CosyVoiceVoiceCatalog.displayName(for: trimmedID)
             : trimmedName
-        description = (rawDescription ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        description = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         mode = (try? container.decodeIfPresent(String.self, forKey: .mode)) ?? nil
         // 旧服务响应缺字段：默认仅限个人使用 + 按 id 推断内置。
         let personal = (try? container.decodeIfPresent(Bool.self, forKey: .personalUseOnly))

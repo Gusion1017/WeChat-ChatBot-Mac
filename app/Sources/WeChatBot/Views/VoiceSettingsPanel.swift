@@ -20,7 +20,6 @@ struct VoiceSettingsPanel: View {
     @State private var isRefreshingVoiceAsset = false
     @State private var isInstallingVoiceAsset = false
     @State private var voiceStatusTick = Date()
-    @State private var voiceSetupPresented = false
     // 本地语音服务：状态/安装状态用 1s 轮询刷新（actor 内不驱动 UI）。
     // App 不内置任何音色：列表只来自本机 voices.json / 服务端 /voices，空库显示「未添加音色」。
     @State private var cosyVoiceRuntime = CosyVoiceRuntimeSnapshot.initial
@@ -56,13 +55,10 @@ struct VoiceSettingsPanel: View {
                 return
             }
             Task {
-                await store.refreshVoiceStatus()
+                // 首次开启（或微信重启后句柄失效）时先检测一次；
+                // 只要有不能发送语音的原因，就打开统一的「捕获发送句柄」弹窗。
+                await store.promptCaptureSetupAfterVoiceToggle()
                 voiceStatusTick = Date()
-                // 首次开启（或微信重启后句柄失效）时先检测一次；只要当前不能发送语音，
-                // 就弹出捕获引导。bridge 未连接/R3 未启用也提示，由弹窗解释当前状态。
-                if !store.voiceRuntimeStatus.canSendVoice() {
-                    voiceSetupPresented = true
-                }
             }
         }
         // 音色/运行设备/服务地址变化时立刻停掉旧试听，避免“听到的是上一个音色”。
@@ -70,10 +66,6 @@ struct VoiceSettingsPanel: View {
         .onChange(of: voiceSettings.cosyVoiceEndpoint) { _, _ in store.voicePreview.stop() }
         .onChange(of: voiceSettings.voiceComputeDevice) { _, _ in store.voicePreview.stop() }
         .onDisappear { store.voicePreview.stop() }
-        .sheet(isPresented: $voiceSetupPresented) {
-            VoiceHandleSetupSheet()
-                .environment(store)
-        }
         .confirmationDialog(
             cosyVoiceInstallDialogTitle,
             isPresented: $pendingCosyVoiceInstall,
@@ -118,7 +110,8 @@ struct VoiceSettingsPanel: View {
     private var transcriptionSection: some View {
         SettingsSection(
             title: "语音转写",
-            footer: "使用 macOS 26 本地语音识别（SpeechAnalyzer），音频与转写只保存在本机，日志不打印转写原文。"
+            footer: "只在本机识别，音频与转写不上传。",
+            help: "使用 macOS 26 的本地语音识别（SpeechAnalyzer）；音频与转写只保存在本机，运行日志不记录转写原文。"
         ) {
             SettingsRow(
                 title: "转写收到的语音",
@@ -201,9 +194,9 @@ struct VoiceSettingsPanel: View {
     private var voiceAssetSubtitle: String {
         switch voiceAssetStatus {
         case .installed: return L("已安装，可离线转写")
-        case .downloadable: return L("系统支持但资源未安装，可直接在 App 内下载")
-        case .unsupported: return L("当前系统不支持本地中文识别，文字聊天不受影响")
-        case .unknown: return L("点击刷新检查本机语音资源状态")
+        case .downloadable: return L("系统支持，资源未安装")
+        case .unsupported: return L("系统不支持本地中文识别，文字聊天不受影响")
+        case .unknown: return L("未检测；点右侧刷新检查")
         }
     }
 
@@ -212,7 +205,8 @@ struct VoiceSettingsPanel: View {
     private var replySection: some View {
         SettingsSection(
             title: "语音回复",
-            footer: "只对满足条件的文字回复改发语音；发送失败（句柄未就绪、上传失败等）会自动改发文字，不会重复发送。"
+            footer: "发送失败会自动改发文字，不会重复发送。",
+            help: "只有满足条件的文字回复才改发语音：由概率、对等、短回复阈值与最长时长共同决定。失败原因包括发送句柄未就绪、上传失败等。"
         ) {
             SettingsRow(
                 title: "允许语音回复",
@@ -354,7 +348,8 @@ struct VoiceSettingsPanel: View {
     private var localVoiceSection: some View {
         SettingsSection(
             title: "本地语音（Qwen3-TTS-1.7B）",
-            footer: localVoiceSectionFooter
+            footer: localVoiceSectionFooter,
+            help: localVoiceSectionHelp
         ) {
             cosyVoiceComputeDeviceRow
             SettingsDivider()
@@ -374,13 +369,14 @@ struct VoiceSettingsPanel: View {
         }
     }
 
+    /// 可见的安装条件与等待预期（体积/内存、预热、CPU 很慢）。
     private var localVoiceSectionFooter: String {
-        "Qwen3-TTS-1.7B 是本机离线语音模型：运行环境与模型需单独安装（下载约 4.7GB，"
-            + "运行时内存约 10GB），语音合成全部在本机完成、不联网。默认使用 GPU（MLX）；"
-            + "CPU 后端极慢（短句可能数分钟），仅建议排障或无 GPU 环境使用，"
-            + "合成可能超时并改发文字。App 不内置任何音色：音色仅保存在本机，"
-            + "需在「管理音色…」中添加。发布版 App 内置安装/启动脚本；若脚本缺失，可用 "
-            + "WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT 指定路径。"
+        "需先安装运行环境与模型（下载约 4.7 GB，运行时内存约 10 GB）；首次合成预热约 10 秒；CPU 后端极慢，可能超时并改发文字。"
+    }
+
+    /// 原理、音色位置与脚本覆盖方式（问号提示）。
+    private var localVoiceSectionHelp: String {
+        "模型在本机离线运行，不联网：MLX 模型约 4.2 GB、依赖约 0.5 GB，默认使用 GPU（MLX）。App 不内置音色：音色只保存在本机，需在「管理音色…」中添加。发布版内置安装与启动脚本；脚本缺失时可用 WECHATAI_COSYVOICE_SCRIPT / WECHATAI_COSYVOICE_INSTALL_SCRIPT 指定路径。"
     }
 
     /// 运行设备（segmented；切换时停服务 → 保存 → 刷新 → 按策略自动启动）。
@@ -409,7 +405,7 @@ struct VoiceSettingsPanel: View {
         SettingsRow(
             title: "清理 CosyVoice3 旧文件",
             subtitle: Lf(
-                "检测到旧版残留约 %@；只删除旧模型/仓库/venv/安装标记，音色与本机 Qwen3-TTS 文件保留",
+                "旧版残留约 %@；音色与 Qwen3-TTS 安装不受影响",
                 sizeText(legacyCleanupBytes)),
             symbol: "trash",
             tint: Theme.warning
@@ -427,8 +423,7 @@ struct VoiceSettingsPanel: View {
     }
 
     private var legacyCleanupDialogMessage: String {
-        Lf("将删除旧版 CosyVoice3 的模型、源码仓库、venv 与安装标记（约 %@）。"
-            + "共享音色/参考音与本机 Qwen3-TTS 安装会保留，已生成的语音文件不受影响。",
+        Lf("将删除旧版 CosyVoice3 的模型、源码仓库、venv 与安装标记（约 %@）。音色与参考音、Qwen3-TTS 安装会保留，已生成的语音文件不受影响。",
            sizeText(legacyCleanupBytes))
     }
 
@@ -439,7 +434,8 @@ struct VoiceSettingsPanel: View {
             title: "本地服务",
             subtitle: cosyVoiceServiceSubtitle,
             symbol: cosyVoiceServiceSymbol,
-            tint: cosyVoiceServiceTint
+            tint: cosyVoiceServiceTint,
+            help: "首次启动需加载模型，约 20–60 秒。"
         ) {
             HStack(spacing: 8) {
                 PillLabel(
@@ -536,7 +532,7 @@ struct VoiceSettingsPanel: View {
             return Lf("不可用：%@", String(reason.prefix(140)))
         case .stopped, .unknown:
             var text = Lf(
-                "未运行 · Qwen3-TTS-1.7B · %@ · %@（首次启动需加载模型，约 20–60 秒）",
+                "未运行 · Qwen3-TTS-1.7B · %@ · %@",
                 voiceSettings.voiceComputeDevice.label,
                 voiceSettings.cosyVoiceEndpoint)
             if cosyVoiceVoices.isEmpty {
@@ -634,10 +630,9 @@ struct VoiceSettingsPanel: View {
         }
     }
 
-    /// 安装体积说明（单模型，约 4.7GB）。
+    /// 安装体积（单模型约 4.7GB）；模型与依赖的拆分放在本小节的问号提示里。
     private var cosyVoiceInstallEstimateText: String {
-        Lf("合计约 %@（MLX 模型约 4.2GB + 依赖约 0.5GB；运行时内存约 10GB）",
-           sizeText(cosyVoiceInstall.estimatedBytes))
+        Lf("合计约 %@", sizeText(cosyVoiceInstall.estimatedBytes))
     }
 
     // MARK: - 安装/删除确认文案
@@ -647,7 +642,7 @@ struct VoiceSettingsPanel: View {
     }
 
     private var cosyVoiceInstallDialogMessage: String {
-        L("将下载 Qwen3-TTS-1.7B 的 MLX 模型（约 4.2GB）与依赖（约 0.5GB），合计约 4.7GB，保存在本机。运行时内存约 10GB，首次合成会预热约 10 秒；冷启动加载约 20 秒。默认使用 GPU（MLX）；CPU 后端极慢（短句可能数分钟），仅建议排障或无 GPU 环境使用，合成可能超时并改发文字。安装可能持续数十分钟，可随时取消，取消后已下载内容会保留。")
+        L("将下载 MLX 模型（约 4.2 GB）与依赖（约 0.5 GB），合计约 4.7 GB，保存在本机；运行时内存约 10 GB。安装可能持续数十分钟，可随时取消，取消后已下载内容会保留。")
     }
 
     private var cosyVoiceDeleteDialogTitle: String {
@@ -655,7 +650,7 @@ struct VoiceSettingsPanel: View {
     }
 
     private var cosyVoiceDeleteDialogMessage: String {
-        Lf("会删除 Qwen3-TTS-1.7B 的模型、运行环境（venv）与安装标记（约 %@）；共享音色/参考音会保留，需要时可重新安装。已生成的语音文件不受影响。",
+        Lf("会删除模型、运行环境（venv）与安装标记（约 %@）；音色与参考音保留，可重新安装。已生成的语音文件不受影响。",
            sizeText(cosyVoiceInstall.estimatedBytes))
     }
 
@@ -671,7 +666,8 @@ struct VoiceSettingsPanel: View {
             title: "音色",
             subtitle: cosyVoiceVoiceSubtitle,
             symbol: "person.wave.2",
-            tint: .secondary
+            tint: .secondary,
+            help: "App 不内置任何音色；一个音色由 1–5 段参考音与逐字对应的参考文本组成，只保存在本机。"
         ) {
             HStack(spacing: 8) {
                 if hasVoices {
@@ -686,7 +682,7 @@ struct VoiceSettingsPanel: View {
                             Text(L("未选择音色")).tag("")
                         }
                         ForEach(cosyVoiceVoices) { voice in
-                            Text(voice.name).tag(voice.id)
+                            Text(L(voice.name)).tag(voice.id)
                         }
                     }
                     .labelsHidden()
@@ -718,7 +714,7 @@ struct VoiceSettingsPanel: View {
 
     private var cosyVoiceVoiceSubtitle: String {
         if cosyVoiceVoices.isEmpty {
-            return L("未添加音色 · App 不内置任何音色，音色仅保存在本机；点右侧「添加音色…」导入参考音")
+            return L("未添加音色 · 点「添加音色…」导入参考音")
         }
         let id = voiceSettings.effectiveCosyVoiceVoiceID
         guard !id.isEmpty,
@@ -726,8 +722,8 @@ struct VoiceSettingsPanel: View {
             return L("未选择音色 · 从列表选择一个本机音色后才能试听或合成")
         }
         let base = voice.description.isEmpty
-            ? voice.name
-            : "\(voice.name) · \(voice.description)"
+            ? L(voice.name)
+            : "\(L(voice.name)) · \(L(voice.description))"
         if !cosyVoiceInstall.state.isInstalled {
             return "\(base) · " + L("先安装 Qwen3-TTS-1.7B 后才能试听")
         }
@@ -750,7 +746,7 @@ struct VoiceSettingsPanel: View {
     private var cosyVoiceAutoStartRow: some View {
         SettingsRow(
             title: "自动启动",
-            subtitle: "开启语音回复时，启动 App 或打开本页会拉起本地服务",
+            subtitle: "开启语音回复时，启动 App 或打开本页会自动启动本地服务",
             symbol: "power",
             tint: .secondary
         ) {
@@ -768,10 +764,11 @@ struct VoiceSettingsPanel: View {
         SettingsRow(
             title: "服务地址",
             subtitle: voiceSettings.hasValidCosyVoiceEndpoint
-                ? L("默认 http://127.0.0.1:5051；仅允许本机回环地址，改端口后需重启本地服务")
+                ? L("仅允许本机回环地址；改端口后需重启本地服务")
                 : L("仅允许本机回环地址，例如 http://127.0.0.1:5051"),
             symbol: "network",
-            tint: voiceSettings.hasValidCosyVoiceEndpoint ? .secondary : Theme.warning
+            tint: voiceSettings.hasValidCosyVoiceEndpoint ? .secondary : Theme.warning,
+            help: "默认 http://127.0.0.1:5051，只接受本机回环地址。"
         ) {
             HStack(spacing: 6) {
                 TextField(L("服务地址"), text: $cosyVoiceEndpointDraft)
@@ -1007,10 +1004,7 @@ struct VoiceSettingsPanel: View {
     }
 
     private var sendStatusSection: some View {
-        SettingsSection(
-            title: "语音发送状态",
-            footer: "首次启用语音回复或微信重启后，需要在本机微信手动发一条文字和一条语音以捕获发送句柄；bridge 启动后的登录稳定期内不会发送语音。"
-        ) {
+        SettingsSection(title: "语音发送状态") {
             SettingsRow(
                 title: "发送通道",
                 subtitle: voiceRuntimeSummary,
@@ -1034,7 +1028,7 @@ struct VoiceSettingsPanel: View {
                     .help(L("重新检测"))
                     if needsVoiceSetup {
                         Button(L("查看步骤…")) {
-                            voiceSetupPresented = true
+                            store.presentCaptureSetupPrompt()
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)

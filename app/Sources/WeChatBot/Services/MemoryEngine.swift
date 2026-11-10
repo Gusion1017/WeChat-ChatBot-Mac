@@ -996,7 +996,7 @@ enum CharacterMemoryExporter {
         lines.append("")
         lines.append("- 会话：\(snapshot.conversationTitle)（\(snapshot.conversationKind.label)）")
         lines.append("- 会话 ID：\(snapshot.conversationID)")
-        lines.append("- 人设来源：人格设定（\(displayName)）")
+        lines.append("- 人格来源：人格设定（\(displayName)）")
         if let model = persona?.model?.trimmingCharacters(in: .whitespacesAndNewlines),
            !model.isEmpty {
             lines.append("- 模型：\(model)")
@@ -1004,7 +1004,7 @@ enum CharacterMemoryExporter {
         lines.append("- 导出时间：\(Self.dateString(now))")
         lines.append("")
 
-        lines.append("## 人设（人格设定）")
+        lines.append("## 人格（人格设定）")
         lines.append("")
         let summary = (persona?.summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !summary.isEmpty {

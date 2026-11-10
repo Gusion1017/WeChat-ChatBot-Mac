@@ -151,10 +151,10 @@ enum OneBotError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notRunning: return "OneBot 连接未启动"
-        case .invalidURL(let url): return "OneBot 地址无效：\(url)"
-        case .sendFailed(let reason): return "消息发送失败：\(reason)"
-        case .badResponse(let reason): return "OneBot 返回异常：\(reason)"
+        case .notRunning: return L("OneBot 连接未启动。请先启动机器人。")
+        case .invalidURL(let url): return Lf("OneBot 地址无效：%@", url)
+        case .sendFailed(let reason): return Lf("消息发送失败：%@", reason)
+        case .badResponse(let reason): return Lf("OneBot 返回异常：%@", reason)
         }
     }
 }
@@ -206,6 +206,9 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
 
     // Callbacks (invoked off the main thread).
     var onEvent: (@Sendable (OneBotEvent) -> Void)?
+    /// 朋友圈（SNS）WS 事件（bridge 推送 `sns_new_post`/`sns_comment`/`sns_like`）。
+    /// 与聊天事件分开，避免进入消息解析/入库链路；AppStore 收到后交给 MomentsStore。
+    var onSNSEvent: (@Sendable (SnsSyncEvent) -> Void)?
     var onStateChange: (@Sendable (OneBotConnectionState) -> Void)?
     var onLog: (@Sendable (LogLevel, String) -> Void)?
     /// 连接建立后向 bridge 询问 `get_login_info`，拿到权威的 self wxid。
@@ -525,6 +528,15 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
             // 登录信息成功说明 bridge 已就绪：此时才开始要通讯录目录。
             stateQueue.async { [weak self] in
                 self?.startContactDirectoryRequestsLocked()
+            }
+            return
+        }
+        // 朋友圈事件：`{type:"sns_*", account, data:{...}}`，不进聊天事件解析。
+        if let dictionary, let snsType = dictionary["type"] as? String, snsType.hasPrefix("sns_") {
+            if let event = try? JSONDecoder().decode(SnsSyncEvent.self, from: data) {
+                onSNSEvent?(event)
+            } else if let frameText {
+                notifyLog(.debug, "忽略无法识别的朋友圈帧：\(frameText.prefix(180))")
             }
             return
         }
@@ -1172,7 +1184,7 @@ enum OneBotEventParser {
         let messageType = string(raw["message_type"]) ?? (groupID == nil ? "private" : "group")
         let rawMessage = string(raw["raw_message"]) ?? string(raw["rawMessage"]) ?? ""
 
-        var segments = normalizeAppmsgSegments(parseSegments(raw["message"]), rawMessage: rawMessage)
+        let segments = normalizeAppmsgSegments(parseSegments(raw["message"]), rawMessage: rawMessage)
         // 群系统消息（如拍一拍 appmsg）可能把 group_id 同时写进 self_id/user_id，
         // 不能仅凭两者相等就判定为「自己发出」。
         var isSelf = !selfID.isEmpty && selfID == userID

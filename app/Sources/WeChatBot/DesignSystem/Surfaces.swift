@@ -26,6 +26,7 @@ struct SectionCard<Content: View, Trailing: View>: View {
     var subtitle: String?
     var symbol: String?
     var tint: Color = Theme.accent
+    var help: String?
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var content: Content
 
@@ -34,6 +35,7 @@ struct SectionCard<Content: View, Trailing: View>: View {
         subtitle: String? = nil,
         symbol: String? = nil,
         tint: Color = Theme.accent,
+        help: String? = nil,
         @ViewBuilder trailing: () -> Trailing,
         @ViewBuilder content: () -> Content
     ) {
@@ -41,6 +43,7 @@ struct SectionCard<Content: View, Trailing: View>: View {
         self.subtitle = subtitle
         self.symbol = symbol
         self.tint = tint
+        self.help = help
         self.trailing = trailing()
         self.content = content()
     }
@@ -55,7 +58,12 @@ struct SectionCard<Content: View, Trailing: View>: View {
                             .foregroundStyle(tint)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L(title)).font(.headline)
+                        HStack(spacing: 3) {
+                            Text(L(title)).font(.headline)
+                            if let help {
+                                HelpTip(text: help)
+                            }
+                        }
                         if let subtitle {
                             Text(L(subtitle)).font(.caption).foregroundStyle(.secondary)
                         }
@@ -75,9 +83,18 @@ extension SectionCard where Trailing == EmptyView {
         subtitle: String? = nil,
         symbol: String? = nil,
         tint: Color = Theme.accent,
+        help: String? = nil,
         @ViewBuilder content: () -> Content
     ) {
-        self.init(title: title, subtitle: subtitle, symbol: symbol, tint: tint, trailing: { EmptyView() }, content: content)
+        self.init(
+            title: title,
+            subtitle: subtitle,
+            symbol: symbol,
+            tint: tint,
+            help: help,
+            trailing: { EmptyView() },
+            content: content
+        )
     }
 }
 

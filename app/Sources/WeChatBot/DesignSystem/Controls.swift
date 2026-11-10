@@ -173,20 +173,107 @@ struct CopyButton: View {
     }
 }
 
+// MARK: - Help
+
+/// 小问号说明：悬停约 0.6 秒后弹出解释，移开即收起。
+///
+/// 用于把「原理 / 边界条件 / 注意事项」这类描述性文字从行内收起，保持界面简洁；
+/// 操作必需的信息（风险、前置条件、不可逆后果）仍必须写在可见正文里，不能只放在这里。
+/// 解释同时提供给 VoiceOver（标签「查看说明」+ 提示正文）。
+struct HelpTip: View {
+    let text: String
+    var symbol: String = "questionmark.circle"
+    var width: CGFloat = 300
+
+    @State private var isPresented = false
+    @State private var showTask: Task<Void, Never>?
+    @State private var hideTask: Task<Void, Never>?
+    @State private var hoveringAnchor = false
+    @State private var hoveringCard = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .frame(width: 16, height: 16)
+            .background(
+                hoveringAnchor ? Color.primary.opacity(0.06) : Color.clear,
+                in: Circle()
+            )
+            .contentShape(Circle())
+            .onHover { hovering in
+                hoveringAnchor = hovering
+                if hovering {
+                    scheduleShow()
+                } else {
+                    scheduleHide()
+                }
+            }
+            .onTapGesture { isPresented.toggle() }
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                Text(L(text))
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: width, alignment: .leading)
+                    .padding(12)
+                    .onHover { hovering in
+                        hoveringCard = hovering
+                        if hovering {
+                            hideTask?.cancel()
+                        } else {
+                            scheduleHide()
+                        }
+                    }
+            }
+            .accessibilityLabel(L("查看说明"))
+            .accessibilityHint(L(text))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { isPresented.toggle() }
+    }
+
+    private func scheduleShow() {
+        hideTask?.cancel()
+        guard !isPresented else { return }
+        showTask?.cancel()
+        showTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            isPresented = true
+        }
+    }
+
+    private func scheduleHide() {
+        showTask?.cancel()
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, !hoveringAnchor, !hoveringCard else { return }
+            isPresented = false
+        }
+    }
+}
+
 // MARK: - Forms & rows
 
 /// Labelled form control with hint / validation error.
 struct FormField<Content: View>: View {
     let label: String
     var hint: String?
+    var help: String?
     var error: String?
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L(label))
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text(L(label))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                if let help {
+                    HelpTip(text: help)
+                }
+            }
             content
             if let error {
                 Label(L(error), systemImage: "exclamationmark.circle.fill")
@@ -348,14 +435,20 @@ struct SearchField: View {
 struct SettingsSection<Content: View>: View {
     let title: String
     var footer: String?
+    var help: String?
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(L(title))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .padding(.leading, 4)
+            HStack(spacing: 3) {
+                Text(L(title))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                if let help {
+                    HelpTip(text: help)
+                }
+            }
+            .padding(.leading, 4)
             VStack(spacing: 0) { content }
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
@@ -378,6 +471,7 @@ struct SettingsRow<Content: View>: View {
     var subtitle: String?
     var symbol: String?
     var tint: Color = .secondary
+    var help: String?
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -389,7 +483,12 @@ struct SettingsRow<Content: View>: View {
                     .frame(width: 18, alignment: .center)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(L(title)).font(.callout)
+                HStack(spacing: 3) {
+                    Text(L(title)).font(.callout)
+                    if let help {
+                        HelpTip(text: help)
+                    }
+                }
                 if let subtitle {
                     Text(L(subtitle))
                         .font(.caption)

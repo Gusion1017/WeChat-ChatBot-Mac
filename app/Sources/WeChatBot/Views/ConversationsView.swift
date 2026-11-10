@@ -89,7 +89,7 @@ struct ConversationsView: View {
             }
             Button(L("取消"), role: .cancel) { deleteTarget = nil }
         } message: {
-            Text(L("将从本机删除该会话、聊天记录与相关记忆；微信端聊天记录不受影响。此操作无法撤销。"))
+            Text(L("将从本机删除该会话、聊天记录与相关记忆，无法撤销；微信端聊天记录不受影响。"))
         }
         .sheet(item: $cleanupTarget) { target in
             ChatCleanupSheet(
@@ -142,7 +142,7 @@ struct ConversationsView: View {
                     symbol: store.conversations.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
                     title: store.conversations.isEmpty ? "还没有会话" : "没有匹配的会话",
                     message: store.conversations.isEmpty
-                        ? "连接微信后，私聊与群聊会自动出现在这里。"
+                        ? "启动机器人并收到消息后，私聊与群聊会出现在这里。"
                         : "尝试调整搜索关键词或筛选条件。"
                 )
                 Spacer(minLength: 0)
@@ -206,7 +206,7 @@ struct ConversationsView: View {
                 EmptyState(
                     symbol: "bubble.left.and.bubble.right",
                     title: "选择一个会话",
-                    message: "从左侧选择一个聊天，查看消息并在需要时手动发送回复；再次点击当前会话行可收起对话。",
+                    message: "从左侧选择会话查看消息或手动发送；再次点击当前会话行可收起。",
                     actionTitle: store.conversations.isEmpty ? "启动机器人" : nil
                 ) {
                     store.sidebarSelection = .bot
@@ -310,7 +310,7 @@ struct ConversationsView: View {
                             systemImage: choice == .unrestricted ? "checkmark" : "infinity"
                         )
                     }
-                    .help(L("此会话任何时间都允许自动回复，规则引擎不会因时间拦截（手动发送不受影响）。"))
+                    .help(L("此会话不受工作时段限制；手动发送始终可用。"))
                 }
                 Section(L("名称")) {
                     Button {
@@ -491,7 +491,7 @@ struct ConversationsView: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     } else {
-                        Label(L("服务未连接，手动发送已禁用"), systemImage: "bolt.slash")
+                        Label(L("OneBot 未连接，手动发送已禁用"), systemImage: "bolt.slash")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -627,7 +627,7 @@ struct ConversationsView: View {
                 )
             } else {
                 toast.show(
-                    "此会话已设为不限时段",
+                    L("此会话已设为不限时段"),
                     tone: .success,
                     symbol: "infinity"
                 )
@@ -653,7 +653,7 @@ struct ConversationsView: View {
         updated.imageFetchEnabled = enabled
         store.saveConversation(updated)
         toast.show(
-            enabled ? "已开启此会话的图片获取" : "已关闭此会话的图片获取",
+            L(enabled ? "已开启此会话的图片获取" : "已关闭此会话的图片获取"),
             tone: .success,
             symbol: enabled ? "photo.badge.checkmark" : "photo.badge.minus"
         )
@@ -697,7 +697,7 @@ struct ConversationsView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard store.gatewayConnected else {
-            toast.show("OneBot 服务未连接，请先启动机器人", tone: .warning)
+            toast.show(L("OneBot 未连接，请先启动机器人"), tone: .warning)
             return
         }
         draft = ""
@@ -705,7 +705,7 @@ struct ConversationsView: View {
         Task {
             await store.sendManualMessage(conversationID: conversation.id, text: text)
             isSending = false
-            toast.show("消息已提交发送", tone: .success, symbol: "paperplane.fill")
+            toast.show(L("消息已提交发送"), tone: .success, symbol: "paperplane.fill")
         }
     }
 }

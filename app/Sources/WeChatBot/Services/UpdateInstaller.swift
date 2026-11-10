@@ -207,7 +207,7 @@ enum UpdateInstaller {
 
         let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
         guard fileManager.fileExists(atPath: infoURL.path) else {
-            throw AppUpdateError.invalidBundle("缺少 Contents/Info.plist")
+            throw AppUpdateError.invalidBundle("缺少 Info.plist")
         }
         let info: [String: Any]
         do {
@@ -217,7 +217,7 @@ enum UpdateInstaller {
                 options: [],
                 format: nil
             ) as? [String: Any] else {
-                throw AppUpdateError.invalidBundle("Info.plist 不是字典")
+                throw AppUpdateError.invalidBundle("Info.plist 格式不正确")
             }
             info = plist
         } catch let error as AppUpdateError {
@@ -247,7 +247,7 @@ enum UpdateInstaller {
         let executable = ((info["CFBundleExecutable"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !executable.isEmpty else {
-            throw AppUpdateError.invalidBundle("CFBundleExecutable 为空")
+            throw AppUpdateError.invalidBundle("缺少主可执行文件")
         }
         // 只允许单段文件名，拒绝 `../` 之类的路径穿越（不要把校验指到 bundle 外）。
         guard !executable.contains("/"), !executable.contains("\\"),

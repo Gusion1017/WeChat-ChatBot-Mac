@@ -42,9 +42,11 @@ struct PersonaCard: View {
                     Button(L("编辑…"), action: onEdit)
                     Button(L("设为默认人格"), action: onSetDefault)
                         .disabled(isDefault)
+                        .help(L("当前已是默认人格"))
                     Divider()
                     Button(L("删除人格…"), role: .destructive, action: onDelete)
                         .disabled(isDefault)
+                        .help(L("默认人格不能删除；请先把其它人格设为默认。"))
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 13, weight: .medium))
@@ -52,7 +54,7 @@ struct PersonaCard: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .accessibilityLabel(L("\(persona.name) 更多操作"))
+                .accessibilityLabel(Lf("%@ 更多操作", persona.name))
             }
 
             if !persona.summary.isEmpty {

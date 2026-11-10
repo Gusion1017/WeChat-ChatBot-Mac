@@ -98,13 +98,13 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
         case .invalidName(let reason):
             return "音色名称无效：\(reason)"
         case .invalidAudio(let reason):
-            return "参考音频无法使用：\(reason)"
+            return "参考音无法使用：\(reason)"
         case .audioTooShort(let seconds):
-            return String(format: "参考音频太短（%.1f 秒），至少需要 1 秒", seconds)
+            return String(format: "参考音太短（%.1f 秒），至少需要 1 秒", seconds)
         case .audioTooLong(let seconds):
-            return String(format: "参考音频太长（%.1f 秒），请缩短到 30 秒以内", seconds)
+            return String(format: "参考音太长（%.1f 秒），上限 30 秒", seconds)
         case .silentAudio:
-            return "参考音频几乎无声，请换一段清晰的单人说话录音"
+            return "参考音几乎无声，请换一段清晰的单人录音"
         case .invalidID(let id):
             return "音色 ID 不合法：\(id)"
         case .notFound(let id):
@@ -112,7 +112,7 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
         case .builtinProtected:
             return "内置音色不能删除"
         case .builtinReferenceLocked:
-            return "内置音色只允许修改名称和简介，参考音频与参考文本不可替换"
+            return "内置音色只允许修改名称和简介，参考音与参考文本不可替换"
         case .builtinExportDenied:
             return "内置音色不可导出（只有自定义/克隆音色可以备份）"
         case .nothingToExport:
@@ -128,17 +128,17 @@ enum CosyVoiceVoiceStoreError: Error, LocalizedError, Equatable {
         case .exportFailed(let reason):
             return "导出音色失败：\(reason)"
         case .tooManyReferences(let max):
-            return "一条音色最多保存 \(max) 条参考音频"
+            return "一个音色最多保存 \(max) 段参考音"
         case .missingReferences:
-            return "请至少添加一条参考音频"
+            return "请至少添加一段参考音"
         case .inconsistentReferenceText:
-            return "部分参考音频缺少参考文本"
+            return "部分参考音缺少参考文本"
         case .referenceTotalTooLong(let seconds):
             return String(
-                format: "参考音频总长 %.1f 秒，超过 %.0f 秒上限；请先删除或缩短参考音频",
+                format: "参考音总长 %.1f 秒，超过 %.0f 秒上限；请先删除或缩短",
                 seconds, CosyVoiceReferenceSpec.maxTotalDuration)
         case .invalidReference(let reason):
-            return "参考音频不可用：\(reason)"
+            return "参考音不可用：\(reason)"
         }
     }
 }

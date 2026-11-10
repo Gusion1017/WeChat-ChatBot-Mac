@@ -10,6 +10,7 @@ enum BotTab: String, CaseIterable, Identifiable, PageTabItem {
     case lists
     case rhythm
     case schedules
+    case moments
     case voice
 
     var id: String { rawValue }
@@ -22,6 +23,7 @@ enum BotTab: String, CaseIterable, Identifiable, PageTabItem {
         case .lists: "名单"
         case .rhythm: "节奏"
         case .schedules: "定时"
+        case .moments: "朋友圈"
         case .voice: "语音"
         }
     }
@@ -34,6 +36,7 @@ enum BotTab: String, CaseIterable, Identifiable, PageTabItem {
         case .lists: "checklist"
         case .rhythm: "gauge.with.dots.needle.33percent"
         case .schedules: "calendar.badge.clock"
+        case .moments: "photo.on.rectangle.angled"
         case .voice: "waveform"
         }
     }
@@ -46,6 +49,7 @@ enum BotTab: String, CaseIterable, Identifiable, PageTabItem {
         case .lists: "白名单与黑名单"
         case .rhythm: "频率、工作时间与拟人化"
         case .schedules: "定时向指定会话发送固定内容"
+        case .moments: "朋友圈开关、刷新方式、发布与自动发布"
         case .voice: "语音转写、TTS 与音色"
         }
     }
@@ -141,6 +145,8 @@ struct BotView: View {
             humanizeCard
         case .schedules:
             SchedulesPanel()
+        case .moments:
+            MomentsSettingsPanel()
         case .voice:
             VoiceSettingsPanel()
         }
@@ -182,9 +188,9 @@ struct BotView: View {
                             PillLabel(text: "配置已停用", color: .secondary)
                         }
                     }
-                    Text(store.isBotRunning
-                         ? "正在监听微信消息；符合触发条件时会按人设与上下文自动回复。可在页面顶部停止机器人。"
-                         : "启动后连接本地 OneBot 服务，开始接收并自动回复微信消息。可在页面顶部启动机器人。")
+                    Text(L(store.isBotRunning
+                         ? "正在监听微信消息，符合触发条件时按人格与上下文自动回复。"
+                         : "启动后连接本地 OneBot 服务，接收并自动回复微信消息。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -214,16 +220,17 @@ struct BotView: View {
     private var basicsCard: some View {
         SectionCard(
             title: "基础开关",
-            subtitle: "演练模式、私聊与忽略规则",
+            subtitle: "只控制自动回复，手动发送不受影响",
             symbol: "power",
             tint: Theme.info
         ) {
             VStack(spacing: 0) {
                 SettingsRow(
                     title: "演练模式",
-                    subtitle: "只生成回复并写入日志，不真正发送到微信",
+                    subtitle: "只生成回复与草稿并写入日志；不发送、不写记忆",
                     symbol: "eye",
-                    tint: Theme.warning
+                    tint: Theme.warning,
+                    help: "自动回复、拍一拍回复、定时任务与朋友圈自动发布/互动都只生成记录，不真正发送；期间不写入记忆卡，关闭演练后恢复。"
                 ) {
                     Toggle(L("演练模式"), isOn: bind(\.bot.dryRun))
                         .labelsHidden()
@@ -233,7 +240,7 @@ struct BotView: View {
                 SettingsDivider()
                 SettingsRow(
                     title: "私聊自动回复",
-                    subtitle: "开启后所有私聊都会自动回复",
+                    subtitle: "仍受名单与工作时间限制",
                     symbol: "person.fill",
                     tint: Theme.accent
                 ) {
@@ -275,7 +282,7 @@ struct BotView: View {
     private var groupTriggerCard: some View {
         SectionCard(
             title: "群聊触发",
-            subtitle: "可多选；「所有消息」与其他方式互斥；「引用机器人」= 别人引用机器人发的消息时唤醒",
+            subtitle: "可多选；「所有消息」与其他方式互斥",
             symbol: "person.3.fill",
             tint: Theme.violet
         ) {
@@ -302,7 +309,7 @@ struct BotView: View {
                         Text(L("群聊关键词"))
                             .font(.callout.weight(.medium))
                         Spacer()
-                        Text(L(groupKeywordEnabled ? "已启用「关键词」触发" : "勾选「关键词」后生效"))
+                        Text(L(groupKeywordEnabled ? "已启用「关键词」触发" : "勾选上方「关键词」后生效"))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -335,16 +342,16 @@ struct BotView: View {
     private var wakeAndPatCard: some View {
         SectionCard(
             title: "唤醒与互动",
-            subtitle: "被唤醒后的免唤醒窗口与拍一拍回复",
             symbol: "hand.tap.fill",
             tint: Theme.info
         ) {
             VStack(spacing: 0) {
                 SettingsRow(
                     title: "唤醒后免唤醒词",
-                    subtitle: "群聊被唤醒后，同一发送者在此时长内继续发言无需再次 @ / 关键词 / 引用；仅群聊生效",
+                    subtitle: "仅群聊；同一发送者在该时长内继续发言无需再次 @ / 关键词 / 引用",
                     symbol: "hourglass",
-                    tint: Theme.info
+                    tint: Theme.info,
+                    help: "滑动窗口：每条被放行的消息都会续期。只放宽触发判定，不跳过名单、工作时间、冷却与每分钟上限。"
                 ) {
                     Toggle(L("唤醒后免唤醒词"), isOn: wakeWindowBinding)
                         .labelsHidden()
@@ -357,7 +364,7 @@ struct BotView: View {
                 SettingsDivider()
                 SettingsRow(
                     title: "拍一拍回复",
-                    subtitle: "别人拍机器人时，发送自定义文字和/或 AI 回复，可 @ 拍的人；不再回拍。",
+                    subtitle: "别人拍机器人时，按下方设置回复",
                     symbol: "hand.tap.fill",
                     tint: Theme.info
                 ) {
@@ -426,12 +433,12 @@ struct BotView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
             if store.settings.bot.patMentionPatterEnabled {
-                Text(L("仅群聊生效；@ 附在第一条回复前（自定义前文字 → AI 首段 → 自定义后文字）。bridge 解析不到群昵称时按普通文本发送。"))
+                Text(L("仅群聊生效；@ 只附在第一条回复前。bridge 取不到群昵称时按普通文本发送。"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
             if store.settings.bot.patFixedTextEnabled || store.settings.bot.patAIEnabled {
-                Text(L("发送顺序：自定义文字（前）→ AI 回复 → 自定义文字（后）；AI 失败时仍发送文字。"))
+                Text(L("发送顺序：自定义文字（前） → AI 回复 → 自定义文字（后）；AI 失败时仍发送文字。"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -445,7 +452,6 @@ struct BotView: View {
     private var allowListCard: some View {
         SectionCard(
             title: "白名单 / 黑名单",
-            subtitle: "统一填写会话 ID 或用户 wxid；白名单为空表示全部允许，黑名单优先",
             symbol: "checklist",
             tint: Theme.warning
         ) {
@@ -463,7 +469,8 @@ struct BotView: View {
                     subtitle: "这些会话或发送者永不自动回复，优先级高于白名单。",
                     placeholder: "会话 ID 或用户 wxid",
                     items: blacklistBinding,
-                    suggestions: conversationSuggestions
+                    suggestions: conversationSuggestions,
+                    emptyLabel: "未添加"
                 )
 
                 if !conflictingIDs.isEmpty {
@@ -511,7 +518,7 @@ struct BotView: View {
     private var limitsCard: some View {
         SectionCard(
             title: "频率与上下文",
-            subtitle: "防止刷屏与 API 过载",
+            subtitle: "避免刷屏与请求过载",
             symbol: "gauge.with.dots.needle.33percent",
             tint: Theme.violet
         ) {
@@ -539,7 +546,7 @@ struct BotView: View {
                     )
                     .font(.callout)
                     Stepper(
-                        Lf("临时记忆最多 %d 条 · 累计 %d 条旧消息后批量总结", store.settings.bot.maxContextMessages, ChatEngine.overflowBatchThreshold),
+                        Lf("短期上下文 %d 条 · 满 %d 条旧消息后提取记忆", store.settings.bot.maxContextMessages, ChatEngine.overflowBatchThreshold),
                         value: bind(\.bot.maxContextMessages),
                         in: 2...ChatEngine.shortTermMemoryLimit
                     )
@@ -554,9 +561,10 @@ struct BotView: View {
     private var workingHoursCard: some View {
         SectionCard(
             title: "工作时间",
-            subtitle: "全局默认；非工作时段不自动回复，单个会话可在「会话」页覆盖",
+            subtitle: "非工作时段不自动回复；手动发送不受影响",
             symbol: "clock",
-            tint: Theme.warning
+            tint: Theme.warning,
+            help: "全局默认只影响没有单独设置时段的会话；单个会话可在「会话」页覆盖或设为「不限时段」。"
         ) {
             WorkingHoursEditor(mode: .global, hours: workingHoursBinding)
         }
@@ -632,17 +640,19 @@ struct BotView: View {
     private var defaultPersonaCard: some View {
         SectionCard(
             title: "默认人格",
-            subtitle: "会话没有单独指定时使用；提示词在「人格设定」中编辑",
+            subtitle: "会话没有单独指定人格时使用",
             symbol: "quote.bubble",
-            tint: Theme.violet
+            tint: Theme.violet,
+            help: "「未指定」时使用人格设定中标记为默认的人格；提示词与简介都在「人格设定」中编辑。"
         ) {
             HStack(spacing: 18) {
                 Picker(L("默认人格"), selection: bind(\.bot.defaultPersonaID)) {
-                    Text(L("跟随全局")).tag(String?.none)
+                    Text(L("未指定（用默认人格）")).tag(String?.none)
                     ForEach(store.personas) { persona in
                         Text(persona.name).tag(Optional(persona.id))
                     }
                 }
+                .labelsHidden()
                 .frame(maxWidth: 260)
 
                 Text(L("默认通道在「AI 模型 → 默认通道」设置"))
@@ -864,6 +874,8 @@ private struct IDListEditor: View {
     let placeholder: String
     @Binding var items: [String]
     var suggestions: [(id: String, label: String)] = []
+    /// 列表为空时显示的短标签：白名单「未限制」表示全部允许，黑名单用「未添加」避免误读。
+    var emptyLabel: String = "未限制"
 
     @State private var newValue = ""
 
@@ -902,7 +914,7 @@ private struct IDListEditor: View {
             }
 
             if items.isEmpty {
-                Text(L("未限制"))
+                Text(L(emptyLabel))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)

@@ -98,7 +98,7 @@ struct ReplyProgressBar: View {
                 .strokeBorder(tint.opacity(0.16), lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(L("回复状态：\(progress.stage.label)，\(timerText(now: now))"))
+        .accessibilityLabel(Lf("回复状态：%@，%@", progress.stage.label, timerText(now: now)))
     }
 
     // MARK: Derived
@@ -180,17 +180,17 @@ struct ReplyProgressBar: View {
     private func timerText(now: Date) -> String {
         switch progress.stage {
         case .generating:
-            return "已等待 \(UIFormat.liveSeconds(progress.elapsedSeconds(at: now)))"
+            return Lf("已等待 %@", UIFormat.liveSeconds(progress.elapsedSeconds(at: now)))
         case .waitingToSend:
-            guard let remaining = progress.remainingSeconds(at: now) else { return "即将发送…" }
-            if remaining <= 0.05 { return "即将发送…" }
-            return String(format: "%.1f 秒后发送", remaining)
+            guard let remaining = progress.remainingSeconds(at: now) else { return L("即将发送…") }
+            if remaining <= 0.05 { return L("即将发送…") }
+            return Lf("%.1f 秒后发送", remaining)
         case .sending:
-            return "回执 \(UIFormat.liveSeconds(progress.stageElapsedSeconds(at: now)))"
+            return Lf("回执 %@", UIFormat.liveSeconds(progress.stageElapsedSeconds(at: now)))
         case .completed, .failed:
             // 完成/失败后不再计时：用结束时刻减去流水线开始时刻，得到固定的总耗时。
             let total = max(0, progress.stageStartedAt.timeIntervalSince(progress.startedAt))
-            return "总用时 \(UIFormat.liveSeconds(total))"
+            return Lf("总用时 %@", UIFormat.liveSeconds(total))
         }
     }
 
@@ -220,7 +220,7 @@ struct ReplyStatusBadge: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(L("回复状态：\(progress.stage.label)，\(text(now: Date()))"))
+        .accessibilityLabel(Lf("回复状态：%@，%@", progress.stage.label, text(now: Date())))
     }
 
     private func badge(now: Date) -> some View {
@@ -253,16 +253,16 @@ struct ReplyStatusBadge: View {
     private func text(now: Date) -> String {
         switch progress.stage {
         case .generating:
-            return "AI 生成中 · \(UIFormat.liveSeconds(progress.elapsedSeconds(at: now)))"
+            return Lf("AI 生成中 · %@", UIFormat.liveSeconds(progress.elapsedSeconds(at: now)))
         case .waitingToSend:
             let remaining = progress.remainingSeconds(at: now) ?? 0
-            return remaining <= 0.05 ? "即将发送…" : String(format: "%.1f 秒后发送", remaining)
+            return remaining <= 0.05 ? L("即将发送…") : Lf("%.1f 秒后发送", remaining)
         case .sending:
-            return "正在发送…"
+            return L("发送中")
         case .completed:
-            return "回复已发送"
+            return L("已发送")
         case .failed:
-            return "回复失败"
+            return L("失败")
         }
     }
 }
@@ -286,13 +286,13 @@ struct ReplyMiniStatus: View {
     }
 
     private func label(now: Date) -> some View {
-        Text(L(text(now: now)))
+        Text(text(now: now))
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(tint)
             .monospacedDigit()
             .lineLimit(1)
             .fixedSize()
-            .accessibilityLabel("\(progress.stage.label)，\(text(now: now))")
+            .accessibilityLabel(Lf("回复状态：%@，%@", progress.stage.label, text(now: now)))
     }
 
     private var tint: Color {
@@ -307,16 +307,16 @@ struct ReplyMiniStatus: View {
     private func text(now: Date) -> String {
         switch progress.stage {
         case .generating:
-            return "生成 \(Int(progress.elapsedSeconds(at: now).rounded(.down)))s"
+            return Lf("生成 %ds", Int(progress.elapsedSeconds(at: now).rounded(.down)))
         case .waitingToSend:
             let remaining = progress.remainingSeconds(at: now) ?? 0
-            return remaining <= 0.05 ? "即将发送" : "\(Int(remaining.rounded(.up)))s 后发送"
+            return remaining <= 0.05 ? L("即将发送") : Lf("%d 秒后发送", Int(remaining.rounded(.up)))
         case .sending:
-            return "发送中"
+            return L("发送中")
         case .completed:
-            return "已发送"
+            return L("已发送")
         case .failed:
-            return "失败"
+            return L("失败")
         }
     }
 }

@@ -400,6 +400,32 @@ func persistContactDBKeys(keys map[string]ContactKey) error {
 	return os.Rename(tmpName, path)
 }
 
+// persistContactDBKeysMerged 把新增 DB key 合并进现有缓存后原子写回。
+// 单库密钥（如 sns）不能覆盖已有的 contact/session 条目：hook 每次只返回本次
+// 解密用到的库，直接覆盖会丢其它库的缓存。
+func persistContactDBKeysMerged(keys map[string]ContactKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	existing, err := loadContactDBKeys()
+	if err != nil {
+		// 缓存损坏时用新内容重建；只记日志，不阻断 SNS 读取。
+		Warn("读取 DB key 缓存失败，将用新 key 重建", "err", err)
+		existing = nil
+	}
+	merged := make(map[string]ContactKey, len(existing)+len(keys))
+	for name, key := range existing {
+		merged[name] = key
+	}
+	for name, key := range keys {
+		if strings.TrimSpace(key.Salt) == "" || strings.TrimSpace(key.Key) == "" {
+			continue
+		}
+		merged[name] = key
+	}
+	return persistContactDBKeys(merged)
+}
+
 // loadContactDBKeys 读取密钥缓存；文件不存在时返回 (nil, nil)。
 // 损坏/空条目被丢弃，避免把无效密钥回灌给 hook。
 func loadContactDBKeys() (map[string]ContactKey, error) {

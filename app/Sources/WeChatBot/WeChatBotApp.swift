@@ -127,7 +127,7 @@ struct WeChatAIApp: App {
     }
 }
 
-/// Menu bar commands: page navigation (⌘1…⌘9, ⌘0 for settings) and onboarding.
+/// Page navigation (⌘1…⌘8, ⌘0 for settings).
 struct AppCommands: Commands {
     let store: AppStore
     @Environment(\.openWindow) private var openWindow
@@ -145,7 +145,9 @@ struct AppCommands: Commands {
         }
 
         CommandMenu(L("前往")) {
-            ForEach(SidebarItem.allCases) { item in
+            ForEach(SidebarItem.allCases.filter {
+                $0 != .moments || store.settings.bot.snsSettings.enabled
+            }) { item in
                 Button(item.title) {
                     store.sidebarSelection = item
                     openMainWindow()
@@ -159,11 +161,12 @@ struct AppCommands: Commands {
         switch item {
         case .dashboard: "1"
         case .conversations: "2"
-        case .bot: "3"
-        case .ai: "4"
-        case .personas: "5"
-        case .memory: "6"
-        case .logs: "7"
+        case .moments: "3"
+        case .bot: "4"
+        case .ai: "5"
+        case .personas: "6"
+        case .memory: "7"
+        case .logs: "8"
         case .settings: "0"
         }
     }

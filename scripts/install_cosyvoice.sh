@@ -19,9 +19,9 @@
 #   scripts/install_cosyvoice.sh [选项]
 #     --home DIR        安装根目录（App 生产路径；推导 venv/model/refs）
 #     --model-dir DIR   --venv DIR   --refs DIR
-#     --skip-model      --skip-deps  --dry-run  --force
+#     --skip-model      --skip-deps  --dry-run  --force  -h/--help
 #   （同名环境变量：COSYVOICE_HOME / COSYVOICE_MODEL_DIR / COSYVOICE_VENV /
-#     COSYVOICE_REFS / COSYVOICE_LOCAL_DIR）
+#     COSYVOICE_REFS / COSYVOICE_LOCAL_DIR / COSYVOICE_SERVER_DIR）
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

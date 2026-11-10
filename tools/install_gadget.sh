@@ -23,10 +23,18 @@ JSON=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --wechat-path) APP="$2"; shift 2 ;;
-    --gadget) GADGET="$2"; shift 2 ;;
-    --config) CONFIG="$2"; shift 2 ;;
-    --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
+    --wechat-path)
+      [ $# -ge 2 ] || { echo "ERROR: --wechat-path needs a value" >&2; exit 2; }
+      APP="$2"; shift 2 ;;
+    --gadget)
+      [ $# -ge 2 ] || { echo "ERROR: --gadget needs a path" >&2; exit 2; }
+      GADGET="$2"; shift 2 ;;
+    --config)
+      [ $# -ge 2 ] || { echo "ERROR: --config needs a path" >&2; exit 2; }
+      CONFIG="$2"; shift 2 ;;
+    --backup-dir)
+      [ $# -ge 2 ] || { echo "ERROR: --backup-dir needs a directory" >&2; exit 2; }
+      BACKUP_DIR="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --json) JSON=1; shift ;;
     -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
@@ -51,7 +59,7 @@ fail() {
 }
 
 # 已知可用版本（version:build），首个为默认目标；未显式设置环境变量时历史版本仍可安装。
-KNOWN_VERSION_PAIRS="4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341 4.1.15.55:270135 4.1.12.53:269365"
+KNOWN_VERSION_PAIRS="4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341 4.1.15.55:270135 4.1.12.53:269365"
 version_is_known_supported() {
   local v="$1" b="$2" pair
   for pair in $KNOWN_VERSION_PAIRS; do
@@ -77,14 +85,14 @@ stage 0.03 "检查微信版本与文件"
 if [ "$FORCE" -ne 1 ]; then
   V="$(/usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
   B="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
-  EXPECTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.0.12}"
-  EXPECTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270348}"
+  EXPECTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.0.17}"
+  EXPECTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270353}"
   if [ "$V" != "$EXPECTED_VERSION" ] || [ "$B" != "$EXPECTED_BUILD" ]; then
     if [ -z "${WECHAT_SUPPORTED_VERSION:-}" ] && [ -z "${WECHAT_SUPPORTED_BUILD:-}" ] \
       && version_is_known_supported "$V" "$B"; then
       stage 0.04 "检测到已支持的历史版本：${V} (${B})"
     else
-      fail "微信版本不匹配：${V:-?} (${B:-?})，当前适配 4.2.0.12 (270348) 与历史 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53（可用 WECHAT_SUPPORTED_VERSION / WECHAT_SUPPORTED_BUILD 覆盖）"
+      fail "微信版本不匹配：${V:-?} (${B:-?})，当前适配 4.2.0.17 (270353) 与历史 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53（可用 WECHAT_SUPPORTED_VERSION / WECHAT_SUPPORTED_BUILD 覆盖）"
     fi
   fi
 fi

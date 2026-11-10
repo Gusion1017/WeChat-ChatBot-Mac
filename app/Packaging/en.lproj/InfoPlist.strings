@@ -1,0 +1,3 @@
+/* English Info.plist strings. Keys are the Info.plist fields they override. */
+"CFBundleDisplayName" = "WeChat AI";
+"NSHumanReadableCopyright" = "WeChat AI · GPL-3.0 · unofficial third-party client";

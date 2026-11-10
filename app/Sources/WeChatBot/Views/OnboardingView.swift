@@ -50,13 +50,13 @@ struct OnboardingView: View {
         .interactiveDismissDisabled(isInstalling)
         .sheet(isPresented: $showRiskConfirm) {
             ConfirmSheet(
-                title: "备份并安装 Hook 到微信",
-                message: "此操作会修改官方微信的应用包，用于注入消息收发 Hook。请先完全退出微信。",
+                title: "备份并安装 Hook",
+                message: "会修改官方微信的应用包并重新签名。请先完全退出微信。",
                 details: [
-                    "会先完整备份 /Applications/WeChat.app，再注入 Frida Gadget 并 ad-hoc 重签。",
-                    "微信更新后需要重新安装；小程序、自动更新等功能可能受影响。",
-                    "仅在本机运行，不修改微信服务器数据；可随时从备份还原。",
-                    "安装约需 1–2 分钟，期间请勿打开微信。"
+                    "先完整备份 /Applications/WeChat.app，再注入 Frida Gadget 并 ad-hoc 重签。",
+                    "微信更新后需重新安装；小程序、自动更新等功能可能受影响。",
+                    "只在本机运行，不改微信服务器数据；可从备份还原。",
+                    "安装约需 1–2 分钟，期间请勿打开微信；完成后重新打开微信。"
                 ],
                 confirmTitle: "备份并安装",
                 cancelTitle: "取消"
@@ -95,7 +95,7 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L("WeChat AI 设置向导"))
                         .font(.headline)
-                    Text(L("4 步完成本机配置，随时可以跳过或在设置中修改"))
+                    Text(L("4 步完成本机配置，可随时跳过。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -115,7 +115,7 @@ struct OnboardingView: View {
                         .buttonStyle(.plain)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .help(L("跳过剩余步骤，之后可在设置或菜单中重新打开"))
+                        .help(L("跳过剩余步骤；之后可在「设置 → 通用」重新打开"))
                 }
             }
 
@@ -193,7 +193,7 @@ struct OnboardingView: View {
                 }
                 Text(L("欢迎使用 WeChat AI"))
                     .font(.title.weight(.semibold))
-                Text(L("把 AI 接进你的微信，同时保留完整的本机控制权。"))
+                Text(L("把 AI 接入微信，自动收发消息。"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -205,27 +205,27 @@ struct OnboardingView: View {
                 featureRow(
                     symbol: "macwindow",
                     tint: Theme.accent,
-                    title: "原生 macOS 体验",
-                    message: "SwiftUI + Liquid Glass，没有 WebView，空闲时占用低。"
+                    title: "原生 macOS 界面",
+                    message: "系统原生控件，不内嵌浏览器。"
                 )
                 featureRow(
                     symbol: "lock.shield.fill",
                     tint: Theme.success,
-                    title: "本地优先，数据不上云",
-                    message: "配置、聊天记忆、日志都保存在本机；API Key 存入 Keychain。"
+                    title: "本地优先",
+                    message: "配置、记忆卡与日志保存在本机；API Key 存入 Keychain。"
                 )
                 featureRow(
                     symbol: "sparkles",
                     tint: Theme.violet,
                     title: "多模型 + 人格",
-                    message: "DeepSeek / OpenAI / Ollama 任一兼容通道，按会话切换。"
+                    message: "支持 DeepSeek、OpenAI、Ollama 等通道。"
                 )
             }
 
             InlineNotice(
                 kind: .warning,
                 title: "开始前的准备",
-                message: "需要已安装官方微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12（arm64）。安装 Hook 会修改微信应用包，请先退出微信并确认了解风险。"
+                message: "需要已安装 arm64 官方微信（4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55）。安装 Hook 会修改微信应用包，请先完全退出微信。"
             )
         }
     }
@@ -248,7 +248,8 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 15) {
             stepHeading(
                 title: "检测微信并安装 Hook",
-                message: "App 通过 Frida Gadget 注入官方微信，再经本地 OneBot 桥接收发消息。"
+                message: "先确认微信已完全退出，再备份并安装 Hook。",
+                help: "App 通过 Frida Gadget 注入官方微信，再经本地 OneBot bridge 收发消息。安装会修改微信应用包并重新签名。"
             )
 
             SettingsSection(title: "检测结果") {
@@ -294,8 +295,8 @@ struct OnboardingView: View {
             if commandLineToolsStatus?.isReady == false {
                 InlineNotice(
                     kind: .warning,
-                    title: "未安装 Command Line Tools，无法备份并安装 Hook。",
-                    message: "装完 Command Line Tools 后点「重新检测」，再安装 Hook。"
+                    title: "未安装 Command Line Tools",
+                    message: "安装完成后点「重新检测」，即可继续安装 Hook。"
                 )
             }
 
@@ -324,7 +325,7 @@ struct OnboardingView: View {
                     showRiskConfirm = true
                 } label: {
                     Label(
-                        store.hookStatus.gadgetInstalled ? "重新安装 Hook" : "备份并安装 Hook…",
+                        L(store.hookStatus.gadgetInstalled ? "重新安装 Hook…" : "备份并安装 Hook…"),
                         systemImage: "wrench.and.screwdriver"
                     )
                 }
@@ -332,7 +333,7 @@ struct OnboardingView: View {
                 .tint(Theme.warning)
                 .disabled(isInstalling || isDetecting || commandLineToolsStatus?.isReady != true)
                 .help(L(commandLineToolsStatus?.isReady == true
-                        ? "备份并安装 Hook…"
+                        ? "备份官方微信，注入 Frida Gadget 并重新签名"
                         : "需要安装 Xcode Command Line Tools"))
                 .accessibilityHint(commandLineToolsStatus?.isReady == true
                         ? ""
@@ -345,10 +346,10 @@ struct OnboardingView: View {
                 InlineNotice(
                     kind: .success,
                     title: "Hook 已安装",
-                    message: "下一步配置 AI 模型；之后启动机器人即可连接微信。"
+                    message: "启动机器人后即可连接微信。"
                 )
             } else {
-                Text(L("暂时不安装也可以继续；之后可在「设置 → Hook」中备份并安装。"))
+                Text(L("暂时跳过也可以；之后可在「设置 → Hook」中安装。"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -359,7 +360,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 15) {
             stepHeading(
                 title: "配置 AI 模型",
-                message: "选择一个 OpenAI 兼容通道并保存 API Key。密钥只写入 macOS Keychain。"
+                message: "选择或创建默认通道，并保存 API Key。"
             )
 
             if store.providers.isEmpty {
@@ -367,7 +368,7 @@ struct OnboardingView: View {
                     EmptyState(
                         symbol: "sparkles",
                         title: "还没有 AI 通道",
-                        message: "添加一个默认 DeepSeek 通道后即可继续；模型可以稍后修改。",
+                        message: "创建默认 DeepSeek 通道后即可继续；模型可稍后修改。",
                         actionTitle: "创建默认通道"
                     ) {
                         createDefaultProvider()
@@ -405,7 +406,7 @@ struct OnboardingView: View {
                 if let provider = selectedProvider, provider.kind != .ollama {
                     SettingsSection(
                         title: "API Key",
-                        footer: "密钥保存在 Keychain（service com.gusionw.wechatai），不会写入 config.json。"
+                        footer: "密钥只保存在 Keychain，不会写入 config.json。"
                     ) {
                         VStack(alignment: .leading, spacing: 9) {
                             HStack(spacing: 8) {
@@ -430,7 +431,7 @@ struct OnboardingView: View {
                     Button {
                         testAI()
                     } label: {
-                        Label(L(isTestingAI ? "测试中…" : "保存并测试连接"), systemImage: "bolt.horizontal")
+                        Label(L(isTestingAI ? "测试中…" : "保存并测试"), systemImage: "bolt.horizontal")
                     }
                     .buttonStyle(.glassProminent)
                     .tint(Theme.accent)
@@ -469,7 +470,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 15) {
             stepHeading(
                 title: "启动机器人",
-                message: "确认以下状态后完成向导。启动后可在总览实时查看运行情况。"
+                message: "确认以下状态后完成向导；启动后可在总览查看运行情况。"
             )
 
             SettingsSection(title: "配置检查") {
@@ -482,7 +483,7 @@ struct OnboardingView: View {
                 SettingsDivider()
                 checklistRow(
                     title: "Hook",
-                    detail: store.hookStatus.gadgetInstalled ? (store.hookStatus.matchedVersion ? "已安装 · 版本已匹配" : "已安装 · 待匹配版本") : "尚未安装（可稍后在设置中安装）",
+                    detail: store.hookStatus.gadgetInstalled ? (store.hookStatus.matchedVersion ? "已安装 · 版本已匹配" : "已安装 · 待匹配版本") : "尚未安装（可稍后在「设置 → Hook」安装）",
                     ready: store.hookStatus.gadgetInstalled,
                     icon: "link"
                 )
@@ -495,15 +496,12 @@ struct OnboardingView: View {
                 )
             }
 
-            Toggle(L("完成向导后立即启动机器人"), isOn: $shouldStartBot)
-                .toggleStyle(.switch)
-                .font(.callout)
-
-            InlineNotice(
-                kind: .info,
-                title: "启动后",
-                message: "机器人会连接本地 OneBot 服务并按触发设置与人设自动回复。所有开关都可以在侧边栏「机器人」中随时调整。"
-            )
+            HStack(spacing: 3) {
+                Toggle(L("完成向导后立即启动机器人"), isOn: $shouldStartBot)
+                    .toggleStyle(.switch)
+                    .font(.callout)
+                HelpTip(text: "启动后机器人会连接本地 OneBot 服务，并按触发设置与人格自动回复。所有开关都可在侧边栏「机器人」中调整。")
+            }
         }
     }
 
@@ -527,9 +525,14 @@ struct OnboardingView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func stepHeading(title: String, message: String) -> some View {
+    private func stepHeading(title: String, message: String, help: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(L(title)).font(.title3.weight(.semibold))
+            HStack(spacing: 3) {
+                Text(L(title)).font(.title3.weight(.semibold))
+                if let help {
+                    HelpTip(text: help)
+                }
+            }
             Text(L(message))
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -538,6 +541,10 @@ struct OnboardingView: View {
     }
 
     // MARK: Footer
+
+    private var finishButtonTitle: String {
+        shouldStartBot ? "完成并开始" : "完成"
+    }
 
     private var footer: some View {
         HStack(spacing: 9) {
@@ -565,7 +572,7 @@ struct OnboardingView: View {
                 }
             } label: {
                 Label(
-                    step == stepTitles.count - 1 ? "完成并开始" : "下一步",
+                    L(step == stepTitles.count - 1 ? finishButtonTitle : "下一步"),
                     systemImage: step == stepTitles.count - 1 ? "checkmark" : "chevron.right"
                 )
             }
@@ -638,7 +645,7 @@ struct OnboardingView: View {
             Task {
                 await store.startBot()
                 toast.show(
-                    store.isBotRunning ? "机器人已启动" : "启动请求已提交，请在总览查看状态",
+                    store.isBotRunning ? "机器人已启动" : "启动失败，请查看运行日志",
                     tone: store.isBotRunning ? .success : .warning,
                     symbol: "play.circle.fill"
                 )
@@ -707,10 +714,8 @@ struct OnboardingView: View {
             switch result {
             case .success(let message):
                 aiTestResult = (true, message.isEmpty ? "连接成功" : message)
-                toast.show("AI 连接正常", tone: .success)
             case .failure(let error):
                 aiTestResult = (false, error.localizedDescription)
-                toast.show("AI 连接失败", tone: .error)
             }
             isTestingAI = false
         }

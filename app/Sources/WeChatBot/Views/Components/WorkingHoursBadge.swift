@@ -20,7 +20,7 @@ struct WorkingHoursBadge: View {
     private func badge(at date: Date) -> some View {
         let status = workingHours.status(at: date)
         return PillLabel(text: status.label, color: status.tint, symbol: status.symbol)
-            .help(L(helpText(for: status)))
+            .help(helpText(for: status))
             .accessibilityLabel(accessibilityText(for: status))
     }
 
@@ -35,16 +35,20 @@ struct WorkingHoursBadge: View {
         switch status {
         case .unrestricted:
             return isOverride
-                ? "此会话已设为「不限时段」：任何时间都允许自动回复，规则引擎不会因时间拦截。"
-                : "全局未启用工作时间限制（不限时段）：任何时间都允许自动回复，规则引擎不会因时间拦截。"
+                ? L("此会话为「不限时段」：任何时间都允许自动回复。")
+                : L("全局未启用工作时间限制：任何时间都允许自动回复。")
         case .active:
-            return "当前处于「工作时段」，规则引擎不会因时间拦截自动回复（手动发送不受影响）。\n"
-                + "来源：\(L(sourceText)) · \(workingHours.summaryText)"
-                + neverEffectiveNote
+            return Lf(
+                "当前处于「工作时段」，不会因时间拦截自动回复（手动发送不受影响）。\n来源：%@ · %@",
+                L(sourceText),
+                workingHours.summaryText
+            ) + neverEffectiveNote
         case .paused:
-            return "当前处于「非工作时段」，规则引擎会拦截此会话的自动回复（手动发送不受影响）。\n"
-                + "来源：\(L(sourceText)) · \(workingHours.summaryText)"
-                + neverEffectiveNote
+            return Lf(
+                "当前处于「非工作时段」，此会话的自动回复会被拦截（手动发送不受影响）。\n来源：%@ · %@",
+                L(sourceText),
+                workingHours.summaryText
+            ) + neverEffectiveNote
         }
     }
 

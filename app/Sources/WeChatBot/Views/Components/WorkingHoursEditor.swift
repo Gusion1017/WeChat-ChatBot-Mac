@@ -23,11 +23,11 @@ enum WorkingHoursChoice: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .followGlobal:
-            "使用「机器人 → 节奏 → 工作时间」的全局设置，全局改动会同步生效。"
+            "使用全局默认时段，全局改动会同步生效。"
         case .custom:
-            "为这个会话单独设置时段，不再受全局设置影响。"
+            "单独设置时段，不再随全局变化。"
         case .unrestricted:
-            "这个会话在任何时间都允许自动回复，规则引擎不会因时间拦截。"
+            "任何时间都允许自动回复，不受时段限制。"
         }
     }
 
@@ -105,16 +105,11 @@ struct WorkingHoursEditor: View {
                         InlineNotice(
                             kind: .warning,
                             title: "自定义会开启时间限制",
-                            message: "全局当前为「不限时段」；保存后这个会话将只在 \(effectiveHours.summaryText) 自动回复。"
+                            message: Lf("全局当前为「不限时段」；保存后这个会话将只在 %@ 自动回复。", effectiveHours.summaryText)
                         )
                     }
                 }
                 validationNotices
-                InlineNotice(
-                    kind: .info,
-                    title: "全局默认 vs 会话覆盖",
-                    message: "会话设置优先于全局：选「跟随全局」时同步全局；选「自定义时段」或「不限时段」后，此会话不再随全局变化。"
-                )
             } else {
                 globalEnabledToggle
                 statusSection
@@ -122,11 +117,6 @@ struct WorkingHoursEditor: View {
                     scheduleSection
                 }
                 validationNotices
-                InlineNotice(
-                    kind: .info,
-                    title: "全局默认",
-                    message: "这里是全局默认时段，只影响没有单独设置的会话；单个会话可在「会话」页覆盖或设为「不限时段」。"
-                )
             }
         }
     }
@@ -191,11 +181,6 @@ struct WorkingHoursEditor: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if option == .followGlobal {
-                        Text(Lf("当前全局：%@", global.summaryText))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -278,7 +263,7 @@ struct WorkingHoursEditor: View {
             Toggle(L("启用工作时间限制"), isOn: enabledBinding)
                 .toggleStyle(.switch)
                 .font(.callout)
-            Text(L("关闭后为「不限时段」：任何时间都会自动回复；单个会话仍可在「会话」页单独覆盖。"))
+            Text(L("关闭后为「不限时段」：任何时间都会自动回复。"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -337,10 +322,13 @@ struct WorkingHoursEditor: View {
 
             presetRow
 
-            Text(L("跨夜时段会自动识别；结束分钟不计入时段（如 09:00–18:00 到 18:00 结束）。"))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 3) {
+                Text(L("跨夜时段会自动识别；结束分钟不计入时段。"))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HelpTip(text: "例如 09:00–18:00：09:00 起算工作时段，18:00 起不再计入。")
+            }
         }
     }
 
@@ -388,7 +376,7 @@ struct WorkingHoursEditor: View {
             InlineNotice(
                 kind: .warning,
                 title: "已自动顺延结束时间",
-                message: "开始与结束相同会形成零长度时段（规则永远不会命中），已把结束时间顺延到 \(WorkingHours.minuteText(end))。"
+                message: Lf("开始与结束相同会形成零长度时段，已把结束时间顺延到 %@。", WorkingHours.minuteText(end))
             )
         }
         if weekdayWarning {
@@ -405,7 +393,7 @@ struct WorkingHoursEditor: View {
                 InlineNotice(
                     kind: .danger,
                     title: "时段配置无效",
-                    message: "当前时段包含非法分钟/星期，或启用后永远不会命中；可一键修复为有效设置。"
+                    message: "当前时段包含非法分钟或星期，启用后不会生效。"
                 )
                 Button(L("修复设置")) { repair() }
                     .buttonStyle(.glass)

@@ -1,8 +1,11 @@
 # Core 服务层设计与契约（swift-core）
 
-> 对应 `app/Sources/WeChatBot/Services/*` 与 `Core/AppStore.swift` / `Core/AppStore+Runtime.swift`。
+> 对应 `app/Sources/WeChatBot/Services/*` 与 `Core/AppStore.swift` / `Core/AppStore+Runtime.swift` / `Core/AppStore+Moments.swift`。
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
+>
+> **发布状态（2026-11-10）**：本文描述 **4.0.0**，包含朋友圈（Moments）与 4.2.0.17 适配；
+> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.0.md`](releases/4.0.0.md)。
 
 ## 1. 文件清单
 
@@ -14,6 +17,7 @@
 | 配置与账号 | `SettingsPersistence`（`config.json` + 当前账号 `profile.json` 原子写、串行合并）、`WeChatAccountResolver`（登录标记 → 账号目录识别，mask/校验）、`AccountProfile`（账号布局、启动早期 `preparePaths`、切号激活、`_unassigned` 认领、旧版迁移）、`KeychainStore`（API Key 读写） |
 | 存储与记忆 | `MemoryStore`（每账号 SQLite WAL：会话/消息/日志/定时任务/KV；旧 `memories`/`memory_state` 只读兼容）、`CharacterStore`（记忆 v2 角色目录 `characters/<key>/memory.sqlite`，actor 串行 + LRU 连接）、`MemoryEngine`（召回/批量提取/权重衰减/折叠/supersede/归档、旧记忆导入导出） |
 | 微信接入 | `OneBotClient`（WS 收事件、HTTP 发送/取图、媒体落地、去重、重连）、`ImageFetcher`（入站图片串行获取 + 开关/去重/取消）、`MentionText`（结构化 `at` 缺失时的群昵称兜底）、`ContactDirectory`（通讯录快照、会话标题与群昵称解析）、`PatMessage`（拍一拍目标判定与 `{name}` 模板） |
+| 朋友圈 | `Core/AppStore+Moments.swift`（`MomentsStore`：@MainActor 状态机，时间线/详情/同步/媒体/发布/评论回复）、`SnsClient`（`/sns/*` HTTP 客户端，Bearer 复用 OneBot）、`SnsPublishScheduler` + `SnsPublishLedger`（自动发布时机/每对象上限/最小间隔/跨重启计数；跳过原因 `SnsPublishRunSummary.skipNote`、今日配额快照 `SnsPublishTodayUsage`、配额用尽顺延次日/重置今日计数）、`SnsInteractionScheduler` + `SnsInteractionLedger` + `SnsInteractionPlanner`（AI 自动评论/回复：规则规划/频率/去重/退避）、`SnsMomentVision`（朋友圈识图缓存）、`SnsOutboxStore`（账号目录 `sns-outbox.json` 演练草稿，只读、上限 20 条）、`Models/SnsModels.swift`（SNS 模型、`SnsSettings` 与互动设置） |
 | 语音 | `VoiceTranscriptionService`/`VoiceFetcher`（入站语音转写与串行获取）、`VoiceSynthesisService`/`VoiceSynthesisText`/`VoiceSynthesisAudio`（本地 TTS：文本清洗、24k WAV、失败改发文字）、`VoicePreviewController`（音色试听）、`CosyVoiceClient`/`CosyVoiceRuntime`/`CosyVoiceInstaller`（本地 TTS HTTP 合成与 sidecar 安装/启停）、`Models/CosyVoiceVoice.swift`（音色目录与就绪判定）、`VoiceReplyDecision`（语音回复决策） |
 | 模型调用 | `AIClient`（OpenAI 兼容 `/chat/completions`，SSE/非流式/超时/错误映射）、`VisionEngine`（识图候选、缩图编码、多模态请求）、`ChatEngine`（人设/记忆/上下文拼装、重试、拟人化分段）、`RuleEngine`（白黑名单、触发、唤醒窗口、冷却、频率、工作时段） |
 | 设备与电源 | `SleepPreventionService`（空闲睡眠断言 + 电源监听，事件驱动）、`BatteryStatus`（电池快照）、`DeepSeekBalance`（余额查询与通道选择）、`ActivationPolicyController`（主窗口显隐切换 `.regular`/`.accessory`，bundle 以 `LSUIElement` 启动、无用户开关） |
@@ -66,6 +70,18 @@ var savedWeChatAccounts: [SavedWeChatAccount]
 var isSwitchingAccount: Bool
 func dismissAccountSwitchNotice()
 func refreshWeChatAccount() async -> Bool   // 仅检测到不同账号才切库；返回是否真的切换
+
+// 朋友圈（只读状态由 MomentsStore 暴露；网络在 SnsClient）
+var moments: MomentsStore                  // @MainActor @Observable，UI 只读
+func prepareMoments()                      // 进入页面/设置变化时同步配置，幂等、无网络
+var momentsPublishRecipient: SnsPublishRecipient?   // 当前选中的私聊，无则发布按仅自己可见
+
+// 捕获发送句柄（统一弹窗）
+var isCaptureSetupPromptPresented: Bool    // RootView 唯一 .sheet 的绑定
+func refreshVoiceStatus() async            // /voice_status → voiceRuntimeStatus
+func presentCaptureSetupPrompt()           // 手动打开（语音面板「查看步骤…」）
+func promptCaptureSetupAfterVoiceToggle() async
+func promptCaptureSetupAfterMomentsToggle() async
 ```
 
 应用内更新**不走** `AppStore` 运行时 API：`UpdateCenter.shared` 是独立的 `@MainActor @Observable` 单例，
@@ -112,6 +128,9 @@ RuntimeCoordinator.startRuntime
   1. resolver 复检：detected != active → switchAccount(reason: .detectedBeforeStart)
   2. bridgeIdentity()：-self_id / -image_path / -media_dir 全部取当前账号
   3. bridge 回报 get_login_info → adoptSelfID：与 active 不一致 → switchAccount(.loginMismatch)
+  4. 运行时就绪后由 `startBot` 置 `isBotRunning=true` 再调 `startCaptureSetupWatchIfNeeded`：
+     每次启动都检测文字/语音句柄与朋友圈样本，缺失时向 AppStore 请求统一「捕获发送句柄」
+     弹窗（bridge 未就绪时每 3s 重试，最多约 60s；同一次运行最多自动弹一次）
 ```
 
 不变式：
@@ -335,7 +354,8 @@ id != active 或 active == _unassigned
 
 ### 5.2 OneBotClient
 
-- WS：`ws://host:port/ws`，仅监听本机；无鉴权（架构约定）。
+- WS：`ws://host:port/ws`，仅监听本机；握手携带 `Authorization: Bearer <token>`（与 HTTP 共用 OneBot token，
+  token 为空时不校验，见 [bridge.md](bridge.md) §6）。
 - HTTP：`POST http://host:port/send_private_msg|send_group_msg`，`Authorization: Bearer <token>`，
   body `{user_id|group_id, message:[{type,data}]}`；2xx 且 `status in {ok, async}` 视为成功，否则抛
   `OneBotError.sendFailed`。
@@ -347,9 +367,9 @@ id != active 或 active == _unassigned
   `OneBotEventParser.parse(object:rawText:)` 复用已解析对象，`rawJSON` 等于原始帧文本；数组帧逐元素解析。
 - 自消息去重：进程内 `message_id` LRU（1024）；HTTP 发送成功后登记 `(conversationID, text, time)`，20s 内 WS 出现
   同文本 self 事件时标记 `isEchoOfLocal`，运行时把本地 pending 消息更新为 sent 而非重复插入。
-- 媒体：`file://` 复制、`base64://`/裸 base64 解码，落地
-  `~/Library/Application Support/WeChatAI/media/<yyyy-MM-dd>/<uuid>.<ext>`；单文件上限 40MB；http(s) URL 仅保存
-  `mediaURL` 不下载。
+- 媒体：`file://` 复制、`base64://`/裸 base64 解码，落地当前账号目录
+  `~/Library/Application Support/WeChatAI/accounts/<当前账号>/media/<yyyy-MM-dd>/<uuid>.<ext>`；
+  单文件上限 40MB；http(s) URL 仅保存 `mediaURL` 不下载。
 - 取图：`fetchImage(messageID:)` → `POST /fetch_image`（Bearer、`{"message_id":…}`、超时 30s）；2xx +
   `status=="ok"` + `data.file` 才返回本地路径（`file://` 反向百分号解码），失败/404/缺字段抛
   `OneBotError.badResponse`，404 额外提示 bridge 需更新。请求与响应解析拆成两个静态纯函数供单测。
@@ -635,6 +655,103 @@ id != active 或 active == _unassigned
   Release 正文提取/模板过滤/Markdown 分块；`UpdateCenter` 的 UI 状态迁移与通知去重仍以手动验收为主。手动验收
   （真实替换、回滚、Gatekeeper、三处提示）见 [updates.md](updates.md) §9。
 
+### 5.13 朋友圈（MomentsStore / SnsClient / SnsPublishScheduler / SnsInteractionScheduler）
+
+- **分层**：`MomentsStore` 是 App 内朋友圈唯一状态源（`AppStore.moments`，`@MainActor @Observable`），
+  视图只读状态并调用异步方法；所有网络与 JSON 解析在 `SnsClient`（非 MainActor），状态合并只在主线程。
+  切号或关闭功能由 `AppStore` 调 `apply(settings:onebot:accountID:)`，递增 generation 丢弃迟到响应并清空
+  内存缓存；媒体只留当前账号目录，不跨账号复用。接口字段见 [sns.md](sns.md) §4–§5。
+- **读取**：`/sns/timeline` 分页（cursor `max_id`/`first_page_md5`/`session`）、`/sns/detail` 补全量评论、
+  `/sns/media` 下载图片到 `accounts/<id>/sns-media/`；主动发送不可用时 bridge 回退 `source=passive`
+  （用户手动打开一次朋友圈后的缓存），App 不控制微信窗口。`SnsStatus.isPrimed` = `(ready && seedReady) || passive`。
+- **同步**：`pollSync()` 调 `POST /sns/sync`；页面轮询间隔 30–300s（默认 60s），只在功能开启且朋友圈页
+  可见时运行（`onAppear` 启动、`onDisappear` 停止）。`ingest(events:)` 合并去重并排序；bridge 先剥
+  `CmdBuf` 外层信封（`{1: len, 2: payload}`）：cmd45 正常解为 `sns_new_post`，cmd46 的 Type 1/2/3 解为
+  `sns_like` / `sns_comment`，Type 2/3 评论并入只读缓存并由 `/sns/timeline` 按 `comment_id` 补缺；
+  **4.2.0.17 实测好友回复为 Type=11、无正文/评论 ID，只发 `sns_comment_hint`（不写缓存、不产生评论
+  事件）**；App 收到后仅静默触发一次 timeline 刷新，不显示任何 UI（不展示正文、不做未读计数、
+  不持久化），不能据此自动回复。页面仍无法展示正文。真正未知 Type 才计入
+  `unsupported_cmd_count`。bridge **仍不推送 WS 帧**（协议预留），App 以 HTTP 轮询与时间线 diff
+  兜底（契约 §1.2/§5.3）。页面是否可见不影响 P7：P7 调度器每轮自行先 best-effort `/sns/sync` 再拉 timeline。
+- **sns.db 评论补全（P1）**：`/sns/timeline` 返回前由 bridge 按 signed `feed_id=uint64-2^64` 查
+  `SnsMessage_tmp3`，把 DB 评论补到原生评论后（原生优先/只补缺/count max/truncated 重算，失败静默）；
+  `snsEnable=true` 时默认启用，`snsDbRead=true` 支持仅 DB 模式，`snsProbe=true` 可调探针。App 无额外调用；
+  DB 32 位 `comment_id`（4.2.0.17 真机 35）已手动抓包确认可作 `reply_comment_id`，JSON 带
+  `comment_id_confirmed`；P7 自动回复已真机生成 c131。`comment_id_unconfirmed` 只留旧 schema/回退。
+- **评论 / 回复（P4，v3.6）**：`SnsClient.comment` → `POST /sns/comment`（固定 `confirm:true`）；
+  `MomentsStore.submitComment` 校验功能/写开关/1000 字/`comment_ready` 后发送，成功把回包合并进列表与
+  当前详情（`comment_id` / `comment` 存在时用服务端结果，否则本地回显 `local-` 前缀并等待下次详情刷新），
+  失败保留 `commentError`、不自动重试；超时提示先到微信确认。评论行用 `reply_to_name` 展示「回复 X」；
+  评论 JSON 另有可选 `reply_to_user_id`（timeline 取 `ReplyUsername`、sync 取 `Action.ToUsername`），
+  仅出现在 Type 2/3 评论上。评论通道（0xD5 句柄）与发布样本独立：`comment_ready=false` 时直接给出
+  「先在微信里点一次评论/赞 + 重新检测」。回复发送协议（`ReplyCommentId2`/`ReferAction`）仍待真机；
+  **4.2.0.17 的「好友回复机器人评论」实测为 Type=11、无正文，页面/P7 当前无法展示或自动回复**，
+  不能写成回复已真机打通。
+- **发布写路径**：`SnsClient.publish` 只在 `snsWrite` 打开时可用；`MomentsStore.publish` 内部按
+  `isEnabled` / `isWriteEnabled` 门禁（默认关；App 不提供手动发布入口，仅自动发布在写开关下调用）。
+  可见性默认 `partial`（仅当前私聊对象），
+  无上下文回退 `private`，`public` 仅保留解码兼容、UI 不提供。post 通道未验证时 bridge 返回 503
+  `sns_publish_unavailable`，写开关未开时 404；App 明确提示、不伪造成功。
+- **自动发布**：`SnsPublishScheduler` 只编排「何时/对谁/发什么」，内容由 `AppStore+Runtime` 注入：
+  会话人格 + 记忆卡 → AI 生成 60–120 字（不暴露聊天原文/昵称、不提及 AI）→ `publish`。两种时机
+  （`windows`：时段内确定性随机；`times`：固定时间点）、每对象每日上限与最小间隔（仅 `windows`）由
+  `SnsPublishSettings` 计算；只发布 `publish.targetUserIDs` 里显式选择的对象（空 = 不发布），
+  目标之间留 ≥61s 避开 bridge 全局最小间隔；`SnsPublishLedger` 按账号命名空间在 UserDefaults
+  持久化计数，跨天归零。写通道未就绪时失败并记录，不重试、不伪造。
+- **AI 自动互动（P7，2026-11-09）**：`SnsInteractionScheduler` 只在机器人运行且「朋友圈 + 写开关 + R3 +
+  互动开关 + 非空互动名单 + 至少一种动作」满足时由 `AppStore+Runtime` 创建，与朋友圈页是否可见无关。
+  每轮：`/sns/status` → best-effort `/sns/sync`（解出的 Type 2/3 评论并入 bridge 缓存）→ `/sns/timeline`
+  （native refresh，已合并 sync 评论）→ `SnsInteractionPlanner` 选候选（评论名单好友新动态 / 回复自己动态下
+  的评论 / 回复别人对自己评论的回复；聊天黑名单硬门槛、可放宽回复范围为所有好友）。「回复我的评论」
+  同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，避免 native 回包缺少父评论时漏判；**4.2.0.17
+  Type=11 hint 本身无正文、不直接进入候选；sns.db 只读补全把正文补进 timeline，32 位 comment_id=35 已确认
+  可作 reply_comment_id，P7 自动回复已生成 c131、页面闭环（Mac UI 不触发 0xd2）**。
+  → `SnsMomentVision`（整组图片一次分析，失败回退逐张，覆盖全部图片）+ 会话人格/旧 memories → AI 正文 → `SnsClient.comment`。
+  `SnsInteractionLedger` 按账号持久化已处理键、自己的评论 ID、每天次数/最近时间/单帖回复数/启用时间，
+  失败 10 分钟退避、最多 3 次；只在提交成功后计数。**启用时间跨 App/机器人重启保留**（不再启动重置）：
+  停机期间产生、未超过 `maxAgeHours`（默认 24 小时）且未被去重的动态 / Type 2/3 评论会补处理；
+  Type=11 回复无正文，不能补处理。关闭互动/切号清空，重新开启从新首轮起算；调度器重建沿用同一水位。演练模式只生成并记录「最近互动」，不发送、不占配额、
+  不写记忆；演练去重/退避写独立记录（`dryRunHandled` / `dryRunAttempts`），退出演练时清空，关闭演练后
+  同一批动态仍会被真实互动。设置页可立即检查（演练模式下为「演练一轮」）、清空最近互动/重置账本；
+  活动记录只驻留内存（30 条，不落库）。自动发布的演练草稿可在设置页「预览文案」立即生成（不等待排程）。
+- **识图（朋友圈）**：`SnsMomentVision` 复用 `VisionSupport` 的 ImageIO 缩放/JPEG 编码与「AI 模型 → 识图
+  模型」；把一条动态内的全部图片放进同一次视觉请求，失败回退逐张识别；原图失败回退缩略图，分析只写内存
+  缓存（80 条）；识图未配置/失败时降级纯文本，纯图片且无描述时不生成评论（不猜内容），纯视频动态跳过。
+- **设置与默认值**：`bot.sns` 随账号 `profile.json`；功能默认关、自动同步默认开、同步间隔 60s、图片
+  默认缩略图、可见性默认 `partial`、写开关默认关、自动发布默认关、自动互动默认关且互动名单为空；
+  可发时段/时间点分别最多 6 段/10 个。字段范围见 [sns.md](sns.md) §6.2。
+- **演练模式（`bot.dryRun`，全局）**：聊天自动回复/拍一拍/定时任务/朋友圈自动发布与自动互动都只生成
+  记录或草稿，不发送、不写计数/账本、不写记忆卡；朋友圈记忆维护与聊天记忆维护（建卡/同步互动/提取）
+  在演练期间整体跳过，关闭后恢复（演练生成的回复以 system 消息保存，本就不进入提示词与提取）。
+- **测试**：`SnsTests.swift` / `SnsInteractionTests.swift` 覆盖模型容错解码、状态机合并/去重、`SnsClient`
+  请求与错误映射、发布可见性、评论/回复请求体与回包合并、`reply_to_user_id` 识别好友回复、`comment_ready`
+  门禁、调度器时机/上限/间隔与 ledger 持久化；自动互动覆盖规划器（三种动作/名单/黑名单/回复范围/年龄与
+  单帖上限/启用时间）、账本（去重/尝试/每日/启动时间跨重启保留）、调度器（发送/演练/native 校验/每日与
+  最小间隔/失败冷却）与识图（选图/缓存/缩略图回退）；bridge 侧
+  `sns*_test.go` 覆盖 protobuf、HTTP 门禁、评论写回包合并/新评论 diff/失败不占配额、媒体下载、同步 CmdBuf
+  信封与 cmd45/46 解码、评论合并去重。真机读取/媒体/评论发送验证状态见 [sns.md](sns.md) §0、§8。
+- **轻量就绪检测**：`refreshPrimingStatus()` 只查 `/sns/status`、不拉时间线；正在 `loadPage` 时跳过（以内存
+  状态为准），失败保留上次状态。启动检测、「捕获发送句柄」弹窗与朋友圈页轮询共用该入口。
+
+### 5.14 捕获发送句柄引导（AppStore / RuntimeCoordinator）
+
+- **单一状态**：`AppStore.isCaptureSetupPromptPresented` 由 `RootView` 唯一 `.sheet` 消费；纯判定在
+  `Models/CaptureSetup.swift` 的 `CaptureSetupPlan`（条目按 `voiceReplyEnabled` / `snsSettings.enabled`
+  裁剪，文字条目常驻，`ready` 来自 `voiceRuntimeStatus.textSeed` / `voiceSeed` / `SnsStatus.isPrimed`，
+  开启发布时朋友圈条目还要求 `writeReady`）。
+- **三处入口**：开启语音回复（`promptCaptureSetupAfterVoiceToggle`）、开启朋友圈
+  （`promptCaptureSetupAfterMomentsToggle`）、机器人启动检测（`startCaptureSetupWatchIfNeeded`）。
+  三处都只置同一状态，不各自建 sheet。
+- **启动检测**：`startBot` 成功置 `isBotRunning=true` 后统一调 `startCaptureSetupWatchIfNeeded`——
+  立即检测一次，bridge/hook 未就绪时每 3s 重试、最多约 60s；判定结果为 `prompt` / `wait` / `done`。
+  检测范围：① R3 原生发送开启且文字句柄缺失（即使语音/朋友圈都关闭）；② 语音回复开启且语音句柄
+  `voiceSeed` 缺失；③ 朋友圈开启且 timeline 样本缺失，或开启发布后 post 样本缺失。
+  每次启动都会重新检测并在缺失时自动弹一次；`didAutoPromptCaptureSetup` 只在同一次机器人运行内
+  防重复，用户手动打开只影响本次运行，不会吞掉下一次启动的提示。bridge 尚未返回状态时继续等待，
+  不把「还没启动好」误报为缺失。
+- **不阻塞**：弹窗关闭后照常运行；文本句柄未就绪时回复排队，语音句柄未就绪时降级文字；朋友圈页只显示
+  一行未就绪状态 + 重新检测。契约见 [voice.md](voice.md) §4.1 与 [ui-design.md](ui-design.md) §5.14。
+
 ## 6. 错误处理策略
 
 | 场景 | 行为 |
@@ -658,8 +775,8 @@ id != active 或 active == _unassigned
 
 - API Key 仅存 Keychain（`kSecClassGenericPassword`，`service=com.gusionw.wechatai`），`config.json` 只有 account
   引用；日志与错误信息不会输出 Key。
-- OneBot token 由运行时生成（32 字节 hex，空值时自动生成并持久化），HTTP 发送强制 Bearer；bridge stdout 中打印的
-  token 在 UI 日志里替换为 `<redacted>`。
+- OneBot token 由运行时生成（32 字节 hex，空值时自动生成并持久化），HTTP 发送与 WS 握手都带 Bearer；bridge
+  stdout 中打印的 token 在 UI 日志里替换为 `<redacted>`。
 - bridge/WS 只连接 `127.0.0.1`，不监听外部网卡；无 WebView/Electron。
 - 安装/恢复脚本只允许操作 `/Applications/WeChat.app`（或设置中的微信路径）与 App 备份目录；安装前强制微信退出并
   做完整官方备份。
@@ -703,9 +820,18 @@ swift test --scratch-path .build-verify
 - 更新：版本解析/比较、6 小时边界、资产选择与 `.sha256` 配对、HTTP 错误映射、URL 白名单、SHA256 校验、安装目标
   （bundle id/版本/Translocation/只读目录）、包元数据与 `codesign`、解包、清理、助手脚本（含真实替换/回滚/工作目录
   自清理）与 ReleaseNotes 提取/模板过滤/Markdown 分块。
+- 朋友圈与捕获引导：模型容错解码（uint64 字符串、缺字段/未知字段、评论截断/`reply_to_user_id`）、
+  时间线/详情/媒体/同步请求与错误映射、发布可见性收敛、`MomentsStore` 合并去重/切号清缓存/
+  `refreshPrimingStatus`、`SnsPublishScheduler` 两种时机/到点校验/目标节流、`SnsPublishLedger` 跨天与持久化、
+  `SnsClient` 鉴权与 404/409/429 映射、`SnsInteractionScheduler`/`SnsInteractionPlanner`/`SnsInteractionLedger`/
+  `SnsMomentVision` 的名单/黑名单/回复范围/频率/退避/演练/识图缓存、**重启保留水位与 24h 停机补处理**、
+  `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
+  （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-用例总数随代码演进，以 `swift test` 实际输出为准；多账号隔离、记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归
-均已包含在上述覆盖中。
+当前实测基线：Swift 879 项执行（877 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
++ 132 子测试，0 失败；19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
+记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
+实际输出为准。
 
 ### 8.2 App 内诊断开关
 
@@ -728,6 +854,18 @@ Scene，因此该入口在 headless 下不会触发，请改用 8.1 的 `swift t
 Hook 检测 → `startBot` 失败路径（缺 API Key / 未安装 Gadget）、Keychain 保存/删除、`config.json` 无明文 Key。
 
 ## 9. 已知限制 / 后续 TODO
+
+- **朋友圈写通道与同步**：时间线读取（被动缓存/主动刷新）、媒体 thumb/full、文字发布（partial 与 public
+  联调）与评论发送均已真机验证（4.2.0.17；评论与发布为 2026-11-08 复测）；回复与 like/objectop 写路径仍待
+  真机验证，自动发布真机联调未验证。写操作默认关；private 可见性回包成功但微信 UI/时间线不显示。
+  **2026-11-10 按真机抓包修正 partial 可见性字段**（原生为 Privacy=0 + GroupUsers=[好友]，旧 Privacy=2
+  会回包成功但目标好友看不到），修正后仍需用好友账号做一次真机确认；公共可见性契约见 [sns.md](sns.md) §0/§4.6。
+  `/sns/sync` 的 CmdBuf 外层信封已按真机样本（2026-11-09）解码：cmd45 正常，cmd46 仅 Type 1/2/3 可解，
+  评论并入缓存并由 timeline 合并；**好友回复机器人评论实测为 Type=11、无正文，hint 本身只触发静默刷新；
+  正文由 sns.db 只读补全，32 位 comment_id=35 已确认可作 reply_comment_id，P7 自动回复已生成 c131、
+  页面闭环（Mac UI 不触发 0xd2；仅 4.2.0.17/依赖 key 缓存）**。WS 推送仍未实现，
+  主动同步触发时机仍受微信影响，App 另有时间线 diff 兜底。
+  其它版本/`ReferAction` 组合与 like/objectop 仍待真机。详见 [sns.md](sns.md) §0、§8。
 
 - **bridge 日志格式未定**：`HookManager` 仅做关键字匹配（HTTP 启动、gadget 连接、panic/失败）；gateway 连接状态
   以 OneBot WS 为准。bridge 若后续输出结构化状态行，可在 `handleBridgeLine` 增加精确解析。

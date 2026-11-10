@@ -10,7 +10,7 @@
 #   bash scripts/clean.sh --yes --keep-dist
 #   bash scripts/clean.sh --yes --all      # 额外删除 Frida Gadget（需重新下载）
 #
-# 不会触碰源码、hook/versions、assets、docs、_research 与 git 历史。
+# 不会触碰源码、hook/versions、assets、docs、_local/、_research 与 git 历史。
 #
 set -euo pipefail
 
@@ -34,8 +34,10 @@ usage() {
   --all            额外删除 hook/gadget/FridaGadget.dylib（需重新下载）
   -h, --help       显示本帮助
 
-清理范围：app/.build*、app/.swiftpm、bridge/onebot、dist/、log/、bridge/log/、
-仓库内的 .DS_Store 与 __pycache__。重新构建见 README「快速开始」。
+清理范围：app/.build*、app/.swiftpm、bridge/onebot、bridge/onebot.dSYM、dist/、log/、bridge/log/、
+仓库内的 .DS_Store 与 __pycache__（均已跳过 _local/ 与 _research/ 证据区）。
+注意：删除 dist/ 会连同 dist/RELEASE_NOTES_*.md 一起删除，发布说明请先归档到
+docs/releases/（加 --keep-dist 可保留整个 dist/）。重新构建见 README「快速开始」。
 EOF
 }
 
@@ -94,21 +96,29 @@ if (( DEEP == 1 )); then
   add_target "${ROOT_DIR}/hook/gadget/FridaGadget.dylib"
 fi
 
-# .DS_Store（遍历整个仓库，跳过 .git）
+# .DS_Store（遍历整个仓库，跳过 .git 与 _local/、_research/ 证据区）
 DS_STORES=()
 DS_COUNT=0
 while IFS= read -r path; do
   DS_STORES[DS_COUNT]="${path}"
   DS_COUNT=$((DS_COUNT + 1))
-done < <(find "${ROOT_DIR}" -name .DS_Store -type f -not -path "${ROOT_DIR}/.git/*" 2>/dev/null || true)
+done < <(find "${ROOT_DIR}" -name .DS_Store -type f \
+  -not -path "${ROOT_DIR}/.git/*" \
+  -not -path "${ROOT_DIR}/_local" -not -path "${ROOT_DIR}/_local/*" \
+  -not -path "${ROOT_DIR}/_research" -not -path "${ROOT_DIR}/_research/*" \
+  2>/dev/null || true)
 
-# __pycache__（tools / devtools / scripts 下的 Python 字节码缓存）
+# __pycache__（tools / devtools / scripts 下的 Python 字节码缓存；跳过 _local/、_research/）
 PY_CACHES=()
 PY_COUNT=0
 while IFS= read -r path; do
   PY_CACHES[PY_COUNT]="${path}"
   PY_COUNT=$((PY_COUNT + 1))
-done < <(find "${ROOT_DIR}" -type d -name __pycache__ -not -path "${ROOT_DIR}/.git/*" 2>/dev/null || true)
+done < <(find "${ROOT_DIR}" -type d -name __pycache__ \
+  -not -path "${ROOT_DIR}/.git/*" \
+  -not -path "${ROOT_DIR}/_local" -not -path "${ROOT_DIR}/_local/*" \
+  -not -path "${ROOT_DIR}/_research" -not -path "${ROOT_DIR}/_research/*" \
+  2>/dev/null || true)
 
 # ---------- 汇总 ----------
 

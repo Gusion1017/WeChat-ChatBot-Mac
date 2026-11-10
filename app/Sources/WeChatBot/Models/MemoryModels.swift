@@ -60,12 +60,15 @@ enum MemorySource: String, Codable, CaseIterable, Sendable {
     case extraction
     case manual
     case legacyImport = "legacy-import"
+    /// 由朋友圈时间线读取自动写入（动态正文 / 已生成的图片分析摘要）。
+    case moments
 
     var label: String {
         switch self {
         case .extraction: L("自动提取")
         case .manual: L("手写")
         case .legacyImport: L("旧记忆导入")
+        case .moments: L("朋友圈")
         }
     }
 }

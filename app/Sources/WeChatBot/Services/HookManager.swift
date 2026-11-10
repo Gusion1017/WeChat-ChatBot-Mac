@@ -25,39 +25,39 @@ enum HookError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .resourcesMissing:
-            return "未找到应用资源目录（bridge/hook/tools）；请通过 App bundle 或 WECHATAI_ROOT 运行"
+            return L("未找到应用资源（bridge / hook / tools）。请从 App 启动，或设置 WECHATAI_ROOT。")
         case .installScriptMissing:
-            return "安装脚本缺失：tools/install_gadget.sh"
+            return L("安装脚本缺失：tools/install_gadget.sh")
         case .gadgetPayloadMissing:
-            return "Frida Gadget 文件缺失：hook/gadget/FridaGadget.dylib 或配置文件"
+            return L("Frida Gadget 文件缺失：hook/gadget/FridaGadget.dylib 及其配置")
         case .versionConfigMissing(let path):
-            return "Hook 版本文件未就绪：\(path)（等待 hook-port 产出对应微信版本的 JSON 偏移）"
+            return Lf("缺少该微信版本的 Hook 配置：%@", path)
         case .commandLineToolsMissing:
-            return L("需要安装 Xcode Command Line Tools（提供 python3 与 otool）。请到首启向导或「设置 → Hook」点击安装，然后重试。")
+            return L("需要 Command Line Tools（含 python3 与 otool）。请在「设置 → Hook」安装后重试。")
         case .weChatNotInstalled(let path):
-            return "未找到微信 App：\(path)"
+            return Lf("未找到微信：%@", path)
         case .weChatRunning:
-            return "微信正在运行，请先完全退出微信（含菜单栏图标）再安装"
+            return L("微信正在运行。请完全退出微信（含菜单栏图标）后再安装。")
         case .weChatNotRunning:
-            return "微信未运行，请先登录微信后再启动机器人"
+            return L("微信未运行。请先登录微信，再启动机器人。")
         case .gadgetNotInstalled:
-            return "尚未安装 Frida Gadget，请先在总览页安装并重启微信"
+            return L("尚未安装 Frida Gadget。请先在总览安装 Hook，然后重启微信。")
         case .bridgeBinaryMissing:
-            return "未找到 bridge/onebot 可执行文件（请先构建 bridge 或检查 App 资源）"
+            return L("未找到 bridge 可执行文件。请先构建 bridge，或重新安装 App。")
         case .bridgeDirectoryMissing:
-            return "未找到 bridge 资源目录（onebot 从当前目录读取 script.js）"
+            return L("未找到 bridge 资源目录（onebot 需要读取同目录的 script.js）。")
         case .imagePathUnavailable:
-            return "未找到微信媒体临时目录（xwechat_files/<账号>/temp）；请先登录微信，或在设置中填写 image_path"
+            return L("未找到微信媒体目录（xwechat_files/<账号>/temp）。请先登录微信，或在设置中填写 image_path。")
         case .missingToken:
-            return "OneBot token 为空，已拒绝以无鉴权方式启动 bridge"
+            return L("OneBot Token 为空，已拒绝无鉴权启动 bridge。")
         case .backupMissing:
-            return "未找到微信官方备份，无法恢复"
+            return L("未找到微信备份，无法恢复。")
         case .installFailed(let message):
-            return "Gadget 安装失败：\(message)"
+            return Lf("Hook 安装失败：%@", message)
         case .restoreFailed(let message):
-            return "微信恢复失败：\(message)"
+            return Lf("微信恢复失败：%@", message)
         case .commandFailed(let message):
-            return "命令执行失败：\(message)"
+            return Lf("命令执行失败：%@", message)
         }
     }
 }
@@ -114,11 +114,11 @@ struct WeChatInstallation: Sendable {
 
 /// 支持 R3 原生发送（App 运行期配置）的微信版本。
 ///
-/// 4.1.15.55 (270135) 与 4.2.0.x（4.2.0.5 / 270341、4.2.0.9 / 270345、4.2.0.12 / 270348）共用同一 R3 发送链路；
-/// 4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
+/// 4.2.0.17 (270353) 与 4.2.0.x（4.2.0.12 / 270348、4.2.0.9 / 270345、4.2.0.5 / 270341）及
+/// 4.1.15.55 (270135) 共用同一 R3 发送链路；4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
 enum NativeSendVersionSupport {
-    static let versions: Set<String> = ["4.1.15.55", "4.2.0.5", "4.2.0.9", "4.2.0.12"]
-    static let builds: Set<String> = ["270135", "270341", "270345", "270348"]
+    static let versions: Set<String> = ["4.2.0.17", "4.2.0.12", "4.2.0.9", "4.2.0.5", "4.1.15.55"]
+    static let builds: Set<String> = ["270353", "270348", "270345", "270341", "270135"]
 
     static func supports(version: String, build: String) -> Bool {
         versions.contains(version) || builds.contains(build)

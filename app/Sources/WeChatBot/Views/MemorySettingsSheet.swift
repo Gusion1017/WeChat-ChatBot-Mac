@@ -44,8 +44,11 @@ struct MemorySettingsSheet: View {
                 .font(.system(size: 22))
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text(L("记忆设置")).font(.headline)
-                Text(L("随当前微信账号保存；所有数值写入前会自动收敛到合法范围。"))
+                HStack(spacing: 3) {
+                    Text(L("记忆设置")).font(.headline)
+                    HelpTip(text: "设置保存在当前微信账号的 profile.json；超出允许范围的数值会自动收敛到边界。")
+                }
+                Text(L("随当前微信账号保存，下一轮回复生效。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -63,11 +66,12 @@ struct MemorySettingsSheet: View {
     private var enabledSection: some View {
         SettingsSection(
             title: "记忆总开关",
-            footer: "关闭后不提取、不召回、不写全量记录；回复直接使用人格设定，已保存的记忆仍可查看和导出。"
+            footer: "关闭后不提取、不召回，也不写全量记录。",
+            help: "回复直接使用人格设定，不注入记忆；已保存的记忆仍可查看、编辑和导出，全量记录保留。"
         ) {
             SettingsRow(
                 title: "启用记忆卡",
-                subtitle: "自动提取记忆、在回复前召回并写入全量互动记录。",
+                subtitle: "自动提取、回复前召回，并记录全量互动。",
                 symbol: "brain.head.profile",
                 tint: Theme.accent
             ) {
@@ -79,7 +83,9 @@ struct MemorySettingsSheet: View {
             SettingsDivider()
             SettingsRow(
                 title: "自动归档",
-                subtitle: "提取后把长期未访问、低召回的普通记忆标记为已归档。",
+                subtitle: draft.enabled
+                    ? "把长期未访问、低召回的普通记忆标记为已归档。"
+                    : "先启用记忆卡才能自动归档。",
                 symbol: "archivebox",
                 tint: Theme.warning
             ) {
@@ -95,7 +101,8 @@ struct MemorySettingsSheet: View {
     private var extractionSection: some View {
         SettingsSection(
             title: "提取",
-            footer: "未处理互动达到批量阈值时触发一次 AI 提取；失败会保留游标，下次有新消息时重试。"
+            footer: "达到阈值后触发一次 AI 提取。",
+            help: "未处理互动达到批量阈值时批量提取；提取失败会保留进度，下次有新消息时自动重试。"
         ) {
             intRow(
                 title: "批量提取阈值",
@@ -115,7 +122,7 @@ struct MemorySettingsSheet: View {
         ) {
             intRow(
                 title: "最近记忆窗口",
-                subtitle: "创建或召回过的最新记忆享受权重加成。",
+                subtitle: "最近创建或召回的记忆享受权重加成。",
                 symbol: "clock.badge.checkmark",
                 value: $draft.recentWindowHours,
                 range: MemorySettings.recentWindowHourRange,
@@ -124,7 +131,7 @@ struct MemorySettingsSheet: View {
             SettingsDivider()
             intRow(
                 title: "普通记忆半衰期",
-                subtitle: "普通记忆权重每经过这么多天衰减一半。",
+                subtitle: "每经过设定天数，权重衰减一半。",
                 symbol: "hourglass",
                 value: $draft.normalHalfLifeDays,
                 range: MemorySettings.normalHalfLifeRange,
@@ -151,7 +158,7 @@ struct MemorySettingsSheet: View {
             )
             SettingsDivider()
             doubleRow(
-                title: "自动折叠相似度",
+                title: "自动合并相似度",
                 subtitle: "相似度达到阈值时把新内容合并到已有记忆。",
                 symbol: "arrow.triangle.merge",
                 value: $draft.mergeSimilarity,
@@ -165,11 +172,12 @@ struct MemorySettingsSheet: View {
     private var archiveSection: some View {
         SettingsSection(
             title: "归档",
-            footer: "只归档普通记忆；已归档记忆默认不召回，可在记忆卡的「已归档」筛选中恢复。"
+            footer: "已归档记忆不参与召回，可在「已归档」筛选中恢复。",
+            help: "自动归档只作用于普通记忆；置顶与重要记忆不会被自动归档。"
         ) {
             intRow(
                 title: "自动归档天数",
-                subtitle: "超过这么多天未访问且召回少于 3 次的普通记忆会被归档。",
+                subtitle: "超过设定天数未访问、且召回少于 3 次的普通记忆会被归档。",
                 symbol: "calendar.badge.clock",
                 value: $draft.archiveAfterDays,
                 range: MemorySettings.archiveAfterRange,
@@ -181,7 +189,8 @@ struct MemorySettingsSheet: View {
     private var recallSection: some View {
         SettingsSection(
             title: "召回",
-            footer: "超长时优先保留最近 → 重要 → 相关，低优先级记忆在提示词中注明省略。"
+            footer: "超出上限时，优先保留最近、重要与相关的记忆。",
+            help: "被省略的记忆仍保存在记忆卡中，不会因未注入而删除。"
         ) {
             intRow(
                 title: "单轮注入条数",

@@ -26,9 +26,10 @@ struct RootView: View {
             OnboardingView()
                 .environment(store)
         }
-        // 首次启用语音回复或运行时启动后检测到发送句柄缺失：无论当前在哪个页面都提示一次。
-        .sheet(isPresented: $store.isVoiceSetupPromptPresented) {
-            VoiceHandleSetupSheet()
+        // 统一「捕获发送句柄」弹窗：语音/朋友圈开关开启或运行时启动检测到缺失时，
+        // 无论当前在哪个页面都提示一次（同一时刻只有一个弹窗）。
+        .sheet(isPresented: $store.isCaptureSetupPromptPresented) {
+            CaptureSetupSheet()
                 .environment(store)
         }
         .onAppear {
@@ -73,6 +74,7 @@ struct PageRouter: View {
         switch item {
         case .dashboard: DashboardView()
         case .conversations: ConversationsView()
+        case .moments: MomentsView()
         case .bot: BotView()
         case .ai: AIModelsView()
         case .personas: PersonasView()

@@ -57,7 +57,7 @@ struct SettingsUpdateSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("WeChat AI 更新"))
                         .font(.title3.weight(.semibold))
-                    Text(L("检测 GitHub 上的新版本，下载并自动安装"))
+                    Text(L("从 GitHub 检查新版本，下载并自动安装"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -168,13 +168,10 @@ struct SettingsUpdateSection: View {
     private var stateSection: some View {
         switch updates.state {
         case .idle:
-            SettingsSection(
-                title: "更新检查",
-                footer: "更新检查只读访问 GitHub Releases API，不会上传任何本机数据。"
-            ) {
+            SettingsSection(title: "更新检查") {
                 SettingsRow(
                     title: "尚未检查更新",
-                    subtitle: "启动 App 后会自动检查；也可以立即手动检查。",
+                    subtitle: "启动 App 后自动检查；也可以立即检查。",
                     symbol: "questionmark.circle",
                     tint: .secondary
                 ) {
@@ -189,10 +186,7 @@ struct SettingsUpdateSection: View {
             )
         case .upToDate(let checkedAt):
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-                SettingsSection(
-                    title: "更新检查",
-                    footer: "自动检查每 6 小时最多一次；手动检查不受限制。"
-                ) {
+                SettingsSection(title: "更新检查") {
                     SettingsRow(
                         title: showsSkippedRelease ? "已跳过新版本" : "已是最新版本",
                         subtitle: Lf("上次检查：%@", UIFormat.relative(checkedAt)),
@@ -350,7 +344,7 @@ struct SettingsUpdateSection: View {
                 versionLabel: release.version.description
             )
             if document.isEmpty {
-                Text(L("此版本没有提供可展示的更新内容。"))
+                Text(L("此版本没有提供更新内容。"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
@@ -367,7 +361,7 @@ struct SettingsUpdateSection: View {
         if let release = updates.latestRelease, release.version == updates.currentVersion {
             SettingsSection(
                 title: "本版本更新内容",
-                footer: "内容来自 GitHub Release 的「本版重点」；已过滤下载、安装与隐私说明等发布模板。"
+                help: "内容来自 GitHub Release 的「本版重点」，已过滤下载、安装与隐私说明等模板段落。"
             ) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 6) {
@@ -383,7 +377,7 @@ struct SettingsUpdateSection: View {
                     if let document = currentVersionNotesDocument, !document.isEmpty {
                         ReleaseNotesView(document: document, maxHeight: 260)
                     } else {
-                        Text(L("此版本没有提供可展示的更新内容。"))
+                        Text(L("此版本没有提供更新内容。"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -421,7 +415,7 @@ struct SettingsUpdateSection: View {
         }
         guard let release = updates.availableRelease else { return nil }
         guard let asset = release.asset else {
-            return L("发布包中没有可安装的 zip 文件")
+            return L("发布包中缺少可安装的 zip 文件")
         }
         if asset.checksumURL == nil {
             return L("发布包缺少 SHA256 校验文件，已禁用应用内安装")
@@ -448,7 +442,7 @@ struct SettingsUpdateSection: View {
             VStack(alignment: .leading, spacing: 12) {
                 InlineNotice(
                     kind: .warning,
-                    title: "更新检查或安装失败",
+                    title: "失败原因",
                     message: L(message)
                 )
                 HStack(spacing: 9) {
@@ -474,13 +468,10 @@ struct SettingsUpdateSection: View {
     // MARK: - Automatic checks
 
     private var autoCheckSection: some View {
-        SettingsSection(
-            title: "自动检查",
-            footer: "启动 App 后会延迟检查一次；6 小时内最多自动检查一次。更新检查只读访问 GitHub Releases API，不会上传本机数据。"
-        ) {
+        SettingsSection(title: "自动检查") {
             SettingsRow(
                 title: "自动检查更新",
-                subtitle: "启动后延迟检查，6 小时内不重复",
+                subtitle: "启动后自动检查，6 小时内最多一次",
                 symbol: "clock.arrow.circlepath",
                 tint: Theme.info
             ) {
@@ -498,7 +489,7 @@ struct SettingsUpdateSection: View {
             SettingsDivider()
             SettingsRow(
                 title: "检查更新",
-                subtitle: "从 GitHub Releases 获取最新版本",
+                subtitle: "手动检查不受频率限制",
                 symbol: "arrow.triangle.2.circlepath",
                 tint: Theme.accent
             ) {
@@ -558,7 +549,7 @@ struct SettingsUpdateSection: View {
                         kind: .warning,
                         title: "无法应用内安装",
                         message: updates.availableRelease?.asset == nil
-                            ? "发布包中没有可安装的 zip 文件"
+                            ? "发布包中缺少可安装的 zip 文件"
                             : "发布包缺少 SHA256 校验文件，已禁用应用内安装"
                     )
                     .padding(14)
@@ -613,7 +604,7 @@ struct SettingsUpdateSection: View {
                 Button {
                     updates.openAllReleasesPage()
                 } label: {
-                    Label(L("在 GitHub 查看 Releases"), systemImage: "arrow.up.right.square")
+                    Label(L("在 GitHub 查看全部版本"), systemImage: "arrow.up.right.square")
                 }
                 .buttonStyle(.glass)
                 .controlSize(.small)
@@ -627,7 +618,7 @@ struct SettingsUpdateSection: View {
                 .controlSize(.small)
                 Spacer(minLength: 0)
             }
-            Text(L("更新包必须带 SHA256；替换后重新 ad-hoc 签名，首次打开可能需在系统设置里放行。"))
+            Text(L("只读访问 GitHub Releases，不上传本机数据。"))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -684,7 +675,7 @@ struct SettingsUpdateSection: View {
                         versionLabel: release.version.description
                     )
                     if document.isEmpty {
-                        Text(L("此版本没有提供可展示的更新内容。"))
+                        Text(L("此版本没有提供更新内容。"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     } else {
@@ -700,9 +691,6 @@ struct SettingsUpdateSection: View {
             )
 
             VStack(alignment: .leading, spacing: 5) {
-                detailBullet("机器人会先停止。")
-                detailBullet("App 会退出并替换当前安装包「WeChat AI.app」。")
-                detailBullet("替换后会重新进行 ad-hoc 签名，并自动重新打开新版本。")
                 detailBullet("取消不会修改任何文件。")
             }
 

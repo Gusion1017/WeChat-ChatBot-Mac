@@ -7,7 +7,7 @@
 #   Authorization: Bearer <TOKEN>
 #
 # 可用环境变量（命令行参数优先）：
-#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_0_12_mac.json
+#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_0_17_mac.json
 #   PORT         监听端口，默认 58080
 #   TOKEN        OneBot token；为空时随机生成 32 字节 hex 并打印
 #   IMAGE_PATH   微信图片临时目录（必填，且必须已存在）
@@ -15,13 +15,14 @@
 #   GADGET_ADDR  Frida Gadget 地址，默认 127.0.0.1:27042
 #   LOG_LEVEL    debug|info|warn|error，默认 info
 #   BRIDGE_BIN   自定义 onebot 路径，默认 <repo>/bridge/onebot
+#   HOOK_SEND_DISABLED  1/true 时强制关闭主动发送（默认 true；真机验证时设为 false）
 #
 # 示例：
 #   IMAGE_PATH="$HOME/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_xxx/temp/2026-10/Img/" \
 #     scripts/run_bridge.sh
 #
 #   scripts/run_bridge.sh --port 58081 --token "$(openssl rand -hex 32)" \
-#     --wechat-conf hook/versions/4_2_0_12_mac.json \
+#     --wechat-conf hook/versions/4_2_0_17_mac.json \
 #     --image-path "/path/to/xwechat_files/wxid_xxx/temp/2026-10/Img/"
 #
 set -euo pipefail
@@ -30,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${ROOT_DIR}/bridge"
 
-WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_0_12_mac.json}"
+WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_0_17_mac.json}"
 PORT="${PORT:-58080}"
 TOKEN="${TOKEN:-}"
 IMAGE_PATH="${IMAGE_PATH:-}"
@@ -52,7 +53,7 @@ usage() {
 用法：scripts/run_bridge.sh [选项]
 
 选项：
-  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_0_12_mac.json）
+  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_0_17_mac.json）
   --port <port>         监听端口（默认 58080，仅绑定 127.0.0.1）
   --token <token>       OneBot token（默认随机生成 64 字符 hex）
   --image-path <dir>    微信图片临时目录（必填，必须已存在）
@@ -135,7 +136,7 @@ BRIDGE_DIR="$(cd "$(dirname "${BRIDGE_BIN}")" 2>/dev/null && pwd)" \
 
 [[ -x "${BRIDGE_BIN}" ]] || fail "未找到可执行文件：${BRIDGE_BIN}\n  先运行 scripts/build_bridge.sh"
 [[ -f "${BRIDGE_DIR}/script.js" ]] || fail "缺少 ${BRIDGE_DIR}/script.js；onebot 从当前工作目录读取它，必须与 onebot 同目录。"
-[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_0_12_mac.json。"
+[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_0_17_mac.json。"
 [[ -n "${IMAGE_PATH}" ]] || fail "缺少 IMAGE_PATH。\n  指向微信容器目录：.../xwechat_files/<wxid>/temp/<...>/Img/（App 负责探测/创建）。"
 [[ -d "${IMAGE_PATH}" ]] || fail "IMAGE_PATH 不存在或不是目录：${IMAGE_PATH}\n  请先确认微信已运行并创建该临时目录；App 侧会做同样检查。"
 mkdir -p "${MEDIA_DIR}" 2>/dev/null || fail "无法创建 MEDIA_DIR：${MEDIA_DIR}\n  请确认路径可写；入站图片获取会写入该目录。"

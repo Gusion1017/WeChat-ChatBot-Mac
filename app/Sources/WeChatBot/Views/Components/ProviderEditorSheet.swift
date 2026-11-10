@@ -135,9 +135,9 @@ struct ProviderEditorSheet: View {
         if !trimmedSecret.isEmpty {
             PillLabel(text: "待保存新密钥", color: Theme.info, symbol: "key.fill")
         } else if draft.hasAPIKey {
-            PillLabel(text: "密钥已保存", color: Theme.success, symbol: "key.fill")
+            PillLabel(text: "密钥已登记", color: Theme.success, symbol: "key.fill")
         } else if draft.requiresAPIKey {
-            PillLabel(text: "缺少密钥", color: Theme.warning, symbol: "key.slash")
+            PillLabel(text: "缺少 API Key", color: Theme.warning, symbol: "key.slash")
         } else {
             PillLabel(text: "无需密钥", color: .secondary, symbol: "key.slash")
         }
@@ -159,7 +159,7 @@ struct ProviderEditorSheet: View {
             HStack(alignment: .bottom, spacing: 10) {
                 FormField(
                     label: "类型",
-                    hint: "切换类型会自动填入默认地址与模型；手动修改过的值不会被覆盖。"
+                    hint: "切换类型会自动填入默认地址与模型，不覆盖手改值。"
                 ) {
                     Picker(L("类型"), selection: $draft.kind) {
                         ForEach(ProviderKind.allCases) { kind in
@@ -226,8 +226,8 @@ struct ProviderEditorSheet: View {
                         .font(.system(size: 12))
                 }
                 .buttonStyle(.glass)
-                .help(showsSecret ? "隐藏密钥" : "显示密钥")
-                .accessibilityLabel(showsSecret ? "隐藏密钥" : "显示密钥")
+                .help(L(showsSecret ? "隐藏密钥" : "显示密钥"))
+                .accessibilityLabel(L(showsSecret ? "隐藏密钥" : "显示密钥"))
             }
 
             if draft.kind == .ollama {
@@ -278,7 +278,7 @@ struct ProviderEditorSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     FormField(
                         label: "回复最大长度",
-                        hint: "单次回复最多生成的 token 数；越大回复可能越长，也越消耗额度。"
+                        hint: "单次回复最多生成的 token 数；越大越消耗额度。"
                     ) {
                         Stepper(
                             Lf("%d tokens", draft.maxTokens),
@@ -443,7 +443,7 @@ struct ProviderEditorSheet: View {
             return
         }
         guard isValidBaseURL(candidate.baseURL) else {
-            fail(.baseURL, "Base URL 必须是合法的 http(s) 地址。")
+            fail(.baseURL, "Base URL 必须是 http(s) 地址。")
             return
         }
         guard !candidate.model.isEmpty else {

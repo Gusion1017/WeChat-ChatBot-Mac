@@ -292,10 +292,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "send_private_msg", "send_group_msg":
-			err = SendWS(m.Params)
-			if err != nil {
+			// 单条动作参数错误只记日志，不关连接：否则客户端发错一次消息就会
+			// 丢掉事件流（App 需要重连，断线期间事件全部丢失）。
+			if err = SendWS(m.Params); err != nil {
 				Error("发送失败", "err", err)
-				return
 			}
 		}
 	}

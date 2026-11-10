@@ -63,19 +63,19 @@ enum DeepSeekBalanceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidBaseURL(let raw):
-            return "余额接口地址无效：\(raw)"
+            return Lf("余额接口地址无效：%@", raw)
         case .missingAPIKey:
-            return "缺少 DeepSeek API Key，请在「AI 模型」中填写"
+            return L("尚未配置 DeepSeek API Key。请在「AI 模型」中填写后重试。")
         case .unauthorized:
-            return "DeepSeek API Key 无效或已过期（HTTP 401）"
+            return L("DeepSeek API Key 无效或已过期（HTTP 401）。")
         case .httpStatus(let status, let body):
             let detail = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            if detail.isEmpty { return "余额查询失败（HTTP \(status)）" }
-            return "余额查询失败（HTTP \(status)）：\(detail.prefix(160))"
+            if detail.isEmpty { return Lf("余额查询失败（HTTP %d）", status) }
+            return Lf("余额查询失败（HTTP %d）：%@", status, String(detail.prefix(160)))
         case .malformedResponse(let detail):
-            return "余额响应解析失败：\(detail)"
+            return Lf("无法解析余额响应：%@", detail)
         case .transport(let message):
-            return "网络错误：\(message)"
+            return Lf("网络错误：%@", message)
         }
     }
 }

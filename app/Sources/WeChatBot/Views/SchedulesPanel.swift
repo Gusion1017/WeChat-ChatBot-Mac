@@ -68,7 +68,7 @@ struct SchedulesPanel: View {
                             symbol: "calendar.badge.clock",
                             title: "还没有定时任务",
                             message: "可以定时向某个会话发送消息，例如每日问候、整点提醒。",
-                            actionTitle: "新建定时任务"
+                            actionTitle: "新建任务"
                         ) {
                             addTask()
                         }
@@ -83,7 +83,7 @@ struct SchedulesPanel: View {
                     InlineNotice(
                         kind: .info,
                         title: "执行条件",
-                        message: "定时任务由 App 内调度器执行，仅当机器人运行且 OneBot 已连接时才会真正发送。时间以系统时区为准。"
+                        message: "仅在机器人运行且 OneBot 已连接时发送；时间按系统时区计算。"
                     )
                 }
             }
@@ -119,7 +119,7 @@ struct SchedulesPanel: View {
             ),
             presenting: pendingDelete
         ) { task in
-            Button(L("删除") + " \(task.name)", role: .destructive) {
+            Button(Lf("删除「%@」", task.name), role: .destructive) {
                 delete(task)
             }
             Button(L("取消"), role: .cancel) { pendingDelete = nil }
@@ -238,7 +238,7 @@ struct ScheduleEditorSheet: View {
                 IconTile(symbol: "calendar.badge.clock", tint: Theme.info, size: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L(isNew ? "新建定时任务" : "编辑定时任务")).font(.headline)
-                    Text(L("按计划向指定会话发送消息"))
+                    Text(L("按计划向指定会话发送消息；需机器人与 OneBot 在线才会发送"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -330,10 +330,7 @@ struct ScheduleEditorSheet: View {
                         }
                     }
 
-                    FormField(
-                        label: draft.repeatRule == .once ? "执行时间" : "每日时间",
-                        hint: draft.repeatRule == .once ? "仅执行一次" : "以后每天/每周在该时间执行"
-                    ) {
+                    FormField(label: "执行时间", hint: repeatHint) {
                         DatePicker(
                             "执行时间",
                             selection: $draft.fireAt,
@@ -376,7 +373,7 @@ struct ScheduleEditorSheet: View {
                 Spacer()
                 Button(L("取消")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(isNew ? "添加任务" : "保存") { save() }
+                Button(L(isNew ? "添加任务" : "保存")) { save() }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .keyboardShortcut(.defaultAction)
@@ -403,6 +400,16 @@ struct ScheduleEditorSheet: View {
                 }
             }
         )
+    }
+
+    /// 重复方式对应的执行说明；「工作日」固定周一至周五，与调度器一致。
+    private var repeatHint: String {
+        switch draft.repeatRule {
+        case .once: "仅执行一次"
+        case .daily: "每天在该时间执行"
+        case .weekly: "每周在所选星期执行"
+        case .weekdays: "周一至周五在该时间执行"
+        }
     }
 
     private var targetTitle: String {

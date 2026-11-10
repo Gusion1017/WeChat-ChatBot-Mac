@@ -82,7 +82,7 @@ final class ChatEngine: @unchecked Sendable {
         dryRun: Bool
     ) async throws -> ChatReplyPlan {
         let maxRetries = max(0, settings.ai.retryCount)
-        var lastError: Error = AIError.emptyResponse
+        var lastError: Error = AIError.emptyResponse(nil)
 
         for attempt in 0...maxRetries {
             do {
@@ -125,7 +125,10 @@ final class ChatEngine: @unchecked Sendable {
             settings: settings,
             persona: persona,
             provider: provider,
-            history: history
+            history: history,
+            // 演练模式只读：不建记忆卡、不累计召回权重（否则彩排会改变之后真正回复的偏好）。
+            recordAccess: !dryRun,
+            createCharacterIfNeeded: !dryRun
         )
         let promptMessages = buildMessages(
             conversation: conversation,
@@ -148,7 +151,7 @@ final class ChatEngine: @unchecked Sendable {
                             settings: settings, dryRun: dryRun, contextCount: promptMessages.count)
         guard !plan.segments.isEmpty else {
             onLog?(.warning, "AI 回复为空（清洗系统语音标注后没有剩余内容）")
-            throw AIError.emptyResponse
+            throw AIError.emptyResponse(nil)
         }
         onLog?(.debug, "AI 回复生成完成：\(result.text.count) 字，\(Int(result.latencyMs))ms，"
             + "tokens=\(result.usage.totalTokens)（上下文 \(promptMessages.count) 条）")
@@ -167,7 +170,9 @@ final class ChatEngine: @unchecked Sendable {
         settings: AppSettings,
         persona: Persona?,
         provider: AIProvider,
-        history: [ChatMessage] = []
+        history: [ChatMessage] = [],
+        recordAccess: Bool = true,
+        createCharacterIfNeeded: Bool = true
     ) async -> ChatPromptContext {
         if let characters, let memoryEngine {
             return await buildMemoryV2Context(
@@ -177,7 +182,9 @@ final class ChatEngine: @unchecked Sendable {
                 incoming: incoming,
                 settings: settings,
                 persona: persona,
-                provider: provider
+                provider: provider,
+                recordAccess: recordAccess,
+                createCharacterIfNeeded: createCharacterIfNeeded
             )
         }
         return await buildLegacyPromptContext(
@@ -199,7 +206,9 @@ final class ChatEngine: @unchecked Sendable {
         incoming: ChatMessage,
         settings: AppSettings,
         persona: Persona?,
-        provider: AIProvider
+        provider: AIProvider,
+        recordAccess: Bool,
+        createCharacterIfNeeded: Bool
     ) async -> ChatPromptContext {
         let memorySettings = settings.bot.memorySettings
         guard memorySettings.enabled else {
@@ -213,28 +222,33 @@ final class ChatEngine: @unchecked Sendable {
             )
         }
 
-        do {
-            try await characters.ensureCharacter(
-                conversation: conversation,
-                persona: persona,
-                activationTimestamp: incoming.timestamp
-            )
-        } catch {
-            // 记忆卡不可用时不能让整轮回复失败：仍用人格模板回复，只记日志（不含记忆正文）。
-            onLog?(.warning, "记忆卡不可用，仍使用人格设定：\(error.localizedDescription)")
-            return ChatPromptContext(
-                personaPrompt: persona?.systemPrompt,
-                memoryPrompt: nil,
-                speakerIdentity: nil,
-                provider: provider,
-                characterID: nil
-            )
+        // 演练模式：不建卡（彩排不应在记忆页留下新角色）；仍只读召回已有记忆，
+        // 让回复内容尽量接近真实效果。
+        if createCharacterIfNeeded {
+            do {
+                try await characters.ensureCharacter(
+                    conversation: conversation,
+                    persona: persona,
+                    activationTimestamp: incoming.timestamp
+                )
+            } catch {
+                // 记忆卡不可用时不能让整轮回复失败：仍用人格模板回复，只记日志（不含记忆正文）。
+                onLog?(.warning, "记忆卡不可用，仍使用人格设定：\(error.localizedDescription)")
+                return ChatPromptContext(
+                    personaPrompt: persona?.systemPrompt,
+                    memoryPrompt: nil,
+                    speakerIdentity: nil,
+                    provider: provider,
+                    characterID: nil
+                )
+            }
         }
 
         let recall = await memoryEngine.recall(
             conversationID: conversation.id,
             query: incoming.text,
-            settings: memorySettings
+            settings: memorySettings,
+            recordAccess: recordAccess
         )
 
         // 身份映射用全部未归档/未被取代的置顶/重要/fact 记忆：
@@ -915,7 +929,7 @@ final class ChatEngine: @unchecked Sendable {
                     temperature: temperature
                 )
                 let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { throw AIError.emptyResponse }
+                guard !trimmed.isEmpty else { throw AIError.emptyResponse(nil) }
                 var compacted = MemorySummaryCompactor.compact(
                     trimmed,
                     maxCharacters: Self.summaryCharacterLimit

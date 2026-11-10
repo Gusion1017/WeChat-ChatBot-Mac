@@ -1,8 +1,11 @@
 # 微信 AI 助手（WeChat AI）— UI 设计说明
 
-> 面向 macOS 26（Xcode 27 / Swift 6.2）的原生 SwiftUI 界面。本文是 UI 的现行契约：信息架构、
+> 面向 macOS 26（Xcode 27.1 / Swift 6.4）的原生 SwiftUI 界面。本文是 UI 的现行契约：信息架构、
 > 页面结构与交互、设计 token、组件边界与可访问性约定。实现位于
 > `app/Sources/WeChatBot/DesignSystem/` 与 `Views/`，App 场景在 `WeChatBotApp.swift`。
+>
+> **发布状态（2026-11-10）**：本文描述 **4.0.0**（含 4.2.0.17 与朋友圈 / Moments）；用户安装见
+> [`install.md`](install.md)，发布说明见 [`releases/4.0.0.md`](releases/4.0.0.md)。
 
 ## 1. 设计目标
 
@@ -15,24 +18,28 @@
 
 ## 2. 信息架构
 
-主窗口左侧为自定义侧边栏，分三段共 8 个页面（首次向导为独立全屏流程，不计入侧边栏）：
+主窗口左侧为自定义侧边栏，分三段共 9 个页面（首次向导为独立全屏流程，不计入侧边栏）：
 
 | 分组 | 页面 | 职责 |
 | --- | --- | --- |
 | 常用 | 总览 `dashboard` | 健康状态、今日统计、快捷操作、最近活动/会话 |
 | 常用 | 会话 `conversations` | 会话列表 + 聊天详情 + 手动发送 |
-| 自动化 | 机器人 `bot` | 7 个子栏目：常规、触发、互动、名单、节奏、定时、语音 |
+| 常用 | 朋友圈 `moments` | 时间线、评论/点赞、图片查看、发布；入口仅在朋友圈功能开启时显示 |
+| 自动化 | 机器人 `bot` | 8 个子栏目：常规、触发、互动、名单、节奏、定时、朋友圈、语音 |
 | 自动化 | AI 模型 `ai` | 多通道增删改、Keychain 密钥、连接测试、默认通道与请求策略 |
 | 自动化 | 人格设定 `personas` | 人格卡片网格 + 编辑 sheet |
 | 系统 | 记忆库 `memory` | 记忆卡：角色列表（含全局共享）、记忆卡、全量记录/导出、记忆设置、旧记忆导入；聊天记录清理在具体会话内 |
 | 系统 | 运行日志 `logs` | 实时流、级别/来源过滤、暂停、清空、导出 |
 | 系统 | 设置 `settings` | 通用/外观/通知/更新/Hook/OneBot/数据与备份（当前微信账号、已保存账号、重新检测）/关于 |
 
+> 侧边栏顺序固定为「总览、会话、朋友圈、机器人、AI 模型、人格设定、记忆库、运行日志、设置」；
+> 朋友圈入口在功能关闭时隐藏（已停留在该页时显示未开启空态）。
+
 附加入口：
 
-- 菜单栏图标（可在设置中关闭）：**左键开合状态面板**（含打开主窗口、快捷启停、会话 / 机器人 /
+- 菜单栏图标（始终存在，无开关）：**左键开合状态面板**（含打开主窗口、快捷启停、会话 / 机器人 /
   设置直达与退出）；右键 / Control-左键不执行操作。
-- 首次启动向导（4 步 sheet，可从设置或菜单重新打开）；App 设置场景（⌘,）复用 `SettingsView`。
+- 首次启动向导（4 步 sheet，可从设置 → 通用或总览「首次向导」快捷操作重新打开）；App 设置场景（⌘,）复用 `SettingsView`。
 
 ## 3. 窗口与导航
 
@@ -43,14 +50,14 @@ Window("WeChat AI", id: "main")
 │  │  ├─ 品牌区（避开交通灯，38pt 顶部内边距）
 │  │  ├─ 三段导航（常用 / 自动化 / 系统）
 │  │  └─ 底部状态胶囊（机器人 + 微信/Hook/AI）+ 版本/设置
-│  └─ PageRouter → 8 个页面（首次向导另计）
+│  └─ PageRouter → 9 个页面（首次向导另计）
 ├─ Settings scene → SettingsView (880×640)
 └─ MenuBarController：NSStatusItem + 左键 NSPopover (272pt)
 ```
 
 - 侧边栏选中高亮使用系统语义色 `Color.accentColor`，行高 30pt、圆角 7pt；悬停为 4.5% 主色。
-- 窗口隐藏标题栏，内容延伸到交通灯区域，侧边栏顶部预留 `Theme.titlebarInset (38pt)`；页面切换 0.18s
-  平滑动画，「减少动态效果」时自动关闭。
+- 窗口隐藏标题栏，内容延伸到交通灯区域，侧边栏顶部预留 `Theme.titlebarInset (38pt)`；页面切换不加整页动画
+  （只有侧边栏选中高亮 `.smooth(0.14)`），「减少动态效果」时高亮动画关闭。
 - 会话页在主窗口内形成第三栏：侧边栏 + 会话列表（304pt）+ 聊天详情；列表始终可见、不折叠，
   再次点击当前选中的会话行或侧边栏「会话」入口会收起当前对话（见 §7「会话收起」）。
 
@@ -66,7 +73,7 @@ Window("WeChat AI", id: "main")
 | `Theme.accentStrong` | 深绿，用于渐变端点 |
 | `Theme.info` / `success` / `warning` / `danger` / `violet` | 语义状态色 |
 | `Theme.hairline` | `Color.primary.opacity(0.07)`，卡片/分隔线 |
-| `PageBackground` | 系统窗口底色 + 极淡品牌绿/蓝渐变（深色模式降低透明度） |
+| `PageBackground` | 系统窗口底色 + 极淡品牌绿/蓝渐变（深色模式渐变透明度略高） |
 | `Color.accentColor` | 侧边栏选中与系统控件，尊重用户系统强调色 |
 
 所有颜色使用语义 `Color`/材质，浅色/深色自动适配；不写死黑白。
@@ -97,7 +104,8 @@ Window("WeChat AI", id: "main")
 
 ### 4.4 动效
 
-- 页面切换 `.smooth(duration: 0.18)`；Toast `.snappy(0.22)` 进出、2.6s 自动消失；加载用系统 `ProgressView`。
+- 页面切换不做整页动画（只有侧边栏选中高亮 `.smooth(0.14)`）；Toast `.snappy(0.22)` 进出、2.6s 自动消失；
+  加载用系统 `ProgressView`。
 - **不使用 `repeatForever` 动画**：Liquid Glass 背景采样下会持续重绘（空闲 CPU 升高）；
   「运行中」用静态光晕 + 彩色状态点表达。
 - 所有动画经 `@Environment(\.accessibilityReduceMotion)` 开关。
@@ -168,9 +176,74 @@ Window("WeChat AI", id: "main")
     自动清理）。
 - 空状态：无会话 / 未选中会话（含再次点击当前会话行后收起）/ 会话无消息。
 
-### 5.3 机器人
+### 5.3 朋友圈
 
-- 7 个子栏目（`PageTabBar` sticky）：常规 / 触发 / 互动 / 名单 / 节奏 / 定时 / 语音；分栏条不随内容滚动，
+- 入口：侧边栏「常用」第三项 `moments`（位于「会话」下方），**仅当「机器人 → 朋友圈 → 启用朋友圈」打开时显示**；
+  关闭时隐藏入口，若正停留在该页则显示「朋友圈功能未开启」空态并指回机器人页。快捷键 ⌘3。
+- 页面重新出现：数据超过 5 分钟自动刷新一次（无数据时不重复拉取；失败保留旧列表）。
+- 工具栏：`GlassToolbar` 标题「朋友圈」+ 摘要（`N 条动态 · 原生刷新 / 原生待捕获 / 被动缓存 ·
+  缓存于 N 前 / 更新于 N 前`；未开启/未就绪/错误分别显示对应短句）；操作**只有一个「刷新」**
+  （2026-11-10 合并：刷新本身会在时间线之后补一次 `/sns/sync`，不再单独提供「同步更新」按钮）。
+  刷新按钮带 loading spinner 与无障碍文案，手动刷新时列表上方另有一行「正在读取最新动态…」轻提示；
+  后台 60s 同步静默运行，不占工具栏、不闪提示；
+  写操作（自动发布、评论/回复）不在工具栏，发布由自动发布排程执行、评论在动态卡片/评论区进入。本页**不提供设置按钮**。
+- **同步事件无页面入口（2026-11-09）**：移除工具栏「N 条更新」按钮、状态行计数、`MomentsSyncEventsSheet`
+  与「清空更新」；`syncEvents` 与 Core 合并逻辑保留，仅供内部缓存/计数合并，不提供用户可见入口。
+- **Type=11 hint 无可见 UI（2026-11-09）**：Core 收到 `sns_comment_hint` 仅静默触发一次 timeline 刷新，
+  不显示 banner、不做未读计数、不持久化；hint 本身不展示正文、不能直接自动回复、不写评论缓存。
+  回复正文由 sns.db 只读补全，32 位 comment_id 已确认可作 reply_comment_id；P7 自动回复已真机闭环。关闭朋友圈/切号由
+  Core 清除内部状态，用户无提示。
+- 未就绪：分步引导卡（① 在微信「发现 → 朋友圈」停留几秒；② 回来点「重新检测」；③ 仍失败时检查微信登录/机器人运行）
+  +「重新检测」+「查看捕获步骤（统一捕获弹窗）」；不再展示长段落；程序不控制/不打开微信窗口。
+  微信或 bridge 重启后需要重新打开一次朋友圈。**v2.1 起**：页面可见且未就绪时每 5 秒轻量检测一次
+  `/sns/status`（最多约 1 分钟），用户按提示打开朋友圈后页面自动恢复。
+- 列表：`ScrollView` + `LazyVStack`；`MomentCard` 展示作者（昵称/首字头像、自己动态加「我」徽标）、相对时间
+  （悬停显示绝对时间）、正文（固定行距/截断提示）、1–9 图网格（缩略图）。点赞/评论/写评论/展开评论收进带分隔的
+  胶囊操作条；评论预览显示「N 条评论 + 前两条 + 查看全部」。展开卡片时调 `/sns/detail` 补齐评论；支持
+  「加载更多（已显示 N 条）/ 没有更多」。图片块 hover 有描边/轻微放大，加载/失败态可点按重试。
+- 媒体缓存：缩略图/原图内存缓存上限 240 条（按加载顺序淘汰最旧，图片与本地路径一起清）；失败记录上限 400 条。
+- 展开评论（v2.1）：主动补齐不可用（Mac UI 不触发 0xd2，objectdetail 路线放弃）；timeline 已用 sns.db 只读补评论（真机端到端验证，P7 自动回复闭环）；被动模式/失败时保留时间线缓存里的评论与点赞，展示「评论可能不完整」
+  的 info 提示（不再显示 danger 错误 + 重试按钮）；`source=cache` 与本地 diff 事件仅用于内部合并，
+  不提供独立的页面入口。
+- 评论 / 回复（v3.6，P4；2026-11-09 UI 打磨）：动态卡片底部与「更多」菜单提供「写评论」；展开后的每条评论
+  右侧有回复图标。输入面板 `MomentCommentSheet`（560pt）展示目标动态（自己徽标/图片/视频/仅自己可见）、
+  被回复评论引用条、正文进度条与计数（≤1000 字，900 字 warning）+ 二次确认；`comment_ready != true` 时显示
+  「评论通道未就绪」卡片（3 步手动评论/点赞说明 +「重新检测」+「去捕获 / 查看步骤」，后者先收起评论面板再打开
+  统一捕获弹窗），写开关关闭时显示设置路径；被动缓存/详情失败时评论区提供「重新加载评论」；发送成功后关闭面板并
+  toast「评论已发送/回复已发送」，失败保留面板与错误文案。
+  评论行仍展示「回复 X」（`reply_to_name`），bridge 未返回新评论时 App 用本地回显，不伪造 `comment_id`。
+- 图片（2026-11-09 修复/优化）：
+  - 单图：按真实比例整图展示（不再用 0.66–3.0 裁切），宽度上限 340 pt、高度上限 460 pt；超高的「长图」
+    限制为 340×460 并裁切，右下角显示「长图」chip，点按可查看完整图片。展示宽度同时受原图像素宽度约束：
+    小图（表情/截图）不放大到 340 pt（按像素宽度的一半展示、最小 100 pt），大图统一 340 pt；窗口很窄时
+    随可用宽度收缩。原图到达后以真图比例为准（元数据缺失/不一致时不再留黑边），位图未到时用元数据预留
+    尺寸避免卡片高度跳动；先加载缩略图立即显示、原图后台升级，失败可点开查看器重试。
+  - 多图（2–9）：自定义 `MomentMediaSquareGridLayout`（`Layout`）直接算正方形格子——按可用宽度均分、
+    340 pt 上限、左对齐、间距 6 pt，2/4 张两列、其余三列；格子底板为固定尺寸圆角矩形 + overlay 绘制图片
+    （`scaledToFill` 只影响绘制）。**不要改回 `LazyVGrid` + `aspectRatio`**：图片比例会撑宽格子、网格向左
+    溢出卡片（2026-11-09 真机复现并修复）。
+  - 视频：不加载封面/播放 UI，固定显示「视频」占位（单视频 16:9、网格内方形），不伪造媒体。
+  - 查看器 `MomentImageViewer`：居中自适应舞台（最大 960×720，随窗口收缩不溢出）；缩略图即时占位（原图
+    加载中轻模糊 + 小进度角标，失败后清晰显示缩略图并在角上给「原图 · 加载失败 · 重试」），无任何可用图时
+    显示整页重试；缩略图/原图分段切换、左右箭头/按钮与键盘 ←/→ 翻页；翻到视频显示「视频（暂不支持播放）」
+    占位而不是误报加载失败。列表缩略图是否自动加载由「机器人 → 朋友圈 → 自动加载缩略图」控制
+    （关闭后点击图片才下载）；原图始终在查看器按需加载。
+- 发布（v3.0 起完全自动）：朋友圈页**不提供手动发布入口**（`MomentComposeSheet` 已移除），也**没有
+  发布前确认**；自动发布到点直接发送。演练模式（`bot.dryRun`）下只生成只读「演练草稿」用于预览，
+  不发送、不写 ledger。失败会在面板/日志明确提示，不伪造成功、不自动重发。
+- AI 自动互动不在本页操作：名单/动作/频率/识图统一在「机器人 → 朋友圈 → 互动」配置；互动成功且本页
+  可见时由 `MomentsStore.ingestAutoComment` 即时合并新评论，不占用/不改变「写评论」面板的发送状态。
+- 朋友圈记忆（2026-11-09）：页面刷新/自动互动 native 刷新读到的好友动态由 Runtime 写入对应好友 v2 记忆卡
+  （来源「朋友圈」，见 `sns.md` §1.6）；页面本身不展示记忆状态，只在「记忆」页按角色查看；不写微信数据、不上传。
+- 设置：读取与显示、AI 自动互动、发布与自动发布统一在「机器人 → 朋友圈」（`MomentsSettingsPanel`，v3.7
+  三区分段），见 §5.4；本页不提供设置入口。
+- 状态来源：`store.moments`（`MomentsStore`）；视图只读状态并调用 `loadInitialIfNeeded / refresh / loadMore /
+  pollSync / loadDetail / retryAfterPriming / refreshPrimingStatus / submitComment` 等方法，不直接访问网络；
+  `publish` 只由自动发布调度（Runtime）调用，页面没有手动发布入口。
+
+### 5.4 机器人
+
+- 8 个子栏目（`PageTabBar` sticky）：常规 / 触发 / 互动 / 名单 / 节奏 / 定时 / **朋友圈** / 语音；分栏条不随内容滚动，
   切换子栏目内容回到顶部，选择按窗口记忆（`@SceneStorage("bot.subTab")`）。启动/停止与「保存设置」
   始终在页面顶部工具栏（本页唯一启停入口）。
 - 「常规」：状态卡（渐变图标、运行状态、真实/演练模式、配置停用提示、OneBot/Hook 状态）+ 基础开关（演练模式全页唯一入口、私聊自动回复、忽略自己、忽略公众号）
@@ -181,8 +254,8 @@ Window("WeChat AI", id: "main")
     的结构化发送者 wxid（`<chatusr>`，私聊形态回退 `<fromusr>`），不看昵称；chip 悬停提示
     「引用机器人：别人引用机器人发的消息时唤醒机器人（正文无需 @ 或关键词）」；被引用原文仅作 AI
     上下文，不参与 @/关键词触发。
-  - 群聊 @ 判定只认结构化 `at` 段且目标为机器人本人；@ 其他人、或文本里出现 `@` 都不会触发
-    （避免群收款/卡片等 appmsg 误回复）。
+  - 群聊 @ 优先认结构化 `at` 段且目标为机器人本人；结构化 at 缺失时用从历史 @ 事件学到的群昵称做文本 @
+    兜底；@ 其他人和普通文本里的 `@` 不会触发（避免群收款/卡片等 appmsg 误回复）。
 - 「互动」：唤醒后免唤醒词 + 拍一拍回复。
   - 「唤醒后免唤醒词」（默认关闭）：开关 + 1–60 分钟 Slider 与 1/3/5/10/30/60 分钟快捷 chips（默认 5）。
     群聊被任一方式唤醒后，**同一发送者**在窗口内继续发言无需再次 @/关键词/引用/拍一拍，每条放行的消息
@@ -192,32 +265,107 @@ Window("WeChat AI", id: "main")
     「附带 AI 回复」（使用普通回复的 persona/provider/model）、「群聊被拍后 @ 拍的人」（仅群聊；真实 @
     以 OneBot `at` 段交给 bridge，`<atuserlist>` 与群昵称由 bridge 解析，附在第一条回复前）。发送顺序：
     自定义文字（前）→ AI 回复 → 自定义文字（后），AI 失败时仍发送文字；全部未发出而回退普通 AI 时 @
-    只附在回退第一条。判定只认 `pat_target_wxid == 机器人 wxid`，群里拍别人不触发；回拍已移除；
-    bridge 解析不到群昵称时退化为不带 @ 的普通文本，不阻断回复。
+    只附在回退第一条。判定优先 `pat_target_wxid == 机器人 wxid`；旧版没有结构化字段时从 `raw_message`
+    的 patinfo/sysmsg 模板与正文兜底（私聊认「拍了拍我」，群聊要求能对上 selfID 或群昵称）；群里拍别人
+    不触发；回拍已移除；bridge 解析不到群昵称时退化为不带 @ 的普通文本，不阻断回复。
 - 「名单」：「白名单 / 黑名单」为两个 `IDListEditor`，条目可为会话 ID 或用户 wxid；chips 可删、
   可从会话选择；白名单为空表示全部允许，重叠时显示 warning（黑名单优先）。
 - 「节奏」：频率与上下文（冷却 Slider、每分钟回复数、短期上下文条数 Stepper；窗口外旧消息进入记忆卡
   全量记录，由后台按批次提取记忆）+ 工作时间（开关、星期 chips、起止时间 `DatePicker` 分钟整数绑定；
   全局默认，可在会话页覆盖）+ 拟人化（开关、随机延迟双 Slider 自动保持 min ≤ max、分段开关/段数、
   输入中状态）。
+- 「朋友圈」：`MomentsSettingsPanel`（2026-11-09 分区重构 v3.7 + 状态总览打磨），只编辑 `bot.snsSettings`；
+  读取/发布/互动由 `MomentsStore` / Runtime 执行。顶部是一张「朋友圈状态总览」GlassCard：品牌图标 + 标题/说明 +
+  整体状态胶囊（未开启 / 未运行 / 待检测 / 待配置 / 已就绪）和三张可点击的分区状态卡（读取/互动/发布，各含图标、
+  状态色点、状态标签、一句话摘要与 tooltip）；状态卡同时承担分区切换（替代 segmented picker，保留
+  `@SceneStorage("moments.settingsSection")`，一次只渲染一个分区）。功能/写开关/R3 改动未重启机器人时，
+  在总览下方显示「配置待生效」warning（`store.snsBridgeConfigStale`）。整体状态在 R3 未开启时直接显示
+  「待配置」。全局演练模式开启时，总览右侧追加「演练中」pill，并在总览下方显示一条演练影响面 info
+  （不发送、不写互动/发布计数与朋友圈记忆，指回「机器人 → 常规」关闭）；这是全局开关的唯一入口，
+  朋友圈页不重复提供同名开关。
+  - 分区「读取」：卡片「读取与显示」（symbol `photo.on.rectangle.angled`，violet）。状态行（`PillLabel` +
+    说明 + 「重新检测」；状态含「未开启 / 依赖 R3 / 检测中 / 未检测 / 读取失败 / 原生通道 / 原生待捕获 /
+    被动缓存 / 未就绪」；与总览卡共用同一份 `readSectionState` 判定，避免「原生待捕获」在总览显示成被动缓存）
+    →「启用朋友圈」开关（默认关；关闭时同时停用自动发布与自动互动；开启后在侧边栏
+    「会话」下显示入口，并检测 readiness，未就绪打开统一「捕获发送句柄」弹窗）→「自动加载缩略图」开关
+    （需功能开启；关闭后点击图片才下载，原图始终在打开大图时按需加载）→「记忆」区域（2026-11-09 新增）：
+    「把好友朋友圈写入对方记忆」总开关（默认开）+「图片识别结果一并写入」子开关（记忆关闭时禁用）；说明只写
+    本机记忆卡、不上传、关闭后保留既有记忆；全局 `bot.memory.enabled=false` 时整组禁用并显示 warning；
+    演练模式下底部说明改为「演练模式下不写入记忆」，开关值保留供关闭演练后生效 →
+    底部刷新方式说明（程序不控制微信窗口；被动缓存约 10 分钟有效，微信或 bridge 重启后需重新打开一次）。
+  - 分区「互动」（v3.7 新增，symbol `bubble.left.and.bubble.right`，info；trailing `PillLabel`「运行中 /
+    待配置 / 已关闭 / 未运行」）：「启用自动互动」开关（`.disabled(!sns.enabled)`；关闭朋友圈或写操作时
+    同时把互动置为关闭，重新打开不会自动恢复互动；开启时检测评论句柄，缺句柄直接进入统一捕获弹窗；
+    需要「允许发布 + R3 + 机器人运行」才能真正执行）。前置条件拆成两层：配置缺失（朋友圈未开启 /
+    「允许发布」未开启 / 未开启 R3 / 尚未捕获读取样本 / 评论句柄未就绪 / 还没有互动名单 /
+    没有启用互动动作 / 配置待生效）用 warning，存在可手动补齐的捕获项时附「查看捕获步骤…」按钮；
+    配置完整但机器人未运行只用 info「机器人未运行」，不再把未启动误报成配置问题。
+    演练模式 info（不发送、不占计数、不写记忆；关闭演练后这些动态仍会正常互动）→「互动名单」行
+    （「已选 N 人」+「选择…」打开 `MomentsInteractionTargetsSheet`，候选为全部私聊会话、不要求开启
+    AI 自动回复；聊天黑名单仍硬门槛）→ 三种动作开关（评论新动态 / 回复我的动态 / 回复我收到的回复；
+    `SnsInteractionKind.label/detail/symbol`）→「回复范围」分段（仅互动名单 / 所有好友；只在开启回复类动作时
+    显示）→ 频率行（每天最多互动次数 0–20、**0 显示「无上限」**；两次互动最小间隔 0–180 分钟、步进 5）→
+    「图片识别」开关（把动态内全部图片一次交给识图模型分析；识图模型未开启时显示 warning 说明会降级纯文本）→
+    可展开「高级选项」（只处理最近 1–72 小时；单条动态每天最多回复 0–5 条、**0 显示「无上限」**；
+    检查间隔 60–600 秒、步进 30）→「立即检查」（需机器人运行；`checkSNSInteractionsNow`
+    不等待轮询，完成后 toast 结果；演练模式下按钮改为「演练一轮」，toast 为「演练完成：生成 N 条（未发送）」）
+    →「上次检查」（时间 + 评论/回复/演练/跳过/失败计数 + 下次检查；首条错误
+    以 warning 展示）→「最近互动」（N 条 +「查看…」打开 `MomentsInteractionActivitySheet`）→ 底部说明
+    （只评论/回复不点赞；失败 10 分钟内不重试、最多 3 次；正文只在本地内存展示、不上传）。
+  - 分区「发布」：卡片「发布」（v3.4 起与自动发布合并；symbol `square.and.pencil`，warning；trailing 只读
+    `PillLabel("部分可见")`），内容与 v3.4/v3.6 一致：「允许发布（写操作）」开关（默认关、需功能开启；
+    关闭时同时停用自动发布与自动互动；改动需重启机器人）→ 演练草稿行（常驻；`MomentsOutboxSheet`
+    620×560，只读预览/清空，写操作/自动发布关闭时也可查看）→ 写通道状态行（`write_ready` → 已就绪/未就绪/
+    未检测；未就绪时说明「首次需在微信成功发布一次以捕获发布样本」并附「查看捕获步骤…」；支持文字，
+    图片/视频未实现）→ 评论通道
+    状态行（`comment_ready` → 已就绪/未就绪/未检测；首次评论/回复前需在微信里手动点一次评论以捕获 0xD5
+    任务与真实请求模板；与发布样本是两套独立句柄；未就绪时提供「去捕获…/查看步骤…」）→ 自动发布全部内容：
+    配置缺失 warning（机器人未运行只用 info）、开关、发布对象（`MomentsTargetsSheet`，候选仅「开启 AI 自动
+    回复的私聊会话」；该行同时承载可见性语义——固定「部分可见、只发给已选好友、未选择时不发布」，
+    不再单列只读的「谁可以看」行）→ 发布时机（2026-11-10 起由 segmented picker 改为两张并列模式卡：
+    `windows`「时段内随机」/ `times`「固定时间点」；每卡显示模式名、说明、`SnsPublishSettings.timingSummary(for:)`
+    生成的一句话配置摘要（未选中的模式也显示自己的摘要，未配置时为「未设置可发时段 / 未设置时间点」）、
+    单选圆点与选中底色，选中卡 help 为「当前使用的发布时机」；切换只改 `publish.mode`，`publish.windows` /
+    `publish.times` 分别保存、互不清空，卡片下方固定说明）→ 对应编辑器（不再提供快捷预设 chips；
+    `times` 为「指定时间点」：行内 `DatePicker` 步进编辑，「+」新增（上限 10，达到上限时禁用并说明）；
+    同一分钟重复的时间点由设置写回自动去重（`sanitized` 按分钟去重，不会出现重复行；编辑撞车时 toast
+    说明并移除重复项）、乱序提示「按时间排序」，空配置显示「恢复默认时间点」；`windows` 为「可发时段」：
+    每行起止 `DatePicker` + 时长文本（如「1 小时 30 分」）或跨午夜「次日」violet pill，「+」新增（上限 6，
+    达到上限时禁用并说明），重叠行显示 warning 图标并在下方给出「合并重叠时段」（按覆盖范围合并，首尾相接的
+    相邻时段也一并并入；覆盖整天时收成 00:00–23:59），空配置显示「恢复默认时段」；开始与结束相同时自动
+    顺延结束时间并在编辑器内 warning 说明）→ 频率（`windows`：每个好友每天上限 0–10、**0 显示「无上限」**，
+    并显示同一好友最小间隔 0–1440 分钟，后者仅在每天多条或无上限时出现；`times`：每天次数由去重后的时间点
+    数量决定、不可直接编辑；时段与最小间隔排不下设定次数时显示 warning「时段放不下设置次数」，用本地日历日
+    容量（`calendarDayCapacity`：当天批次当天部分 + 前一天批次跨午夜部分，与当天随机结果无关）说明每天最多
+    能排几次并给出调整建议）→「排程预览」（2026-11-10 晚简化为一行：`TimelineView(.everyMinute)` 每分钟
+    刷新；副标题为「今天剩余 HH:mm · HH:mm」（最多 6 个，超出「等 N 个」）+ 今日配额「今天已发 N 次
+    （上限 M 次）/（无上限）」；右侧 pill 为「下一次 今天/明天 HH:mm」，今日配额用尽时替换为 warning
+    「今天已发满」并出现「重置今日计数」按钮；不再列时刻 chips /「下一次+之后」长列表）→「上次结果」
+    （时间 + 成功 / 演练 / 跳过 / 失败计数，非今天的结果带日期；有首条错误时 subtitle 为「上次失败：…」，
+    仅有跳过时 subtitle 为「上次未发送：…」）→ 底部说明。
+    面板打开期间启停机器人或重新开启朋友圈会自动刷新读取状态，不再停留在旧状态。
+  - 面板不出现「自动同步 / 同步间隔」「图片下载三档」等未接线或伪设置；被门控的控件必须在卡片或行内
+    给出原因（见 §7）。
 - 「语音」：复用 `VoiceSettingsPanel`，App 内唯一语音设置入口。
   - 转写：三个开关 + 「转写资源」行内状态/下载/刷新。回复：总开关默认收起策略项（概率、对等、
     短回复阈值、最长时长、超限处理、语音回复免拟人化延迟）。
   - 引擎与音色：Qwen3-TTS-1.7B 单模型；运行设备 GPU（MLX，推荐）/ CPU（极慢，实验性），切换时停服务
     → 保存 → 按自动启动拉起；本地服务状态（运行中/启动中/未运行/异常/未检测）+ 启动/停止/重新检测，
     subtitle 显示 `Qwen3-TTS-1.7B · GPU/CPU · endpoint · 模型`；运行环境与模型下载/取消/重装/删除
-    （约 4.7GB，删除只清模型/venv/标记）；音色本机菜单 + 「管理音色…」，App 不内置音色，列表行显示
-    参考音频条数，管理 sheet 为 1–5 段片段卡片（批量导入、排序、替换、删除、逐条/自动转写、N/5 与
+    （下载约 4.7 GB、运行时内存约 10 GB，删除只清模型/venv/标记；可见条件为体积、首次预热约 10 秒、
+    CPU 极慢，原理收进标题 help）；音色本机菜单 + 「管理音色…」，App 不内置音色，列表行显示
+    参考音段数，管理 sheet 为 1–5 段片段卡片（批量导入、排序、替换、删除、逐条/自动转写、N/5 与
     时长/字符计数；常见格式、每段 ≥1s、合计 ≤30s 超长截取、缺失文本保存前自动补齐、cross-lingual
     保留且不锁文本，内置音色只读），导出 zip 含 `refs/`；自动启动仅在「允许语音回复」+ 开关开启 +
     已安装且有音色时，于启动 App/打开语音面板拉起；服务地址默认 `http://127.0.0.1:5051`（仅回环）。
     安装/启动与音色细节见 [`voice.md`](voice.md) §4.1。
   - 试听：共享 `VoicePreviewController`，走当前引擎的本地 HTTP 服务播放真实合成，不发往微信；服务
     未启动或未选音色时提示先安装/启动。发送状态：仅开启「允许语音回复」时显示，单行摘要 + 重新检测 +
-    「查看步骤…」。
+    「查看步骤…」（打开统一的「捕获发送句柄」弹窗，见 §5.14）；首次开启「允许语音回复」时先检测一次，
+    不能发送语音即打开该弹窗。该 section 的重复说明 footer 已删除，只保留状态行。
 - 所有修改即时写回 `store.settings`，保存按钮 + 离开页面时 `persist()`。
 
-### 5.4 AI 模型
+### 5.5 AI 模型
 
 - 顶部：通道数量/默认通道摘要、添加通道。
 - `ProviderRow`：类型图标、名称、类型/默认/停用徽标、baseURL host、模型、Keychain 状态、输出上限/超时/
@@ -240,7 +388,7 @@ Window("WeChat AI", id: "main")
 - 「密钥与安全」：Keychain 策略说明、测试行为说明、Ollama 说明、删除通道同时删除其 Keychain 条目、
   配置文件路径（可复制）。删除通道需确认，默认通道自动回退到第一个通道。
 
-### 5.5 人格设定
+### 5.6 人格设定
 
 - 自适应网格（`LazyVGrid`，280–420pt）；`PersonaCard`：渐变头像、名称/默认徽标、简介、
   提示词预览、模型覆盖、编辑按钮、更多菜单（设为默认/删除）。
@@ -249,7 +397,7 @@ Window("WeChat AI", id: "main")
 - 默认人格联动 `settings.bot.defaultPersonaID`，删除默认人格自动回退。**人格设定是唯一来源**：会话按
   `personaID ?? 默认人格` 绑定，不复制人设卡；页面提示「人格是模板」，修改后立即对所有使用该人格的会话生效。
 
-### 5.6 记忆库
+### 5.7 记忆库
 
 - 只有**记忆卡**模式；聊天记录清理在具体会话头部菜单（见 §5.2），记忆页无数据库浏览或清理入口。
 - **入口不自动打开聚合**：进入（含再次点击侧边栏「记忆库」）只显示左栏角色列表，右栏为「选择一个角色」
@@ -297,44 +445,46 @@ Window("WeChat AI", id: "main")
   「新增记忆」；全局卡说明只支持手动维护、注入所有会话）、「当前筛选为空」「搜索无结果」；有卡但 0 条
   不是读取错误。错误（DB/目录读写失败）用 Toast + 日志提示，不静默吞掉，面板保持可用。
 
-### 5.7 定时任务（机器人 → 定时）
+### 5.8 定时任务（机器人 → 定时）
 
 - 从侧边栏移入机器人页的「定时」子栏目（`SchedulesPanel`），侧边栏不再单列；卡片头部为任务数/启用数、
   新建任务。
-- 全部/启用/停用筛选；`ScheduleRow` 左侧突出下次执行时间（时:分 + 今天/明天/星期），
-  任务名、重复方式、每周星期、内容、目标会话、下次/上次、启停、编辑、删除。
+- 全部/启用/停用筛选；`ScheduleRow` 左侧突出下次执行时间（时:分 + 今天/明天/星期），停用任务
+  时间列显示「—」而不是「已结束」；任务名、重复方式、每周星期、内容、目标会话、下次/上次、启停、编辑、删除
+  （溢出菜单不再重复「编辑」入口）。
 - `ScheduleEditorSheet`：名称、目标会话（列表选择或手动 ID）、内容、重复方式、星期 chips、
-  执行时间 DatePicker、下次执行预览、启用开关；校验名称/目标/内容/星期/一次性任务时间。下次时间优先
-  Core 的 `nextFireAt`，否则 UI 用 `ScheduleMath` 估算。
+  统一「执行时间」DatePicker、下次执行预览、启用开关；按频次显示提示（仅一次 / 每天 / 每周所选星期 /
+  周一至周五），并说明需机器人与 OneBot 在线才会发送；校验名称/目标/内容/星期/一次性任务时间。下次时间
+  优先 Core 的 `nextFireAt`，否则 UI 用 `ScheduleMath` 估算。
 
-### 5.8 运行日志
+### 5.9 运行日志
 
 - 工具栏：暂停/继续、导出、清空（确认）。
 - 过滤：级别 chips（含计数）、来源菜单、搜索、自动滚动、实时/暂停状态、条数统计。
 - 日志列表：`LogRow` 等宽时间/级别/来源/消息；错误警告行带浅色底；文本可选。暂停时展示暂停瞬间快照；
   导出为 `.log`（`NSSavePanel`，UTType plainText）。
 
-### 5.9 设置
+### 5.10 设置
 
 左侧分类（应用 / 集成 / 数据）+ 右侧分组卡片：
 
 | 分类 | 内容 |
 | --- | --- |
-| 通用 | 登录启动、退出确认、**防睡眠（永不/接入电源时/始终 + 当前状态）**、语言、重新打开向导；窗口/Dock 行为只做说明（Dock 图标随主窗口显隐，无开关） |
+| 通用 | 登录启动（尚未接入）、退出确认（尚未接入）、**防睡眠（永不/接入电源时/始终 + 当前状态）**、语言、重新打开向导；窗口/Dock 行为只做说明（Dock 图标随主窗口显隐，无开关）；未接线项在行副标题后直接标注「尚未接入」，不伪装成已生效 |
 | 外观 | 系统/浅色/深色分段选择 + 三个外观缩略预览；减少动态效果与动态字体状态；设计说明 |
-| 通知 | 通知开关、声音开关、系统权限说明 |
+| 通知 | 通知开关、声音开关（只保存偏好）；系统通知尚未接入，行内说明新消息/异常请到会话页与运行日志查看，不显示系统授权状态 |
 | 更新 | 当前版本/Build、安装位置与门禁提示、立即检查、自动检查开关、新版本说明、下载进度、跳过/取消跳过、GitHub/发布说明链接、更新日志（`update.log`）入口、错误与重试 |
-| Hook | 微信版本/进程/Gadget/Bridge/网关/版本匹配、**CLT 状态/安装/重新检测**、**R3 发送句柄状态**、安装/还原/刷新、进度、风险提示、路径/端口/自动启动/**R3 原生发送开关（4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12，默认开；首次需本机手动发一条消息）** |
+| Hook | 微信版本/进程/Gadget/Bridge/网关/版本匹配、**CLT 状态/安装/重新检测**、**R3 发送句柄状态**、安装/还原/刷新、进度、风险提示、路径/端口/自动启动/**R3 原生发送开关（4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55，默认开；首次需本机手动发一条消息）** |
 | OneBot | Host/Port/连接类型/Token（安全显示+复制）、Bridge 路径、图片目录、WS 地址 |
-| 数据与备份 | **当前微信账号（mask/账号数据目录/账号配置/会话数据库/角色目录/媒体目录）**、**已保存的账号**、**重新检测微信账号**；全局配置 `config.json`、备份目录、运行日志目录（`~/Library/Logs/WeChatAI/`）；导出配置、打开目录、重新加载、日志清空 |
-| 关于 | 图标、版本/Build、Bundle ID、系统版本、架构、资源路径、**运行信息**、**技术栈与许可**（每项写明本项目中的用途）、**自研能力概述**（版本适配、收发送、通讯录读取、语音与媒体、安全边界与分析工具链；不展示地址、结构偏移或密钥细节）、上游开源项目 GitHub 链接与许可（重新打开向导只在「通用」页提供） |
+| 数据与备份 | **当前微信账号（mask/账号数据目录/账号配置/记忆数据库/记忆卡目录/媒体目录）**、**已保存的账号**、**重新检测微信账号**；全局配置 `config.json`、备份目录、运行日志目录（`~/Library/Logs/WeChatAI/`）；导出配置、打开目录、重新加载、日志清空 |
+| 关于 | 图标、版本/Build、Bundle ID、系统版本、架构、资源路径、**运行信息**、**技术栈与许可**（每项写明本项目中的用途）、**自研能力概述**（版本适配、收发送、通讯录读取、语音与媒体、安全边界与分析工具链；不展示地址、结构偏移或密钥细节）、上游开源项目 GitHub 链接与许可（重新打开向导在「通用」页与总览「首次向导」快捷操作提供） |
 
 **「数据与备份」多微信账号区域**：
 
 - **当前微信账号**（只读，值来自 `AccountProfile` / `AppStore`）：账号为 `store.activeAccountID` 的 mask
   （`AccountProfile.maskedActiveID`；未识别显示「未识别（等待微信登录）」+ warning「临时档案」徽标，
   已识别显示「当前」）；账号数据目录 `accounts/<id>/`、账号配置 `accounts/<id>/profile.json`、
-  会话数据库 `accounts/<id>/chatbot.sqlite`（旧记忆表只读）、角色目录 `accounts/<id>/characters/`、
+  记忆数据库 `accounts/<id>/chatbot.sqlite`（旧记忆表只读）、记忆卡目录 `accounts/<id>/characters/`、
   媒体目录 `accounts/<id>/media/`；全局配置 `config.json`、备份目录 `backups/`、运行日志目录
   `~/Library/Logs/WeChatAI/`（崩溃与 bridge 日志同级）。每个路径提供复制与「在 Finder 中显示」
   （`.monospaced`），卡片下方用 `InlineNotice(kind: .info, title: "数据隔离")` 说明账号级与全局数据边界。
@@ -381,8 +531,9 @@ Window("WeChat AI", id: "main")
 
 - 转写与语音回复只在「机器人 → 语音」提供全局开关，会话详情菜单无会话级覆盖；关闭转写后不再入队新的
   语音下载/转写，已有转写仍显示；关闭语音回复后只发文字。
-- 首次开启「允许语音回复」自动检测文本/语音发送句柄，未就绪弹捕获引导；bridge 启动后若已开启且句柄
-  缺失也会自动提示一次。弹窗展示状态与原因（bridge 未连接、R3 原生发送未开启、微信版本不支持、登录预热中）。
+- 首次开启「允许语音回复」先刷新 `/voice_status`，不能发送语音即打开统一「捕获发送句柄」弹窗；机器人每次
+  启动后都会在 bridge 就绪时重新检测，文字/语音句柄或朋友圈样本仍缺失就自动弹一次（同一次运行内最多一次）。
+  弹窗条目/状态见 §5.14；面板本身只保留单行发送状态与「重新检测」「查看步骤…」入口，不再重复整段说明。
 - 概率、对等、仅短回复、音色与运行设备均由全局语音设置控制；已确定改发语音时默认跳过拟人化随机延迟
   （可在语音设置关闭），进度条不再出现「N 秒后发送」倒计时。
 
@@ -420,7 +571,7 @@ Window("WeChat AI", id: "main")
   交给 `AttributedString`。新版本首次启动清理旧 `.update-backup-*` 与超过 24 小时的更新工作目录；
   ad-hoc 签名未公证，首次打开可能需 Gatekeeper「仍要打开」放行，页面与安装文档给出提醒。
 
-### 5.10 首次启动向导
+### 5.11 首次启动向导
 
 4 步 sheet（720×620），顶部步骤指示器 + 跳过；右上角「语言 / Language」（跟随系统 / 简体中文 / English）
 切换即时生效，与设置 → 通用 → 界面语言同步。
@@ -435,7 +586,7 @@ Window("WeChat AI", id: "main")
 
 底部：上一步（禁用态）、步骤 n/4、下一步/完成并开始；安装中禁止交互与关闭 sheet。
 
-### 5.11 菜单栏
+### 5.12 菜单栏
 
 自绘 `NSStatusItem` + SwiftUI `NSPopover`（272pt，`Core/MenuBarController.swift`）：
 
@@ -469,9 +620,46 @@ Window("WeChat AI", id: "main")
 - 辅助功能：状态栏条目保留 `WeChat AI` 无障碍标签/值与 VoiceOver 帮助；面板内状态行合并 label/value，
   按钮带 accessibility 标签与 help。
 
-### 5.12 设置场景
+### 5.13 设置场景
 
 `Settings { SettingsView() }`，系统自动绑定 ⌘,；复用同一套设置页面与分类侧边栏。
+
+### 5.14 捕获发送句柄弹窗（全局 sheet）
+
+- **单一通道**：`AppStore.isCaptureSetupPromptPresented` 是唯一弹出状态，`RootView` 只挂一个
+  `.sheet` → `CaptureSetupSheet`。语音开关、朋友圈开关、自动互动开关、评论输入面板「去捕获」与机器人启动检测
+  都走它，保证同一时刻只有一个弹窗。
+- **条目按已开启功能显示**（`CaptureSetupPlan`）：
+  1. 「发一条文字」始终显示（`voiceRuntimeStatus.textSeed`）；
+  2. 「发一条语音」仅在「允许语音回复」开启时显示（`voiceSeed`）；
+  3. 「打开/发布一次朋友圈」仅在「启用朋友圈」开启时显示（`moments.status?.isPrimed`；开启「允许发布」时
+     还要求 `writeReady`，即已捕获 post 样本）；
+  4. 「评论或点赞一次」（2026-11-09 新增）仅在自动互动已配置（已开启 + 有名单/动作 + 非演练）时显示
+     （`comment_ready`）；0xD5 评论句柄与读取/发布样本是三条独立通道。
+  原「等待登录稳定」步骤已删除；登录预热只作为状态行倒计时（仅语音开启且剩余 > 0）。
+  条目状态为「已就绪 / 待完成 / 不可用」：`blockedItems` 表示当前微信版本不支持语音发送或 R3 未启用，
+  这类语音条目不会出现在「还差：…」里。
+- **文案**：标题固定「捕获发送句柄」，标题旁问号提示解释依赖关系与保存位置（语音/朋友圈/自动评论复用原生通道；
+  句柄仅保存在本机、不含聊天内容、微信重启后需重新捕获）；副标题统一为一句「微信原生发送需要先捕获发送句柄。
+  请按下列步骤各操作一次，完成后自动检测。」，不再按功能组合维护多套；状态行只保留一条，取值为：全部就绪，
+  可以关闭了 / 机器人未运行，请先启动 / bridge 尚未就绪，请稍后重新检测 / 未开启 R3 原生发送，语音将改用文字 /
+  当前微信版本不支持语音发送 / 语音预热中，约 N 秒后可发送；可以关闭此窗口（或无倒计时时的「登录稳定中，
+  可以关闭此窗口」）/ 还差：…（直接列出缺失条目，如「还差：发一条语音、评论或点赞一次」）/
+  等待朋友圈样本：在微信打开一次朋友圈 / 等待评论句柄：在微信里评论或点赞一次 /
+  暂时读不到朋友圈状态，请稍后重新检测。
+- **交互**：「重新检测」立即刷新 `/voice_status` 与朋友圈 readiness；**句柄齐全、只剩登录稳定/语音预热时按钮即为
+  「完成」**（预热在后台继续，不需要用户停留），否则为「稍后再说」；预热状态使用信息色而不是警示色；弹窗打开期间
+  约 1s 轮询语音状态与朋友圈就绪状态（只查状态，不拉时间线、不阻塞页面加载；
+  `MomentsStore.refreshPrimingStatus` 在 loading 时跳过、失败保留上次状态）。
+- **启动自动提示**：机器人启动后统一为一个 `startCaptureSetupWatchIfNeeded` 检测（立即检测一次；bridge 未就绪时
+  每 3s 重试、最多约 60 秒），判定结果只有「弹出 / 继续等 / 结束」三种。检测范围：
+  ① R3 原生发送开启且文字句柄缺失（语音、朋友圈都关闭也要提示）；② 语音回复开启且语音句柄缺失；
+  ③ 朋友圈开启且读取样本（或开启发布后的 post 样本）缺失；④ 自动互动已配置且非演练、`comment_ready=false`。
+  **每次启动机器人都重新检测并最多自动弹一次**；
+  同一次机器人运行内不重复，用户手动打开弹窗不会消耗下一次启动的提示。朋友圈样本 v3.3 起持久化，
+  恢复成功时不会重复弹；bridge 尚未就绪/状态未知时继续等而不是误报缺失。
+- **不阻塞**：关闭后机器人照常运行；文本句柄未就绪时回复排队，语音句柄未就绪时该条降级文字，朋友圈页显示一行
+  未就绪状态 + 「重新检测」。首次启动向导保持原有「未完成才自动弹」，与本弹窗互不影响。
 
 ## 6. 组件清单
 
@@ -480,9 +668,9 @@ Window("WeChat AI", id: "main")
 | 文件 | 组件 |
 | --- | --- |
 | `Theme.swift` | 颜色/字体/尺寸 token、`PageBackground`、`UIFormat`、`Theme.hookColor` 等 |
-| `Surfaces.swift` | `GlassCard`、`SectionCard`、`GlassToolbar`、`ScrollingPage`、`IconTile`、`AvatarView`、`StatusDot`、`PillLabel`、`SectionHeader`、`MetricTile` |
-| `Controls.swift` | `FlowLayout`、`FilterChip`、`TagChip`、`IconActionButton`、`CopyButton`、`FormField`、`KeyValueRow`、`PathRow`、`InlineNotice`/`NoticeKind`、`SearchField`、`SettingsSection`/`SettingsRow`/`SettingsDivider`、`UnavailableLabel`、`PageTabBar`/`PageTabItem` |
-| `Feedback.swift` | `EmptyState`、`LoadingState`、`SkeletonBlock`、`ProgressPanel`、`ConfirmSheet`、`ToastCenter`/`ToastView`/`ToastOverlay` |
+| `Surfaces.swift` | `GlassCard`、`SectionCard`、`GlassToolbar`、`ScrollingPage`、`IconTile`、`AvatarView`、`StatusDot`、`PillLabel`、`MetricTile` |
+| `Controls.swift` | `FlowLayout`、`FilterChip`、`TagChip`、`IconActionButton`、`CopyButton`、`HelpTip`（问号悬停说明）、`FormField`、`PathRow`、`InlineNotice`/`NoticeKind`、`SearchField`、`SettingsSection`/`SettingsRow`/`SettingsDivider`、`PageTabBar`/`PageTabItem` |
+| `Feedback.swift` | `EmptyState`、`LoadingState`、`ProgressPanel`、`ConfirmSheet`、`ToastCenter`/`ToastView`/`ToastOverlay` |
 
 ### Views/Components
 
@@ -497,16 +685,32 @@ Window("WeChat AI", id: "main")
 | `ChatCleanupSheet` | 会话内聊天记录清理：只删该会话本地 `messages`，不动记忆卡与全量记录 |
 | `ProviderRow` / `ProviderTestState` / `ProviderEditorSheet` / `PersonaCard` | AI 通道行与测试状态、通道编辑 sheet、人格卡片 |
 | `ScheduleRow` / `ScheduleMath` | 定时任务行与下次时间估算 |
+| `CaptureSetupSheet` | 全局「捕获发送句柄」弹窗：文字/语音/朋友圈/评论条目按开关显示，状态行 + 重新检测 |
+| `MomentsView` / `MomentsSettingsPanel` | 朋友圈页（时间线/详情/图片/视频占位/评论回复/空态引导）与「机器人 → 朋友圈」设置面板（v3.7+：状态总览 GlassCard + 三张可点击分区卡；读取卡保留读取与显示并新增记忆开关，互动卡含名单/动作/回复范围/无上限频率/识图/立即检查/最近互动，发布卡保留写通道与自动发布全部设置） |
+| `MomentCommentSheet` | 朋友圈评论/回复输入面板（`Views/Components/MomentCommentSheet.swift`）：目标动态 + 被回复评论、1000 字进度与分级计数、写开关/`comment_ready` 提示 +「重新检测」+「去捕获/查看步骤」、二次确认与失败提示 |
+| `MomentsInteractionTargetsSheet` | 互动名单多选 sheet（480 pt）：搜索、全选当前结果（上限 200）、导入聊天白名单（仅当前可选择的私聊）、清空、不可用已选对象提示/移除；候选为全部私聊会话，不要求开启 AI 自动回复 |
+| `MomentsInteractionActivitySheet` | 「最近互动」只读 sheet（560×520）：动作/对象/动态作者/被回复评论/生成正文/识图条数/结果与错误；演练草稿也会记录；「重置互动记录」二次确认后清空账本与列表 |
+| `MomentsTargetsSheet` | 自动发布「发布对象」多选 sheet：只列开启 AI 自动回复的私聊会话，支持逐人开关与清空（`MomentsSettingsPanel.swift` 内部） |
+| `MomentsOutboxSheet` | 「演练草稿」只读列表（`Views/Components/MomentsOutboxSheet.swift`）：演练模式生成，可删除/清空，不发送；数据来自 `SnsOutboxStore`（账号目录 `sns-outbox.json`，上限 20 条） |
 | 记忆 v2：角色列表 / 记忆卡行 / 全量记录 sheet / 记忆设置 sheet | 记忆卡模式（左栏角色、右栏记忆卡；人格来自人格设定，无每会话人设卡；导入旧记忆与 Markdown/JSON 导出） |
 | `LogRow` / `ReleaseNotesView` | 日志行；更新内容渲染（标题/列表/代码/引用分块，行内 Markdown 交给 `AttributedString`） |
 
 ## 7. 交互约定
 
+### 文案与问号提示
+
+- 文案契约（术语表、句式、分场景规则、本地化）见 [`copy-style.md`](copy-style.md)，修改任何用户可见文案前先读它。
+- 解释性长文案（原理/背景/边界/数据位置）改用 `HelpTip`：小问号图标，悬停约 0.6 秒弹出解释，移开收起；
+  同时通过 `accessibilityHint` 提供给 VoiceOver。行内只保留一句可见说明。
+- `SectionCard` / `SettingsRow` / `FormField` / `SettingsSection` 都提供 `help:` 参数，在标题旁自动加问号。
+- **风险、前置条件、不可逆后果与用户必须执行的步骤不得只放进问号提示**；禁用控件仍须就地说明原因。
+- 每条解释 ≤ 120 个汉字；同一行/分组最多一个问号；同屏不重复同一句说明。
+
 ### 键盘快捷键
 
 | 快捷键 | 行为 |
 | --- | --- |
-| ⌘1 … ⌘7 | 总览、会话、机器人、AI 模型、人格设定、记忆库、运行日志 |
+| ⌘1 … ⌘8 | 总览、会话、朋友圈、机器人、AI 模型、人格设定、记忆库、运行日志 |
 | ⌘0 | 设置页 |
 | ⌘, | 打开系统设置场景 |
 | ⌘↩ | 会话页发送消息（服务连接时） |
@@ -524,21 +728,32 @@ Window("WeChat AI", id: "main")
 - 回复进度：状态条以 `TimelineView` 每 0.25s 刷新计时（仅活动阶段），完成态 3s、失败态 60s 后自动清理；
   失败可立即点 × 收起。计时数字使用 `monospacedDigit`，避免跳动。
 
+### 禁用态与依赖原因
+
+- **禁用必须给原因**：任何被父开关或前置条件门控的控件，都要在所在卡片/行内解释「为什么灰」，
+  不允许出现「灰着但不知道为什么」。实现方式（与「机器人 → 朋友圈」v2 面板一致）：
+  - 父开关行的 subtitle 写清依赖链（如「开启后才能手动或自动发布」）；
+  - 整组被门控时在卡片内用一条 `InlineNotice(.warning)` 汇总当前真正阻塞的项（朋友圈自动发布卡的
+    「还不能自动发布」即此模式），不要逐行重复同一句；
+  - 运行期配置尚未同步（需重启机器人 / bridge）时用 warning 说明「配置待生效」，而不是只把控件置灰；
+  - 只读信息用 `PillLabel` 或说明文本呈现，不要做成看起来可编辑的假控件（伪设置一律不进面板）。
+- 同一原因只出现一次：行 subtitle 已说明的，不再额外叠一条同义通知。
+
 ### 会话收起
 
 - 两个等价触发：再次点击会话列表中当前选中的行，或再次点击侧边栏「会话」入口。两者都把
   `selectedConversationID` 置为 `nil`，详情区回到「选择一个会话」空状态，会话列表保持展开；点击其它行
   正常切换，`onChange` 不再在 nil 时自动选回第一条。
-- 收起只影响当前打开的对话，不改变未读、置顶或会话数据；进入会话页时若没有选中会话，仍按原行为自动
-  选中第一条。
+- 收起只影响当前打开的对话，不改变未读、置顶或会话数据；进入会话页时不自动打开第一条，只清理已失效的
+  选中项。
 
 ## 8. 可访问性
 
 - 所有图标按钮有 `accessibilityLabel` / `.help`；行级组件使用 `.accessibilityElement(children: .combine/.contain)`，
   会话行提供未读/选中状态；机器人页分栏条按 `isSelected` 暴露选中状态并带 `accessibilityLabel` 与 `.help`。
 - 聊天气泡朗读「发送者 + 类型 + 内容 + 时间」；语义字体 + 系统缩放，关键数字使用 `monospacedDigit`，
-  深浅色全部使用语义色/材质；`accessibilityReduceMotion` 关闭页面切换、Toast、骨架脉冲动画，静态状态点
-  代替重复动画以保证低能耗。
+  深浅色全部使用语义色/材质；`accessibilityReduceMotion` 关闭侧边栏选中高亮、Toast 与骨架/脉冲动画，
+  静态状态点代替重复动画以保证低能耗。
 
 ## 9. 文件结构
 
@@ -550,23 +765,30 @@ app/Sources/WeChatBot/
 │  ├─ Controls.swift
 │  └─ Feedback.swift
 ├─ Views/
-│  ├─ RootView.swift            # 主窗口 + PageRouter
+│  ├─ RootView.swift            # 主窗口 + PageRouter + 全局捕获句柄/首次向导 sheet
 │  ├─ SidebarView.swift         # 侧边栏 + 状态胶囊
 │  ├─ DashboardView.swift
 │  ├─ ConversationsView.swift
+│  ├─ ChatCleanupSheet.swift    # 会话内清理聊天记录（sheet）
+│  ├─ MomentsView.swift         # 朋友圈时间线/详情/图片/发布/评论回复
+│  ├─ MomentsSettingsPanel.swift # 机器人 → 朋友圈
 │  ├─ BotView.swift
+│  ├─ VoiceSettingsPanel.swift  # 机器人 → 语音（复用组件）
 │  ├─ AIModelsView.swift
 │  ├─ PersonasView.swift
 │  ├─ MemoryView.swift
+│  ├─ MemoryEditorSheet.swift / MemorySettingsSheet.swift # 记忆卡编辑 / 记忆设置
+│  ├─ CharacterFullArchive.swift # 记忆卡全量记录 sheet
 │  ├─ SchedulesPanel.swift      # 机器人 → 定时
 │  ├─ LogsView.swift
 │  ├─ SettingsView.swift
 │  ├─ SettingsUpdateSection.swift # 设置 → 更新（GitHub Releases）
+│  ├─ CaptureSetupSheet.swift   # 全局「捕获发送句柄」弹窗
 │  ├─ OnboardingView.swift
 │  ├─ MenuBarView.swift
-│  └─ Components/               # 17 个复用组件/编辑 sheet（含 ReplyProgressBar、DashboardSystemVitalsCard）
+│  └─ Components/               # 21 个复用组件/编辑 sheet（含 ReplyProgressBar、DashboardSystemVitalsCard）
 ├─ Core/
-│  ├─ AppStore.swift / AppStore+Runtime.swift
+│  ├─ AppStore.swift / AppStore+Runtime.swift / AppStore+Moments.swift
 │  ├─ AppLifecycle.swift        # 主窗口注册表、关闭即隐藏、AppDelegate
 │  └─ MenuBarController.swift   # NSStatusItem：左键开合状态面板（右键不执行操作）
 └─ WeChatBotApp.swift           # Window / Settings / Commands / MenuBarController 装配
@@ -576,10 +798,14 @@ app/Sources/WeChatBot/
 
 UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网络/进程：
 
-- 状态：`settings/providers/personas/schedules/conversations/messages/logs/hookStatus/stats/batteryStatus/deepSeekBalance/isBalanceRefreshing/activeAccountID/activeAccountIsUnassigned/accountSwitchNotice/savedWeChatAccounts/isSwitchingAccount`
+- 状态：`settings/providers/personas/schedules/conversations/messages/logs/hookStatus/stats/batteryStatus/deepSeekBalance/isBalanceRefreshing/activeAccountID/activeAccountIsUnassigned/accountSwitchNotice/savedWeChatAccounts/isSwitchingAccount/moments/isCaptureSetupPromptPresented/voiceRuntimeStatus`
 - 运行时：`startBot/stopBot/refreshStatus/refreshSystemVitals/installHook(onProgress:)/restoreWeChatBackup/testProvider/
   sendManualMessage/clearMessages/deleteMessage/saveAPIKey/apiKey/deleteAPIKey/persist/reload/appendLog/clearLogs/
-  refreshWeChatAccount/dismissAccountSwitchNotice`
+  refreshWeChatAccount/dismissAccountSwitchNotice/refreshVoiceStatus/presentCaptureSetupPrompt/prepareMoments`
+- 朋友圈：UI 只读 `store.moments`（`MomentsStore`）并调用其 `loadInitialIfNeeded/refresh/loadMore/pollSync/
+  loadDetail/retryAfterPriming/refreshPrimingStatus/submitComment`，不直接调用 `SnsClient` 或拼 HTTP；
+  `publish` 只由自动发布（Runtime）调用；设置只改 `settings.bot.snsSettings` 后 `persist()`。契约见
+  [`sns.md`](sns.md)。
 - 账号：设置页只调用 `store.refreshWeChatAccount()` 与 `store.dismissAccountSwitchNotice()`，不直接调用
   `AccountProfile.activate` / `MemoryStore.switchDatabase`，也不提供手动切库入口；账号路径只读展示。
   契约见 [`accounts.md`](accounts.md)。
@@ -600,19 +826,28 @@ UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网�
 
 验证状态（最近一次真机与单测走查；历史细节见 CHANGELOG）：
 
-- `swift test` 全部通过（2 项按环境跳过：真实本地 TTS 服务 E2E），覆盖批量记忆、压缩器、权重强化、
+- `swift test` 879 项执行（877 通过 / 2 项按环境跳过，0 失败；41 个测试文件），覆盖批量记忆、压缩器、权重强化、
   旧库迁移、防睡眠三档决策、回复进度倒计时、自消息路由、通讯录标题补全、拍一拍回复、免唤醒词窗口、
-  appmsg 分类与历史文本修复、入站帧单次解析、R3 版本门禁/运行期配置合并、识图设置与图片描述落库。
+  appmsg 分类与历史文本修复、入站帧单次解析、R3 版本门禁/运行期配置合并、识图设置与图片描述落库、
+  朋友圈模型/状态机/同步/发布可见性、互动无上限/评论句柄捕获判定（`CaptureSetupTests`）、
+  朋友圈记忆映射与落库幂等（`SnsMemoryIngestorTests`）。
 - 微信 4.2.0.5 真机 E2E：Gadget 注入 + ad-hoc 重签后微信正常启动；私聊/自消息入站、通讯录读取、
   R3 文本发送（含 bridge 重启后句柄恢复）通过；群聊 @ / 拍一拍沿用既有逻辑未单独复测；图片获取链路
-  已实现（CDN 触发下载待复测）。8 个侧边栏页面、首次向导、设置场景、菜单栏、浅色/深色、会话三栏、
-  气泡类型、过滤/暂停/导出与表单校验均已人工走查。
+  已实现（CDN 触发下载待复测）。除朋友圈外的 8 个侧边栏页面、首次向导、设置场景、菜单栏、浅色/深色、
+  会话三栏、气泡类型、过滤/暂停/导出与表单校验均已人工走查。
+- 朋友圈：页面/详情/图片查看/评论回复按 §5.3 实现，列表/状态机/JSON 解码由单测覆盖；4.2.0.17 真机已验证
+  被动缓存读取、主动刷新、图片 thumb/full、文字发布（partial 与 public 联调）与评论发送，回复/点赞与实时
+  通知仍未验证（详见 [`sns.md`](sns.md) §0、§8）。捕获发送句柄弹窗的条目/状态判定（含 2026-11-09 新增的
+  评论句柄条目）由 `CaptureSetupTests` 覆盖；评论/朋友圈记忆的 UI 走查待补。
+- 朋友圈设置面板 2026-11-09 版：状态总览 + 三张可点击分区卡、读取卡记忆开关、互动无上限/评论捕获 CTA、
+  发布卡去捕获入口均**只完成编译**；界面走查（含中英文文案、窄窗口、禁用态说明）与自动发布/自动互动真机
+  联调均**未验证**，验收清单见 [`sns.md`](sns.md) §9。
 - 菜单栏点击语义与面板收起走查通过，`MenuBarClickTests` 覆盖映射与兜底；首开耗时未用 Instruments 量化。
   空闲 CPU（关闭脉冲动画后）约 2–3%，旧 `MenuBarExtra` 写回循环导致的 100% 已消除。
 - 会话收起、窗口/Dock 图标（`LSUIElement=true`，`.regular ⇄ .accessory`）、台前调度、群聊 @ 误触发回归、
   引用消息可见性回归、白/黑名单合并、人格温度迁移、重复入口清理、防睡眠、记忆 v2（四类记忆、0.92 折叠
   与 supersede、批量提取/本地兜底、全量互动与导出）、记忆页清理/统计收敛、全局共享记忆、记忆库入口行为
-  均通过单测/构建核对，按 §5.2–§5.7 设计实现；旧 `MemoryStore` 记忆方法保留只读兼容，旧长期记忆页不再
+  均通过单测/构建核对，按本文件对应页面设计实现；旧 `MemoryStore` 记忆方法保留只读兼容，旧长期记忆页不再
   展示（旧记忆需手动导入）。
 
 限制 / 外部依赖：
@@ -636,5 +871,6 @@ UI 只读 `AppStore` 状态并调用既有方法，不直接访问数据库/网�
 
 > 语音设置统一在「机器人 → 语音」提供，复用共用组件 `VoiceSettingsPanel`；设置页已不再提供「语音」分类。
 > 会话页只保留全局语音设置，不提供会话级覆盖。
-> 首次开启语音回复或运行时启动检测到句柄缺失时会自动弹出捕获引导。Qwen3-TTS 的安装/启动、
-> 音色选择与试听见 [`voice.md`](voice.md) §4.1。
+> 捕获发送句柄统一使用全局 `CaptureSetupSheet`（见 §5.14）：首次开启语音/朋友圈或机器人启动检测到缺失时
+> 自动弹一次；机器人每次启动都会重新检测，同一次运行内最多一次。Qwen3-TTS 的安装/启动、音色选择与试听
+> 见 [`voice.md`](voice.md) §4.1。

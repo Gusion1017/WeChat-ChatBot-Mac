@@ -13,18 +13,19 @@
 
 ### 1.1 按微信账号隔离（随账号切换）
 
-- **SQLite 数据库**：会话、消息、旧版长期记忆/`memory_state`（只读兼容）、日志、通讯录缓存、统计与 KV（包括 `onebot.self_id` /
-  `onebot.self_id_source`）。
+- **SQLite 数据库**：会话、消息、定时任务镜像（`schedules` 表，以 `profile.json` 为准）、旧版长期记忆/`memory_state`
+  （只读兼容）、日志、通讯录缓存、统计与 KV（包括 `onebot.self_id` / `onebot.self_id_source`）。
 - **角色目录（记忆 v2）**：`accounts/<id>/characters/<会话 key>/memory.sqlite`，每微信会话一个目录，随账号目录整体复制/认领；另
   有固定 `characters/c-__global__/memory.sqlite` 全局共享记忆（手动维护、注入所有会话，每账号一份）。人格不放在角色目录，统一来自
   `profile.json` 的人格设定（见 [memory.md](memory.md) §3、§4.4）。
-- **`profile.json`**：`bot`（触发方式、白/黑名单、节奏、互动、语音偏好、默认人格与默认通道、`memory` 记忆设置）、`personas`、
-  `schedules`。
-- **新产生的媒体文件**：入站图片/语音、TTS 输出等，写入 `accounts/<id>/media/`。
+- **`profile.json`**：`bot`（触发方式、白/黑名单、节奏、互动、语音偏好、默认人格与默认通道、`memory` 记忆设置、
+  朋友圈 `sns` 开关/发布/自动发布）、`personas`、`schedules`。
+- **新产生的媒体文件**：入站图片/语音、TTS 输出等，写入 `accounts/<id>/media/`；朋友圈图片写入同级的
+  `accounts/<id>/sns-media/`（bridge `-media_dir` 为 `accounts/<id>/media` 时自动落在同级目录）。
 
 ### 1.2 全局共享（不随账号切换）
 
-- `config.json` 中的 `general`（外观/菜单栏/开机启动/语言/防睡眠等）、`hook`、`onebot`、`ai`、`providers`。
+- `config.json` 中的 `general`（外观/菜单栏/开机启动/语言/防睡眠等）、`hook`、`onebot`、`ai`、`providers`、`updates`。
 - Keychain API Key（service = `com.gusionw.wechatai`，account = `AIProvider.apiKeyReference`）。
 - 本地 TTS 安装、运行环境、模型与音色（`cosyvoice/`；Qwen3-TTS-1.7B 单模型）。
 - 崩溃日志与面包屑（`~/Library/Logs/WeChatAI/`）、bridge 运行日志（`~/Library/Logs/WeChatAI/bridge/`）、微信 App
@@ -39,12 +40,16 @@
 
 | 数据 / 能力 | 实际位置 | 随微信账号切换 | 说明 |
 | --- | --- | --- | --- |
-| 会话、消息、日志、统计、通讯录缓存、KV | `accounts/<id>/chatbot.sqlite` | ✅ | 当前账号库；WAL 模式 |
+| 会话、消息、日志、统计、通讯录缓存、KV、定时任务镜像 | `accounts/<id>/chatbot.sqlite` | ✅ | 当前账号库；WAL 模式；`schedules` 表是 `profile.json` 的崩溃恢复镜像 |
 | 角色目录（只有 `memory.sqlite`） | `accounts/<id>/characters/` | ✅ | 每会话一个目录 + 固定 `c-__global__` 全局共享卡；人格不复制，来自账号 `profile.json`；随账号目录整体复制/认领，见 [memory.md](memory.md) §4.4 |
-| 旧版长期记忆、`memory_state` | `accounts/<id>/chatbot.sqlite` | ✅ | v1 表只读兼容，运行时不写入、不召回 |
-| 机器人 `bot` 设置 | `accounts/<id>/profile.json` | ✅ | 触发/名单/节奏/互动/语音偏好/默认人格与通道 |
+| 旧版长期记忆、`memory_state` | `accounts/<id>/chatbot.sqlite` | ✅ | v1 表只读兼容（不生成、不召回）；清空/删除会话时随会话清理 |
+| 机器人 `bot` 设置 | `accounts/<id>/profile.json` | ✅ | 触发/名单/节奏/互动/语音偏好/默认人格与通道/朋友圈 `sns` |
 | 人格 `personas` | 同上 | ✅ | 每个账号可维护自己的人格设定；是会话人格的唯一来源，不按会话复制 |
-| 定时任务 `schedules` | 同上 | ✅ | 只有当前账号的任务参与调度 |
+| 定时任务 `schedules` | `accounts/<id>/profile.json`（+ 账号库 `schedules` 表镜像） | ✅ | 以 profile 为准；库内 `schedules` 表只用于崩溃恢复 |
+| 朋友圈设置与自动发布计数 | `accounts/<id>/profile.json` + UserDefaults 账号命名空间 | ✅ | `bot.sns`（含 `memory` 开关与 `interaction` 频率）；`SnsPublishLedger` key 含账号 ID；切号后调度器按新账号重建；朋友圈记忆写入该账号对应会话记忆卡（`source=moments`） |
+| 朋友圈媒体缓存 | `accounts/<id>/sns-media/` | ✅ | 独立于聊天媒体目录；切号/关闭功能只清内存缓存，不跨账号复用 |
+| 朋友圈捕获样本 / 演练草稿 | `accounts/<id>/sns-capture.json` / `sns-outbox.json` | ✅ | 仅本机文件（捕获样本 0600）；切号不共享 |
+| 朋友圈同步游标 | bridge 进程内存 | ✅（进程级） | bridge 单实例只服务当前账号；重启/切号后重新初始化，不写盘 |
 | 会话级设置（AI 开关、工作时段、备注、置顶、图片获取等） | 当前账号库 | ✅ | 存在 `conversations` / `messages` 等表 |
 | 新媒体（图片/语音/TTS 输出） | `accounts/<id>/media/` | ✅ | bridge `-media_dir` 指向当前账号目录 |
 | 旧版媒体 | `~/Library/Application Support/WeChatAI/media/` | ❌（只读保留） | 旧消息绝对路径继续有效，不迁移、不删除 |
@@ -54,6 +59,7 @@
 | 本地 TTS 安装、运行环境、模型与音色 | `cosyvoice/` | ❌ | Qwen3-TTS-1.7B 约 4.7GB；按本机全局共享 |
 | 崩溃日志 / bridge 日志 | `~/Library/Logs/WeChatAI/` | ❌ | 文件日志不区分账号 |
 | 微信官方备份 | `backups/` | ❌ | 安装 Hook 前的完整备份 |
+| 应用内更新设置与工作目录 | `config.json` 的 `updates` 段 + `updates/` | ❌ | 检查/下载/安装不区分微信账号 |
 | 账号指针 | `account-state.json` | 全局 | 只记录当前/最近账号，不存业务数据 |
 | 运行期 Hook 配置 | `runtime/` | ❌ | 由全局 Hook 设置生成 |
 
@@ -79,12 +85,16 @@
 │       ├── profile.json            # 当前账号的 bot / personas / schedules
 │       ├── characters/             # 每会话 c-<key>/memory.sqlite + c-__global__/ 全局共享
 │       ├── media/                  # 该账号的新媒体
+│       ├── sns-media/              # 该账号的朋友圈图片缓存（按日期/动态）
+│       ├── sns-capture.json        # 朋友圈捕获样本（按需；0600，仅本机）
+│       ├── sns-outbox.json         # 朋友圈演练草稿（按需；只读预览）
 │       ├── logs/                   # 预留（当前为空；App 内日志仍在账号库）
 │       ├── legacy-migration.json   # 仅旧版迁移目标有：标记旧数据已归入本账号
 │       └── unassigned-claim.json   # 仅从 _unassigned 认领过的账号有
 ├── media/                          # 旧版遗留媒体（只读保留，不迁移、不删除）
 ├── backups/                        # 微信 App 官方备份（全局）
 ├── runtime/                        # 运行期 Hook 配置（全局）
+├── updates/                        # 应用内更新工作目录（全局；下载/解压暂存，>24h 清理）
 ├── cosyvoice/                      # 本地 TTS 安装：Qwen3-TTS 运行环境、模型与音色（全局）
 └── chatbot.sqlite                  # 旧版单库（迁移后保留，不删除）
 ```
@@ -94,11 +104,12 @@
 | 文件 | 所有者 | 说明 |
 | --- | --- | --- |
 | `config.json` | `SettingsStore` / `SettingsPersistence` | 全局设置，保持旧路径与旧格式；同时保留 `bot`/`personas`/`schedules` 字段作为旧版回滚镜像，运行时由 `profile.json` 覆盖 |
-| `account-state.json` | `AccountProfile` | `{"schemaVersion":1,"lastAccountID":"wxid_xxx","updatedAt":<Unix 秒>,"legacyMigrationDone":true}`；启动早期只读，`activate`/迁移后原子写。`legacyMigrationDone` 只有旧库迁移真正完成后才为 `true`，切号/回滚不会替它置位 |
-| `accounts/<id>/chatbot.sqlite` | `MemoryStore` | 当前账号的会话/消息/日志/KV（旧 `memories` / `memory_state` 只读兼容）；切换账号即关闭旧库、打开新库 |
+| `account-state.json` | `AccountProfile` | `{"schemaVersion":1,"lastAccountID":"wxid_xxx","updatedAt":<Unix 秒>,"legacyMigrationDone":true}`；启动早期读取（检测到账号切换时会原子回写新账号），`activate`/迁移后原子写。`legacyMigrationDone` 只有旧库迁移完成（或确认没有旧库）后才为 `true`，切号/回滚不会替仍有旧库的状态置位 |
+| `accounts/<id>/chatbot.sqlite` | `MemoryStore` | 当前账号的会话/消息/日志/KV、定时任务崩溃恢复镜像（旧 `memories` / `memory_state` 只读兼容）；切换账号即关闭旧库、打开新库 |
 | `accounts/<id>/characters/` | `CharacterStore` | 记忆 v2 的每会话角色目录（只有 `memory.sqlite`）+ 固定 `c-__global__` 全局共享卡；人格来自账号 `profile.json`，不写 `persona.md`；随账号目录复制/认领 |
 | `accounts/<id>/profile.json` | `SettingsStore` | `ProfileSettings`：`schemaVersion`、`bot`（含 `memory` 设置）、`personas`、`schedules`；缺失时用默认值 |
-| `accounts/<id>/media/` | `OneBotClient` / 语音流水线 | 该账号新媒体的落盘目录，按日期分子目录（`<yyyy-MM-dd>/`） |
+| `accounts/<id>/media/` | `OneBotMediaStore` / `bridge`（`/fetch_image`） / 语音流水线 | 该账号新媒体的落盘目录，入站媒体按日期分子目录（`<yyyy-MM-dd>/`） |
+| `accounts/<id>/sns-media/` | `bridge`（`/sns/media`） | 该账号朋友圈图片缓存；由 `-media_dir` 同级推导，路径越界会被拒绝 |
 | `accounts/<id>/logs/` | 预留 | 预留给未来按账号切分文件日志；当前账号库内 `logs` 表才是 App 内日志 |
 | `accounts/<id>/legacy-migration.json` | `AccountProfile` | 旧版迁移标记；存在表示该账号接收了旧单库数据；内容以供排查为主，不是业务配置 |
 | `chatbot.sqlite`（根） | 旧版 | 迁移后保留；应用不再写入，供回滚或人工核对 |
@@ -147,7 +158,8 @@
 
 1. **登录标记 mtime（source = `loginMarker`）**：取 `app_data/login/<wxid>/key_info.dat` 与
    `xwechat_files/all_users/login/<wxid>/key_info.db`（含 `-wal`）最近修改时间的**最大值**；只接受在
-   `xwechat_files/<wxid>_<suffix>/` 下确有数据目录的账号，避免把已卸载/残留登录标记当作当前账号。
+   `xwechat_files/<wxid>_<suffix>/` 下确有数据目录的账号（后缀为 1–16 位 ASCII 字母数字，排除备份目录），
+   避免把已卸载/残留登录标记当作当前账号。
 2. **账号目录活动（source = `accountActivity`）**：取 `xwechat_files/<wxid>_<suffix>/` 本身、`temp/`、`db_storage/`、
    `db_storage/session/session.db`、`db_storage/message/message_0.db` 的 mtime 最大值；等价旧 `AppResources.imageDirectory()`
    启发式，用于登录标记不可读/不新鲜时。
@@ -176,7 +188,8 @@ resolver 是启动/启动机器人时的账号判定来源，但不是绝对事�
 
 ### 4.4 `preparePaths()` 的行为
 
-`AccountProfile.preparePaths()` 在 App 启动早期、`SettingsStore.load()` **之前**同步调用，只做 `stat`/JSON 读取，不打开 SQLite：
+`AccountProfile.preparePaths()` 在 App 启动早期、`SettingsStore.load()` **之前**同步调用，只做 `stat` / JSON 读写
+（不打开 SQLite；检测到账号切换时会原子回写 `account-state.json`）：
 
 1. 用 resolver 检测微信账号，并读 `account-state.json`（缺失/损坏按无状态处理）。
 2. provisional activeID：若 `state.lastAccountID == _unassigned`、`_unassigned/` 已有数据库/`profile.json`、且检测到真实账号 →
@@ -197,7 +210,7 @@ resolver 是启动/启动机器人时的账号判定来源，但不是绝对事�
 
 ```
 AppStore.init
-  └─ AccountProfile.preparePaths()          # 只读 stat/JSON，决定 provisional active
+  └─ AccountProfile.preparePaths()          # stat/JSON，决定 provisional active（检测到切换时回写 state）
   └─ SettingsStore.load()                   # config + 当前 active 的 profile
 RuntimeCoordinator.bootstrapIfNeeded / performBootstrap
   └─ AppPaths.ensureDirectories()
@@ -238,20 +251,20 @@ bridge 返回 `get_login_info` 后，`RuntimeCoordinator.adoptSelfID(_:)`：
 
 `switchAccount` 的顺序：
 
-1. 若机器人/运行时在跑，先停止（bridge、OneBot、调度、媒体队列；停止过程中 flush 日志、设置与统计）。
-2. drain 旧账号后台写入任务（记忆维护、长记忆总结、群昵称回填、统计落盘、消息预取：cancel + await），关键 await 后比对 `accountEpoch`，防止 A
-   的提取结果写进 B。
+1. 若机器人/运行时在跑，先停止（bridge、OneBot、调度、媒体队列；停止末尾 flush 日志、统计与设置）。
+2. drain 旧账号后台写入任务（记忆维护、长记忆总结、群昵称回填、统计落盘、消息预取：cancel + await），再 flush
+   日志与设置；关键 await 后比对 `accountEpoch`，防止 A 的提取结果写进 B。
 3. `characterStore.suspend()`（关闭全部角色记忆卡连接）。
 4. `memory.suspend()`（close + 禁止 `ensureOpen` 隐式重开，保证认领前库保持关闭）。
 5. `claimUnassigned(by:)`（若 active 仍为 `_unassigned`）或 `AccountProfile.activate(id)`。
 6. `memory.switchToActiveAccountDatabase()` 打开新账号库。
 7. `characterStore.activate()` 指向新账号的 `characters/`。
-8. `SettingsStore.load()` / `store.applyLoadedSettings()` 应用新账号 `profile`。
-9. 清空内存中的会话、消息、角色与记忆状态、日志、统计、选中会话、回复进度。
+8. 清空内存中的会话、消息、角色与记忆状态、日志、统计、选中会话、回复进度。
+9. `SettingsStore.load()` / `store.applyLoadedSettings()` 应用新账号 `profile`。
 10. 从新库载入会话/消息/状态。
-11. `store.persist()`（profile 写回新账号）。
-12. 更新 `activeAccountID` / `activeAccountIsUnassigned` / `savedWeChatAccounts` /
+11. 更新 `activeAccountID` / `activeAccountIsUnassigned` / `savedWeChatAccounts` /
     `accountSwitchNotice`，`store.settings.bot.enabled = false`、`isBotRunning = false`。
+12. `store.persist()`（profile 写回新账号）。
 
 切号期间 `isSwitchingAccount = true`：设置页「重新检测」与启动按钮禁用，`startBot` / `startRuntime` / `reconcileWeChatAccount`
 拒绝并发启动，避免 bridge 用旧档案身份启动。失败时尽力 `activate(previousID)` 并重开原库，把 `isBotRunning` / `bot.enabled` 复位为 false、
@@ -362,8 +375,8 @@ struct LegacyMigrationOutcome {
 
 ### 6.8 迁移验收清单
 
-升级后应满足：旧库/旧配置/旧媒体仍在；旧数据出现在 `accounts/<owner>/chatbot.sqlite`，`account-state.json.lastAccountID = <owner>`
-且 `legacy-migration.json` 存在；profile 种子只写一次；再次启动幂等、不重复复制。手工步骤见 §11.2。
+升级后应满足：旧库/旧配置/旧媒体仍在；旧数据出现在 `accounts/<owner>/chatbot.sqlite`，`account-state.json.lastAccountID = <finalActive>`
+（通常为 owner；若升级时已登录其他账号，则保持当前账号）且 `accounts/<owner>/legacy-migration.json` 存在；profile 种子只写一次；再次启动幂等、不重复复制。手工步骤见 §11.2。
 
 ## 7. `_unassigned` 与认领
 
@@ -382,8 +395,9 @@ bridge `get_login_info` 确认真实账号 `<id>` 后：
 - 条件：目标 `accounts/<id>/chatbot.sqlite` 不存在，或只是「空壳库」（`conversations/messages/memories/settings`
   全空）；目标已有业务数据时不复制、返回 `false`。
 - 动作：调用方先 `CharacterStore.suspend()` / `MemoryStore.suspend()`（close + 禁止隐式 open），再把
-  `_unassigned/` 内容先复制到 `accounts/` 下的 staging 目录，随后逐项 move 到目标账号目录（数据库文件单独 staged + 原子替换；
-  `characters/` 角色目录随目录整体复制）；写 `unassigned-claim.json` 标记。
+  `_unassigned/` 内容整体复制到 `accounts/.<id>.claiming-<uuid>/` staging，随后逐项 move/合并到目标账号目录
+  （缺失的 `chatbot.sqlite` 直接 move，目标为空壳库时用 staged 库原子替换；`characters/` 目录并入）；写
+  `unassigned-claim.json` 标记。
 - `_unassigned/` 原样保留，不删除、不改名；中断/磁盘满时下次启动重试。
 
 ### 7.3 为什么要保留 `_unassigned`
@@ -412,9 +426,9 @@ bridge `get_login_info` 确认真实账号 `<id>` 后：
 ### 9.1 设置 → 数据与备份
 
 「当前微信账号」区块展示：账号（`AccountProfile.maskedActiveID`，未识别时显示「未识别（等待微信登录）」与「临时档案」徽标）、
-账号数据目录（`accounts/<id>/`）、账号配置（`accounts/<id>/profile.json`）、会话数据库（`chatbot.sqlite`，旧记忆表只读）、
-角色目录（`characters/`）、媒体目录（`media/`）、全局配置（`config.json`）、备份目录（`backups/`）与运行日志目录
-（`~/Library/Logs/WeChatAI/`），并说明哪些随账号切换、哪些全局共享（与 §1/§2 一致）。
+账号数据目录（`accounts/<id>/`）、账号配置（`accounts/<id>/profile.json`）、账号数据库（UI 显示「记忆数据库」，
+即 `chatbot.sqlite`，旧记忆表只读）、记忆卡目录（UI 显示「记忆卡目录」，`characters/`）、媒体目录（`media/`）、
+全局配置（`config.json`）、备份目录（`backups/`）与运行日志目录（`~/Library/Logs/WeChatAI/`），并说明哪些随账号切换、哪些全局共享（与 §1/§2 一致）。
 
 「已保存的账号」列表来自 `AccountProfile.savedAccounts(limit:)`，按最近使用倒序显示 `maskedID`、最近使用时间与当前账号标记，
 提供「在 Finder 中显示」；不显示 `_unassigned`，也不提供点击切号，仅用于查看与定位目录。
@@ -481,7 +495,8 @@ enum AccountProfile {
 
 1. `preparePaths()` 早于 `SettingsStore.load()`，且不读 SQLite。
 2. `runLegacyMigrationIfNeeded()` 早于 `MemoryStore.open()`，只在后台线程执行。
-3. 迁移只 copy、不删除旧文件；`legacyMigrationDone=true` 是幂等门禁，`activate` 不得隐式置位。
+3. 迁移只 copy、不删除旧文件；`legacyMigrationDone=true` 是幂等门禁，`activate`/切号不得把仍有旧库待迁移的状态置 true
+   （确认没有旧库时按已完成推断）。
 4. `claimUnassigned*`/迁移必须在 `MemoryStore.suspend()` 或未开库时执行；目标有业务数据不覆盖，`_unassigned` 源保留。
 5. 切号收敛到 `RuntimeCoordinator.switchAccount(to:reason:)`：先停运行时、drain 后台任务、suspend 库，再认领/激活/换库；期间禁止启动机器人。
 6. `SettingsStore.load()` = 读 `config.json` 后 `applyProfile(profile.json)`；profile 缺失 → `.default`，损坏 → 备份
@@ -501,7 +516,8 @@ enum AccountProfile {
 新增/更新测试至少覆盖：识别（登录标记优先/目录活动回退/稳定排序/非法目录返回 `nil`、mask 规则、`AccountLayout` 路径与
 `ensureDirectories` 幂等、ID 校验）；`preparePaths`/迁移/认领（优先级、pendingNotice、owner 有效/无效、幂等、profile seed、
 WAL 旧库缺 `-wal`/`-shm` 时 Backup API 仍可读、`_unassigned` 不覆盖目标且不删源）；配置与隔离（config+profile 合并与回退、
-双写去重、A/B 库与 `characters/` 互不可见、`c-__global__` 按账号隔离）；回归（空壳目标库可替换、`legacyMigrationDone=false`
+双写去重、A/B 库与 `characters/` 互不可见、`c-__global__` 按账号隔离、朋友圈切号清空 `MomentsStore` 缓存与
+ledger 账号命名空间）；回归（空壳目标库可替换、`legacyMigrationDone=false`
 重试、`suspend()` 后禁止隐式 open）。运行时切号依赖真实 bridge/微信，见 §11.2。
 
 测试使用临时目录/独立 `MemoryStore`，不触碰真实数据目录；注入 `AppSettings` 的 AppStore 测试不得调用 `preparePaths`/迁移。
@@ -517,12 +533,16 @@ WAL 旧库缺 `-wal`/`-shm` 时 Backup API 仍可读、`_unassigned` 不覆盖�
 ### 11.3 命令
 
 ```bash
-cd app && SWIFT_DISABLE_SANDBOX=1 swift test --disable-sandbox
+(cd app && SWIFT_DISABLE_SANDBOX=1 swift test --disable-sandbox)
+(cd bridge && go test ./...)
+python3 devtools/cosyvoice/test_server.py
 python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前基线：`swift test` 619 项执行（617 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E）。
+当前实测基线：Swift 879 项执行（877 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件）；
+Go 312 项用例（180 顶层 + 132 子测试，0 失败，19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
+72 项 unittest 通过。
 
 ## 12. 排障
 
@@ -535,7 +555,7 @@ bash scripts/check.sh --docs
 | 换号后机器人不回复 | 切号会停止机器人，且不自动重启 | 确认总览提示；手动启动机器人 |
 | 新消息图片仍指向旧目录 | 旧消息的 `mediaPath` 是历史绝对路径 | 属预期；旧媒体保留在根 `media/`，不自动迁移 |
 | `profile` 反复回默认 | `accounts/<id>/profile.json` 解码失败，已备份为 `profile.corrupt-<ts>.json` | 查看备份与日志；修复 JSON 后重启，勿删除账号库 |
-| 切换后仍写旧库 | 运行时未真正停止或切换失败 | 停止机器人/重启 App 重试；检查日志中 `switchAccount` 与 `memory.open` 的报错 |
+| 切换后仍写旧库 | 运行时未真正停止或切换失败 | 停止机器人/重启 App 重试；检查日志中「切换账号数据失败」「无法打开数据库」等账号/数据库报错 |
 
 ## 13. 相关文档
 

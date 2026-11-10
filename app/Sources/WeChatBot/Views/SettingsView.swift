@@ -81,7 +81,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GlassToolbar(title: "设置", subtitle: "WeChat AI \(appVersion) · 配置保存在本机") { EmptyView() }
+            GlassToolbar(title: "设置", subtitle: Lf("WeChat AI %@ · 配置保存在本机", appVersion)) { EmptyView() }
 
             HStack(spacing: 0) {
                 categorySidebar
@@ -116,13 +116,13 @@ struct SettingsView: View {
             switch action {
             case .install:
                 ConfirmSheet(
-                    title: "安装 Frida Gadget 到微信",
-                    message: "此操作会修改官方微信的应用包。请先完全退出微信。",
+                    title: "备份并安装 Hook",
+                    message: "会修改官方微信的应用包并重新签名。请先完全退出微信。",
                     details: [
-                        "完整备份 /Applications/WeChat.app → 注入 Gadget → ad-hoc 重签。",
-                        "微信更新后需要重新安装；部分功能可能受影响。",
-                        "安装耗时约 1–2 分钟，期间请勿打开微信。",
-                        "可在设置中从备份还原官方微信。"
+                        "先完整备份 /Applications/WeChat.app，再注入 Frida Gadget 并 ad-hoc 重签。",
+                        "微信更新后需重新安装；小程序、自动更新等功能可能受影响。",
+                        "只在本机运行，不改微信服务器数据；可从备份还原。",
+                        "安装约需 1–2 分钟，期间请勿打开微信；完成后重新打开微信。"
                     ],
                     confirmTitle: "备份并安装"
                 ) {
@@ -134,7 +134,7 @@ struct SettingsView: View {
                     message: "将使用安装 Hook 时创建的完整备份替换当前微信，并重新签名。",
                     details: [
                         "机器人会先停止，微信会被退出。",
-                        "还原后需要重启微信；Hook 与桥接将不可用。",
+                        "还原后需要重启微信；Hook 与 bridge 将不可用。",
                         "若备份不存在，操作会失败且不会修改微信。"
                     ],
                     confirmTitle: "还原备份"
@@ -156,7 +156,7 @@ struct SettingsView: View {
             HStack(spacing: 5) {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 8))
-                Text(L("全部数据仅保存在本机"))
+                Text(L("配置、记忆与日志保存在本机"))
                     .font(.system(size: 9))
             }
             .foregroundStyle(.tertiary)
@@ -233,11 +233,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
             SettingsSection(
                 title: "启动与窗口",
-                footer: "登录项需要 App 以 .app 形式安装后生效。启动时显示主窗口；关闭窗口后 App 继续在菜单栏运行，Dock 图标只在主窗口打开期间出现，菜单栏图标始终保留。"
+                help: "启动时显示主窗口；关闭窗口后 App 继续在菜单栏运行；Dock 图标只在主窗口打开期间出现，菜单栏图标始终保留。"
             ) {
                 SettingsRow(
                     title: "登录时启动",
-                    subtitle: "开机后自动启动 WeChat AI",
+                    subtitle: "开机后自动启动（登录项尚未接入）",
                     symbol: "power",
                     tint: .secondary
                 ) {
@@ -249,7 +249,7 @@ struct SettingsView: View {
                 SettingsDivider()
                 SettingsRow(
                     title: "退出前确认",
-                    subtitle: "机器人运行中退出时提醒",
+                    subtitle: "机器人运行中退出时提醒（尚未接入）",
                     symbol: "exclamationmark.circle",
                     tint: Theme.warning
                 ) {
@@ -262,11 +262,12 @@ struct SettingsView: View {
 
             SettingsSection(
                 title: "节能与睡眠",
-                footer: "机器人运行期间生效（未运行时修改会提示「启动机器人后生效」）。仅阻止系统因空闲进入睡眠，不会阻止合盖睡眠、手动睡眠，也不会让显示器保持点亮。使用电池且选择「接入电源时」时不会阻止。"
+                footer: "仅阻止系统空闲睡眠，不阻止合盖或手动睡眠。",
+                help: "机器人运行期间生效；未运行时修改会提示「启动机器人后生效」。不会保持显示器常亮。"
             ) {
                 SettingsRow(
                     title: "防止系统睡眠",
-                    subtitle: "机器人运行期间按当前电源状态阻止系统空闲睡眠",
+                    subtitle: "机器人运行期间阻止系统空闲睡眠",
                     symbol: "moon.zzz",
                     tint: Theme.violet
                 ) {
@@ -380,16 +381,16 @@ struct SettingsView: View {
     private var sleepStatusDetail: String {
         switch store.settings.general.sleepPrevention {
         case .never:
-            "不阻止系统按节能设置进入空闲睡眠"
+            "未启用防睡眠"
         default:
             if sleepCenter.isPreventingSleep {
-                "已持有防睡眠断言，Mac 不会因空闲自动睡眠"
+                "防睡眠已生效，Mac 不会因空闲自动睡眠"
             } else if !sleepCenter.isRuntimeActive {
                 "启动机器人后生效"
             } else if !sleepCenter.isOnExternalPower {
                 "当前使用电池，按设置不阻止睡眠"
             } else {
-                "未能持有防睡眠断言，请查看下方错误信息"
+                "未能生效，请查看下方错误信息"
             }
         }
     }
@@ -466,7 +467,7 @@ struct SettingsView: View {
                     tint: Theme.violet
                 ) {
                     PillLabel(
-                        text: reduceMotion ? "已开启" : "关闭",
+                        text: reduceMotion ? "已开启" : "未开启",
                         color: reduceMotion ? Theme.success : .secondary,
                         symbol: reduceMotion ? "checkmark" : "minus"
                     )
@@ -485,8 +486,8 @@ struct SettingsView: View {
             SettingsSection(title: "设计说明") {
                 VStack(alignment: .leading, spacing: 7) {
                     Label(L("Liquid Glass 卡片、半透明侧边栏与系统材质。"), systemImage: "circle.lefthalf.filled")
-                    Label(L("SF Symbols + SF Pro / 苹方系统字体，支持 1x / 2x 渲染。"), systemImage: "textformat")
-                    Label(L("中文排版：语义行距、宽松留白、克制动效。"), systemImage: "character.textbox")
+                    Label(L("SF Symbols 图标与 SF Pro / 苹方系统字体。"), systemImage: "textformat")
+                    Label(L("中文排版：语义行距与宽松留白。"), systemImage: "character.textbox")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -546,13 +547,10 @@ struct SettingsView: View {
 
     private var notificationSettings: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-            SettingsSection(
-                title: "通知",
-                footer: "通知权限由 macOS 控制；首次开启时系统会请求授权。"
-            ) {
+            SettingsSection(title: "通知") {
                 SettingsRow(
                     title: "启用通知",
-                    subtitle: "收到新消息或机器人异常时提醒",
+                    subtitle: "开启后接收新消息与机器人异常提醒",
                     symbol: "bell.badge",
                     tint: Theme.warning
                 ) {
@@ -579,7 +577,7 @@ struct SettingsView: View {
             InlineNotice(
                 kind: .info,
                 title: "通知说明",
-                message: "当前版本优先保证聊天窗口内的实时反馈；系统通知会在 Core 接入通知服务后按上述开关发送。"
+                message: "系统通知尚未接入，开关只保存偏好；新消息与异常请在会话页和运行日志查看。"
             )
         }
     }
@@ -606,7 +604,7 @@ struct SettingsView: View {
                 )
                 SettingsDivider()
                 hookStatusRow(
-                    "Bridge",
+                    "bridge",
                     value: store.hookStatus.bridgeRunning
                         ? "运行中\(store.hookStatus.bridgePID > 0 ? " · PID \(store.hookStatus.bridgePID)" : "")"
                         : "未运行",
@@ -633,7 +631,7 @@ struct SettingsView: View {
                         "R3 原生发送",
                         value: store.hookStatus.r3Seeded
                             ? "句柄就绪"
-                            : (store.hookStatus.r3Active ? "等待信号" : (store.settings.hook.enableNativeSend ? "待启动" : "已关闭")),
+                            : (store.hookStatus.r3Active ? "等待句柄" : (store.settings.hook.enableNativeSend ? "待启动" : "已关闭")),
                         symbol: "paperplane",
                         tint: store.hookStatus.r3Seeded ? Theme.success : Theme.warning
                     )
@@ -653,12 +651,15 @@ struct SettingsView: View {
             if isWorking {
                 ProgressPanel(
                     title: "正在处理微信 Hook",
-                    detail: progressMessage ?? "备份、注入与重签中，请稍候…",
+                    detail: progressMessage ?? "备份、注入与重签中…",
                     progress: progress
                 )
             }
 
-            SettingsSection(title: "安装与恢复") {
+            SettingsSection(
+                title: "安装与恢复",
+                help: "安装流程：完整备份 → 注入 Frida Gadget → ad-hoc 重签 → 校验，约需 1–2 分钟。还原使用安装时创建的完整备份。"
+            ) {
                 VStack(alignment: .leading, spacing: 11) {
                     HStack(spacing: 8) {
                         Button {
@@ -679,7 +680,7 @@ struct SettingsView: View {
                         .disabled(isWorking || commandLineToolsStatus?.isReady != true)
                         .help(L(commandLineToolsStatus?.isReady == true
                                 ? "安装 Hook"
-                                : "需要安装 Xcode Command Line Tools"))
+                                : "需要安装 Command Line Tools"))
 
                         Button {
                             hookAction = .restore
@@ -692,7 +693,7 @@ struct SettingsView: View {
                         Spacer()
                     }
 
-                    Text(L("安装流程：完整备份 → 注入 Frida Gadget → ad-hoc 重签 → 校验。安装前请退出微信。"))
+                    Text(L("安装前请退出微信。"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -706,7 +707,7 @@ struct SettingsView: View {
             InlineNotice(
                 kind: .warning,
                 title: "风险提示",
-                message: "修改官方微信可能导致无法启动、无法更新或触发安全检查。请仅在了解风险的本机环境使用，并保留备份。"
+                message: "修改官方微信可能导致无法启动、无法更新或触发安全检查；请了解风险后使用，并保留备份。"
             )
 
             SettingsSection(title: "路径与参数") {
@@ -721,7 +722,7 @@ struct SettingsView: View {
                             .buttonStyle(.glass)
                             .controlSize(.small)
                     }
-                    FormField(label: "版本配置文件", hint: "留空则自动匹配 hook/versions 中的版本配置") {
+                    FormField(label: "版本配置文件", help: "留空时按微信版本自动匹配 hook/versions 中的配置。") {
                         HStack(spacing: 8) {
                             TextField(L("自动匹配"), text: bind(\.hook.versionConfigPath))
                                 .textFieldStyle(.roundedBorder)
@@ -737,15 +738,15 @@ struct SettingsView: View {
                             .frame(width: 106)
                     }
                     SettingsDivider()
-                    SettingsRow(title: "自动启动微信", subtitle: "机器人启动时若微信未运行则自动打开", symbol: "play.circle", tint: .secondary) {
+                    SettingsRow(title: "自动启动微信", subtitle: "机器人启动时若微信未运行则自动打开（尚未接入，请手动打开微信）", symbol: "play.circle", tint: .secondary) {
                         Toggle(L("自动启动微信"), isOn: bind(\.hook.autoLaunchWeChat))
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
                     }
                     SettingsDivider()
-                    SettingsRow(title: "自动启动 Bridge", subtitle: "机器人启动时自动拉起 OneBot 桥接进程", symbol: "arrow.triangle.branch", tint: .secondary) {
-                        Toggle(L("自动启动 Bridge"), isOn: bind(\.hook.autoStartBridge))
+                    SettingsRow(title: "自动启动 bridge", subtitle: "机器人启动时自动拉起 OneBot bridge 进程", symbol: "arrow.triangle.branch", tint: .secondary) {
+                        Toggle(L("自动启动 bridge"), isOn: bind(\.hook.autoStartBridge))
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
@@ -753,9 +754,10 @@ struct SettingsView: View {
                     SettingsDivider()
                     SettingsRow(
                         title: "R3 原生发送",
-                        subtitle: "微信 4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 专用原生文本发送。首次使用前需在本机微信手动发一条消息以捕获发送句柄；排队消息会在拿到句柄后自动重发。",
+                        subtitle: "首次使用需在本机微信手动发一条消息，以捕获发送句柄。",
                         symbol: "paperplane",
-                        tint: .secondary
+                        tint: .secondary,
+                        help: "支持微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55。捕获后排队消息会自动重发；仅支持文本。"
                     ) {
                         Toggle(L("R3 原生发送"), isOn: bind(\.hook.enableNativeSend))
                             .labelsHidden()
@@ -789,7 +791,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
             SettingsSection(
                 title: "连接参数",
-                footer: "仅监听本机回环地址；启动机器人后自动连接。Token 只保存在本机配置中。"
+                footer: "仅监听本机；启动机器人后自动连接。Token 只保存在本机配置中。"
             ) {
                 VStack(alignment: .leading, spacing: 11) {
                     HStack(spacing: 12) {
@@ -805,7 +807,10 @@ struct SettingsView: View {
                                 .font(.system(.caption, design: .monospaced))
                                 .frame(width: 100)
                         }
-                        FormField(label: "连接类型") {
+                        FormField(
+                            label: "连接类型",
+                            hint: "当前版本固定使用 WebSocket 连接；此选项仅保存偏好，不会改变运行期行为。"
+                        ) {
                             Picker(L("连接类型"), selection: bind(\.onebot.connType)) {
                                 Text("WebSocket").tag("websocket")
                                 Text("HTTP").tag("http")
@@ -835,18 +840,26 @@ struct SettingsView: View {
                                     .font(.system(size: 11))
                             }
                             .buttonStyle(.glass)
-                            .help(showToken ? "隐藏 Token" : "显示 Token")
+                            .help(L(showToken ? "隐藏 Token" : "显示 Token"))
+                            .accessibilityLabel(L(showToken ? "隐藏 Token" : "显示 Token"))
                             CopyButton(text: store.settings.onebot.token, accessibilityText: "复制 Token")
                         }
                     }
 
-                    FormField(label: "Bridge 可执行文件", hint: "留空时使用 App 内置 bridge；开发环境可指定绝对路径") {
+                    FormField(
+                        label: "bridge 可执行文件",
+                        hint: "当前版本固定使用 App 内置 bridge；此字段仅保存偏好，不会在运行期生效。"
+                    ) {
                         TextField(L("内置 bridge"), text: bind(\.onebot.bridgePath))
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.caption, design: .monospaced))
                     }
 
-                    FormField(label: "图片临时目录", hint: "已识别微信账号时使用当前账号目录；仅未识别账号时使用这里的值，留空则自动探测") {
+                    FormField(
+                        label: "图片临时目录",
+                        hint: "仅未识别账号时使用；留空自动探测。",
+                        help: "已识别微信账号时始终使用当前账号的媒体目录。"
+                    ) {
                         TextField(L("自动探测"), text: bind(\.onebot.imagePath))
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.caption, design: .monospaced))
@@ -872,7 +885,7 @@ struct SettingsView: View {
             InlineNotice(
                 kind: .info,
                 title: "安全",
-                message: "OneBot 仅监听 127.0.0.1，不暴露到局域网。请勿将端口转发到公网；如更换 Token，需要同时更新正在运行的 bridge。"
+                message: "仅监听 127.0.0.1，不暴露到局域网。请勿将端口转发到公网；更换 Token 后需同步更新 bridge。"
             )
         }
     }
@@ -887,7 +900,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
             SettingsSection(
                 title: "当前微信账号",
-                footer: "账号 ID 由微信登录数据识别，界面只显示脱敏结果；所有配置、记忆与日志都保存在本机，不上传云端。"
+                help: "账号 ID 由微信登录数据识别，界面只显示脱敏结果；配置、记忆与日志都保存在本机。"
             ) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 8) {
@@ -935,7 +948,7 @@ struct SettingsView: View {
                              ? L("正在检测微信登录账号并切换数据…")
                              : (store.activeAccountIsUnassigned
                                 ? L("尚未识别到微信账号，请先登录微信后点此检测。")
-                                : L("检测当前微信登录账号；检测到变化时切换到该账号的数据。")))
+                                : L("检测当前微信登录账号，有变化时切换到该账号数据。")))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -947,16 +960,17 @@ struct SettingsView: View {
             InlineNotice(
                 kind: .info,
                 title: "数据隔离",
-                message: "聊天记录、长期记忆、会话设置、人格与定时任务随微信账号切换；AI 模型、Hook、OneBot、语音引擎与备份为全局共享。"
+                message: "会话、记忆、人格与定时任务随微信账号切换；AI 模型、Hook、OneBot、语音与备份全局共享。"
             )
 
             SettingsSection(
                 title: "已保存的账号",
-                footer: "账号档案保存在 accounts/ 目录；换微信账号后会自动切到对应数据，不会删除其他账号的记录。"
+                footer: "换微信账号后自动切到对应数据，不会删除其他账号的记录。",
+                help: "账号档案保存在 accounts/ 目录，按最近使用时间排序。"
             ) {
                 VStack(alignment: .leading, spacing: 0) {
                     if store.savedWeChatAccounts.isEmpty {
-                        Text(L("尚未保存任何账号档案。登录微信并启动机器人后会自动建立当前账号的数据目录。"))
+                        Text(L("还没有账号档案。登录微信并启动机器人后会自动建立。"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding(14)
@@ -1004,7 +1018,7 @@ struct SettingsView: View {
                         .buttonStyle(.glass)
                         Spacer()
                     }
-                    Text(L("数据库与日志的完整备份请直接复制数据目录；微信官方备份由 Hook 安装流程自动创建。"))
+                    Text(L("完整备份请复制数据目录；微信官方备份由 Hook 安装流程创建。"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                     if !store.settings.hook.lastBackupPath.isEmpty {
@@ -1052,11 +1066,11 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("WeChat AI")
                             .font(.title2.weight(.semibold))
-                        Text(L("微信 AI 聊天助手 · 原生 macOS"))
+                        Text(L("微信自动回复 · 原生 macOS"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack(spacing: 6) {
-                            PillLabel(text: "版本 \(appVersion)", color: Theme.accent)
+                            PillLabel(text: Lf("版本 %@", appVersion), color: Theme.accent)
                             PillLabel(text: "Build \(buildNumber)", color: .secondary)
                             PillLabel(text: "macOS 26+", color: Theme.info)
                         }
@@ -1072,14 +1086,14 @@ struct SettingsView: View {
                 SettingsDivider()
                 aboutRow("处理器架构", architecture)
                 SettingsDivider()
-                aboutRow("应用资源", Bundle.main.bundlePath)
+                aboutRow("应用路径", Bundle.main.bundlePath)
             }
 
             SettingsSection(title: "技术栈与许可") {
                 TechLinkRow(
                     title: "SwiftUI / Swift 6 · macOS 26 Liquid Glass",
                     symbol: "swift",
-                    subtitle: "App 全部界面与服务层：Swift Concurrency、SQLite WAL 记忆库、Keychain、IOKit 防睡眠",
+                    subtitle: "全部界面与服务层：Swift Concurrency、SQLite WAL 记忆库、Keychain、IOKit 防睡眠",
                     repo: "github.com/swiftlang/swift",
                     license: "Apache-2.0",
                     urlString: "https://github.com/swiftlang/swift",
@@ -1089,7 +1103,7 @@ struct SettingsView: View {
                 TechLinkRow(
                     title: "Frida Gadget 注入官方微信（本机）",
                     symbol: "syringe",
-                    subtitle: "唯一实例方案：Gadget 注入后由 bridge 经 frida-core 附加，脚本读取/调用 wechat.dylib 内部函数",
+                    subtitle: "Gadget 注入微信后由 bridge 经 frida-core 附加；Hook 脚本负责收发适配。",
                     repo: "github.com/frida/frida",
                     license: "LGPL-2.1",
                     urlString: "https://github.com/frida/frida",
@@ -1097,7 +1111,7 @@ struct SettingsView: View {
                 )
                 SettingsDivider()
                 TechLinkRow(
-                    title: "OneBot 桥接（Go，GPL-3.0 衍生）",
+                    title: "OneBot bridge（Go，GPL-3.0 衍生）",
                     symbol: "arrow.triangle.branch",
                     subtitle: "bridge 进程：附加 Gadget、接收事件、HTTP/WS 发送接口与鉴权、媒体上传/下载",
                     repo: "github.com/yincongcyincong/weixin-macos",
@@ -1119,81 +1133,81 @@ struct SettingsView: View {
 
             SettingsSection(
                 title: "自研研究与实现",
-                footer: "Hook 版本适配、4.1.15 / 4.2 收发、原生发送与通讯录读取，以及语音与媒体链路均为本项目自研；上游仅提供基线脚本、地址查找工具、OneBot 协议实现与开源语音模型。具体地址、结构与密钥细节不在界面展开。"
+                help: "版本适配、收发、原生发送、通讯录读取、语音与媒体链路均为本项目自研；上游仅提供基线脚本、地址查找工具、OneBot 协议实现与开源语音模型。界面不展示地址、结构偏移或密钥细节。"
             ) {
                 researchRow(
                     "微信版本适配",
-                    "按微信版本维护 Hook 地址表与开关；只在真机验证文本收发后标记为可用。",
+                    "按版本维护 Hook 配置；真机验证收发后才标记可用。",
                     symbol: "point.3.connected.trianglepath.dotted",
                     tint: Theme.info
                 )
                 SettingsDivider()
                 researchRow(
                     "4.1.15 / 4.2 收发适配",
-                    "入站使用只读消息钩子；出站走原生发送（默认开启，可关闭），与 4.1.12 legacy 互相隔离。",
+                    "入站只读消息钩子；出站走原生发送，与旧版 legacy 隔离。",
                     symbol: "arrow.left.arrow.right",
                     tint: Theme.warning
                 )
                 SettingsDivider()
                 researchRow(
                     "R3 原生文本发送",
-                    "复用本机真实发送上下文提交文本；无句柄时排队，捕获后自动重发；仅文本。",
+                    "复用真实发送上下文，仅文本；无句柄时排队，捕获后自动重发。",
                     symbol: "paperplane",
                     tint: Theme.accent
                 )
                 SettingsDivider()
                 researchRow(
                     "发送句柄与排队",
-                    "首次使用或微信重启后需手动发一条消息；句柄按微信进程缓存，App/bridge 重启自动恢复。",
+                    "微信重启后需手动发一条消息；App/bridge 重启后自动恢复句柄。",
                     symbol: "tray.and.arrow.down",
                     tint: Theme.violet
                 )
                 SettingsDivider()
                 researchRow(
                     "接收适配",
-                    "只读消息钩子替代旧回调；接收与发送链路解耦，发送失败不影响接收。",
+                    "只读消息钩子接收；发送失败不影响接收。",
                     symbol: "envelope.open",
                     tint: Theme.success
                 )
                 SettingsDivider()
                 researchRow(
                     "通讯录昵称 / 群名",
-                    "本机只读读取通讯录，补全会话标题与群昵称；读不到时回退兜底名，不阻塞消息。",
+                    "本机只读通讯录，补全会话标题与群昵称；失败不阻塞消息。",
                     symbol: "person.text.rectangle",
                     tint: Theme.info
                 )
                 SettingsDivider()
                 researchRow(
                     "通讯录密钥处理",
-                    "读取所需密钥只在本机内存与受限缓存中，不写日志、不下发 App；仅用于自己的账号。",
+                    "密钥只在本机内存与受限缓存中，不写日志、不外发。",
                     symbol: "key.horizontal",
                     tint: Theme.violet
                 )
                 SettingsDivider()
                 researchRow(
                     "语音转写与回复",
-                    "入站语音用系统本地识别转写；回复用本机 Qwen3-TTS 合成，经原生链路发送，未就绪时改发文字。",
+                    "入站语音本机转写；回复用本机 Qwen3-TTS，未就绪时改发文字。",
                     symbol: "waveform",
                     tint: Theme.success
                 )
                 SettingsDivider()
                 researchRow(
                     "图片与媒体入站",
-                    "入站图片 / 语音按需下载、解密并落盘到账号媒体目录；失败只跳过该条，不阻塞文本。",
+                    "入站媒体按需下载解密到账号目录；失败跳过，不阻塞文本。",
                     symbol: "photo.on.rectangle",
                     tint: Theme.info
                 )
                 SettingsDivider()
                 researchRow(
                     "安全边界",
-                    "只读探针、不伪造底层对象；发送由设置开启，可随时关闭；真机证据只留本机。",
+                    "只读探针，不伪造底层对象；发送可随时关闭；证据只留本机。",
                     symbol: "shield.lefthalf.filled",
                     tint: .secondary
                 )
                 SettingsDivider()
                 researchRow(
                     "分析工具链",
-                    "反汇编、地址定位与只读真机探针；研究证据只保存在本地，不随仓库发布。",
+                    "反汇编、地址定位与只读探针；证据只留本地，不随仓库发布。",
                     symbol: "wrench.adjustable",
                     tint: Theme.info
                 )
@@ -1501,8 +1515,8 @@ private struct TechLinkRow: View {
                 label
             }
             .buttonStyle(.plain)
-            .help(L("在 GitHub 打开 \(title)"))
-            .accessibilityLabel(Text(L("在 GitHub 打开 \(title)，\(repo)，\(license)")))
+            .help(Lf("在 GitHub 打开 %@", title))
+            .accessibilityLabel(Text(Lf("在 GitHub 打开 %@，%@，%@", title, repo, license)))
         } else {
             label
         }
@@ -1574,149 +1588,6 @@ private struct LogBufferMaintenanceRow: View {
             .buttonStyle(.glass)
             .controlSize(.small)
             .disabled(store.logs.isEmpty)
-        }
-    }
-}
-
-
-// MARK: - 语音发送句柄捕获引导（2026-10-26）
-
-/// 开启语音回复时弹出的捕获引导。
-///
-/// 用户需要在本机微信「文件传输助手」手动发一条文字 + 一条语音；页面每秒刷新
-/// bridge `/voice_status`，显示三项就绪状态并允许关闭后稍后再试。
-struct VoiceHandleSetupSheet: View {
-    @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var tick = Date()
-    @State private var refreshing = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(Theme.violet)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(L("启用语音回复前，先捕获发送句柄"))
-                        .font(.title3.weight(.semibold))
-                    Text(L("语音发送复用微信原生发送链路。请在本机微信给「文件传输助手」手动发一条文字和一条语音，完成后这里会自动检测。"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            statusNotice
-
-            VStack(alignment: .leading, spacing: 10) {
-                stepRow(index: 1, title: L("发一条文字"), detail: L("任意内容，用于文本发送句柄"), ready: store.voiceRuntimeStatus.textSeed)
-                stepRow(index: 2, title: L("发一条语音"), detail: L("任意内容，用于语音发送句柄"), ready: store.voiceRuntimeStatus.voiceSeed)
-                stepRow(index: 3, title: L("等待登录稳定"), detail: warmupDetail, ready: store.voiceRuntimeStatus.loginSettled)
-            }
-
-            HStack(spacing: 10) {
-                Button(L("重新检测")) {
-                    refreshing = true
-                    Task {
-                        await store.refreshVoiceStatus()
-                        tick = Date()
-                        refreshing = false
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(refreshing)
-
-                if store.voiceRuntimeStatus.canSendVoice(now: tick) {
-                    Button(L("完成")) { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                } else {
-                    Button(L("稍后再说")) { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(24)
-        .frame(width: 520)
-        .task {
-            while !Task.isCancelled {
-                await store.refreshVoiceStatus()
-                tick = Date()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-    }
-
-    private var warmupDetail: String {
-        let remaining = store.voiceRuntimeStatus.remainingWarmupSeconds(now: tick)
-        if remaining > 0 { return Lf("约 %d 秒后稳定", remaining) }
-        return store.voiceRuntimeStatus.loginSettled ? L("已稳定") : L("等待中")
-    }
-
-    /// 当前 bridge / 句柄状态：首次开启时如果机器人还没启动，直接告诉用户先启动，
-    /// 避免三个步骤一直显示「待完成」却不知道原因。
-    private var statusNotice: some View {
-        let status = store.voiceRuntimeStatus
-        let ready = status.canSendVoice(now: tick)
-        let tint: Color = ready
-            ? Theme.success
-            : (status.remainingWarmupSeconds(now: tick) > 0 ? Theme.warning : Theme.danger)
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 7) {
-                Image(systemName: ready ? "checkmark.circle.fill" : "waveform.badge.exclamationmark")
-                    .foregroundStyle(tint)
-                Text(Lf("当前状态：%@", status.summary(now: tick)))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let hint = statusHint {
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(tint.opacity(0.25), lineWidth: 1)
-        }
-    }
-
-    private var statusHint: String? {
-        let status = store.voiceRuntimeStatus
-        if !status.available {
-            return L("请先在总览或菜单栏启动机器人（OneBot），再回到这里重新检测。")
-        }
-        if !status.configured {
-            return L("语音发送依赖「R3 原生发送」：请在「设置 → Hook」中开启后重启机器人。")
-        }
-        if !status.voiceSend {
-            return L("当前微信版本不支持语音发送；文字回复不受影响。")
-        }
-        if status.remainingWarmupSeconds(now: tick) > 0 {
-            return L("bridge 启动后需要等待登录稳定，期间不会发送语音。")
-        }
-        return nil
-    }
-
-    private func stepRow(index: Int, title: String, detail: String, ready: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(ready ? Theme.success : .secondary)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(index). \(title)").font(.callout.weight(.medium))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(ready ? L("已就绪") : L("待完成"))
-                .font(.caption)
-                .foregroundStyle(ready ? Theme.success : .secondary)
         }
     }
 }

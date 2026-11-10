@@ -22,7 +22,16 @@ struct StatusCard: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title)：\(value)\(statusText.map { "，\($0)" } ?? "")")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// Composed VoiceOver label: every part is localized and the separators follow the UI language.
+    private var accessibilityText: String {
+        var text = "\(L(title))\(L10n.keyValueSeparator)\(L(value))"
+        if let statusText {
+            text += "\(L10n.listSeparator)\(L(statusText))"
+        }
+        return text
     }
 
     private var card: some View {
@@ -102,6 +111,6 @@ struct QuickActionButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled || isBusy)
-        .accessibilityLabel(title)
+        .accessibilityLabel(L(title))
     }
 }

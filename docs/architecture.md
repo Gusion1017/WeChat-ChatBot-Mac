@@ -4,6 +4,9 @@
 > 复用开源 Hook 的收发能力，以本地 OneBot 桥接把消息交给原生 App；AI 回复走 OpenAI 兼容接口。
 >
 > 本文件是并行开发的**唯一接口契约**。改动接口请先改这里，再改代码。
+>
+> **发布状态（2026-11-10）**：本文描述 **4.0.0**，包含微信 4.2.0.17 适配与朋友圈（Moments）。
+> 下载用户请先看 [`install.md`](install.md) 与 [`releases/4.0.0.md`](releases/4.0.0.md)。
 
 ## 1. 进程与数据流
 
@@ -13,6 +16,7 @@
 │   ├─ UI / 触发判定 / 人格 / 记忆 / 定时任务 / 日志               │
 │   ├─ AccountProfile / CharacterStore / MemoryEngine              │
 │   ├─ OneBotClient (WS + HTTP, 127.0.0.1:58080)                   │
+│   ├─ SnsClient (HTTP /sns/*；读取/发布/评论回复，写操作默认关)   │
 │   ├─ AIService (URLSession, OpenAI 兼容, 流式)                   │
 │   ├─ MemoryStore (SQLite, 账号库；旧 memories 表只读兼容)        │
 │   └─ HookManager (检测/备份/安装/启动/停止)                      │
@@ -20,7 +24,7 @@
 │                    ▼                                             │
 │  bridge/onebot (Go, 轻量；GPL-3.0 衍生)                           │
 │   ├─ 连接 Frida Gadget，加载 hook/script.js                      │
-│   ├─ 暴露 WS /ws + HTTP /send_private_msg /send_group_msg        │
+│   ├─ 暴露 WS /ws + HTTP /send_private_msg /send_group_msg /sns/* │
 │   └─ 媒体上传/下载、事件 JSON 组装                                 │
 │                    │ Frida Gadget TCP                            │
 │                    ▼                                             │
@@ -31,7 +35,7 @@
 
 低开销原则：
 - 原生 SwiftUI，无 WebView/Electron；空闲时仅 App 主进程 + 可选 bridge，AI 请求按需发起、不轮询。
-- 消息写入 SQLite（WAL）；UI 分页加载，内存最多保留当前会话；日志环形缓冲（App 2000 条、DB 5000 条）。
+- 消息写入 SQLite（WAL）；UI 分页加载，内存只保留已打开/预载会话的最近消息页；日志环形缓冲（App 2000 条、DB 5000 条）。
 - 防睡眠默认关闭；仅「接入电源时 / 始终」档位持有 IOKit 空闲睡眠断言，不轮询、不阻止合盖睡眠。
 - bridge 事件推送立即写出，`-send_interval` 只节流发往微信的消息（事件日志见 §3.2）。
 - Hook 发送闭环按需调度，入站去重表为 4096 条固定窗口，长时间运行不增长内存。
@@ -47,6 +51,9 @@
 4. 发送后调度后台记忆维护：同步 `interactions`，每 N 条（默认 8）批量 AI 提取 fact/decision/todo/lesson，
    相似度 ≥0.92 合并、冲突 supersede 留档，推进游标并归档。
 5. 旧 `MemoryStore` 长期记忆（滚动总结/召回）仅保留只读兼容与旧单测；完整契约见 [`memory.md`](memory.md)。
+6. 朋友圈（SNS）是**独立旁路**：App 的 `SnsClient` 走 bridge `POST /sns/*`（Bearer 复用 OneBot token），
+   `MomentsStore` 合并时间线/同步/媒体状态，不进入聊天事件流水线；读取默认关、写操作另有独立开关，
+   契约见 [`sns.md`](sns.md)。
 
 ## 2. 目录与写入边界
 
@@ -54,7 +61,7 @@
 | --- | --- |
 | `app/Sources/WeChatBot/Models/` | 共享数据模型 / 设置 |
 | `app/Sources/WeChatBot/Core/` | AppStore、运行时编排、生命周期与菜单栏控制器 |
-| `app/Sources/WeChatBot/Services/` | OneBot / AI / 记忆 / 账号档案 / 触发判定 / 调度 / Hook 服务 |
+| `app/Sources/WeChatBot/Services/` | OneBot / AI / 记忆 / 账号档案 / 触发判定 / 调度 / Hook 服务 / 朋友圈客户端（`SnsClient`、`SnsPublishScheduler`、`SnsInteractionScheduler`、`SnsMomentVision`） |
 | `app/Sources/WeChatBot/DesignSystem/` | 主题、组件、玻璃效果 |
 | `app/Sources/WeChatBot/Views/` | 所有页面与弹窗 |
 | `app/Sources/WeChatBot/WeChatBotApp.swift` | App 场景（窗口 / 设置 / 命令）与菜单栏控制器装配 |
@@ -63,10 +70,11 @@
 | `hook/` | script.js、版本 JSON 与 Gadget 配置 |
 | `tools/` | Mach-O 注入、微信备份 / 安装 / 还原 |
 | `scripts/` | 构建、打包、安装、运行、清理脚本 |
-| `devtools/` | 本地 Mock AI / OneBot（不参与打包） |
+| `devtools/` | 本地 Mock AI / OneBot 与本地 TTS sidecar（`cosyvoice/` 的 server.py、CONTRACT.md、README.md 随 App 打包） |
 | `assets/` | App 图标源文件与 `.icns` |
+| `LICENSES/` | 第三方许可证全文（随 App bundle 分发） |
 | `docs/` | 架构、契约与操作手册 |
-| `_research/` | 真机证据 / 日志（git 忽略，仅本地保留） |
+| `_research/`、`_local/`（仓库外） | 仓库外本机资料 / 归档区（已移出仓库，不在仓库内；gitignore 不再适用） |
 
 ### 2.1 运行期数据目录（多微信账号，2026-10-27）
 
@@ -85,15 +93,17 @@ Qwen3-TTS 本地 TTS 安装与音色、日志文件仍全局共享。完整行�
 │   │   └── media/
 │   └── <wxid>/
 │       ├── chatbot.sqlite (+ -wal / -shm)
-│       ├── profile.json            # {"schemaVersion":1,"bot":{…},"personas":[…],"schedules":[…]}
+│       ├── profile.json            # {"schemaVersion":1,"bot":{…（含 sns）…},"personas":[…],"schedules":[…]}
 │       ├── characters/             # 每会话一个角色目录（记忆 v2）+ 固定全局卡
 │       │   ├── c-__global__/
 │       │   │   └── memory.sqlite   # 全局共享记忆（手动维护，注入所有会话）
 │       │   └── c-<conversation-key>/
 │       │       └── memory.sqlite   # 记忆卡（SQLite WAL；无 persona.md）
 │       ├── media/                  # 该账号新产生的图片/语音/TTS 输出
+│       ├── sns-media/              # 该账号朋友圈图片缓存（按动态/索引/变体，bridge 写入）
 │       ├── logs/                   # 预留（当前为空）
-│       └── legacy-migration.json   # 仅旧版迁移目标有
+│       ├── legacy-migration.json   # 仅旧版迁移目标有
+│       └── unassigned-claim.json   # 仅从 _unassigned 认领过的账号有
 ├── media/                          # 旧版遗留媒体（只读保留，不迁移、不删除）
 ├── backups/ runtime/ cosyvoice/    # 备份、运行期 Hook 配置、本地 TTS 安装（Qwen3 运行环境/模型/音色）
 ├── updates/                        # 应用内更新工作目录（下载 zip/解压暂存/助手脚本；>24h 清理）
@@ -105,7 +115,8 @@ Qwen3-TTS 本地 TTS 安装与音色、日志文件仍全局共享。完整行�
   见 [`updates.md`](updates.md)。
 - 账号目录名就是 wxid（`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`，`_unassigned` 为保留名）；`config.json` 仍是
   全局设置入口，运行期 `bot` / `personas` / `schedules` 以 `accounts/<当前账号>/profile.json` 为准。
-- 旧版 `chatbot.sqlite` / `media/` / `config.json` 只 copy、不删除，旧媒体绝对路径继续有效。旧 `memories` /
+- 旧版 `chatbot.sqlite` 只复制到账号目录、原文件保留；旧 `media/` 原样保留、不迁移；旧 `config.json` 只读取
+  （profile 种子）、不删除；旧媒体绝对路径继续有效。旧 `memories` /
   `memory_state` 表只读兼容，旧记忆需在 App 记忆面板手动导入；`characters/` 随账号目录复制/认领，每目录
   只有 `memory.sqlite`（新卡默认空，人格来自 `profile.json`），固定 `c-__global__/` 为全局共享记忆（每账号
   一份、不可删除）；旧 `persona.md` 不再读取、`kind='origin'` 行打开库时迁移。详见
@@ -122,9 +133,10 @@ bridge/onebot \
   -gadget_addr=127.0.0.1:<gadget-port> \
   -wechat_conf=/path/to/hook/versions/<当前版本>.json \
   -receive_host=127.0.0.1:58080 \
-  -token=<随机 32 字节十六进制> \
+  -token=<随机 32 字节（64 位十六进制）> \
   -conn_type=websocket \
   -self_id=<当前登录 wxid> \
+  -send_interval=100 \
   -log_file=$HOME/Library/Logs/WeChatAI/bridge/macos.log \
   -image_path=/Users/<user>/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<当前账号>_<suffix>/temp/<...>/Img/ \
   -media_dir="/Users/<user>/Library/Application Support/WeChatAI/accounts/<当前账号>/media"
@@ -137,14 +149,16 @@ bridge/onebot \
   `xwechat_files/<wxid>_xxxx/` 推导）；多账号下 App 取当前账号档案。`get_login_info` 回包用于运行期确认，
   不一致则切到回包账号的数据档案（见 [`accounts.md`](accounts.md) §4.3）。
 - `-wechat_conf` 由 App **运行期生成**：读取 `hook/versions/<version>_mac.json` 后合并设置
-  （4.1.15.55 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 的 R3 发送开关），写入
+  （4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 的 R3 发送开关），写入
   `~/Library/Application Support/WeChatAI/runtime/hook-<version>-<build>.json` 再传给 bridge；
   仓库 JSON 始终保持默认 `off`，产品行为只由设置决定。
-- `image_path` 用于图片/视频临时目录（不存在时上游报错，App 负责创建/探测），多账号下传当前账号的
+- `image_path` 用于图片/视频临时目录（不存在时上游报错；App 启动前探测，缺失时阻止启动），多账号下传当前账号的
   `xwechat_files/<dir>/temp`（`WeChatAccountResolution.imageDirectory`）。`-media_dir` 是**入站图片获取**的
   落盘目录，App 传 `accounts/<当前账号>/media`；留空（手动调试）时 bridge 回退根 `media/`（仅旧版兼容）。
   图片只写账号目录，不写 app bundle，也不再新写根 `media/`。
-- 鉴权：HTTP 发送接口与 `/fetch_image` 要求 `Authorization: Bearer <token>`；WS 无鉴权，仅监听 127.0.0.1。
+- 鉴权：HTTP 发送接口与 `/fetch_image` 要求 `Authorization: Bearer <token>`；WS `/ws` 握手同样校验
+  同一 token（`Authorization: Bearer` 或 `?token=`；`-token` 为空时仅 WS 放行，HTTP 发送接口仍拒绝）。
+  bridge 只监听 127.0.0.1，App 连接 WS 时通过 `URLRequest` 携带该 token。
 
 ### 3.2 WebSocket 事件（bridge → App）
 
@@ -190,7 +204,7 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   自消息带 `is_self:true`、`self_id`/`sender.user_id` 为当前账号，私聊另带 `target_id=<对方 wxid>`、群聊
   `target_id=<群 ID>`；旧 hook 群自消息若 `group_id` 缺失而 `to_wxid` 是群 ID，bridge 补 `group_id` 并置
   `message_type=group`。App 的 `conversationID`：群 → `group_id`；私聊自消息 → `target_id`；其余 → `user_id`，
-  方向由 `is_self` 决定（不能再用 `self_id == user_id` 兜底）。
+  方向以 bridge 的显式 `is_self` 为准；只有旧 bridge 无该字段时才退回 `self_id == user_id` 启发式。
 - 会话归类自愈：启动时 `repairSelfRoutedMessages` 与 `repairMisroutedConversations` 幂等搬移能由
   `raw_json` 明确推导目标的消息（占位会话、伪群会话、非法群 ID 等），不确定时保持原样；
   `self_id_source=login` 时直接信任权威 selfID，不再反推历史事件。App 连接后主动发 `get_login_info`，
@@ -227,7 +241,7 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   appmsg XML 时同样还原，非 appmsg XML（图片/语音）保持原样。触发判定只取引用正文，被引用原文仅作 AI 上下文。
 - 媒体字段：`data.url` 为 `file://` 时复制到 `accounts/<当前账号>/media/`；`data.file` 可能为 base64；
   旧版根 `media/` 不再新写。
-- 入站图片获取（按需）：4.1.15 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 的图片消息在 hook 里只有 `[图片]` 占位，
+- 入站图片获取（按需）：4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15 的图片消息在 hook 里只有 `[图片]` 占位，
   图片 XML 在 `raw_message` 里；bridge 推送前按 `message_id` 登记下载候选，把 `[图片]` 替换成**无 data 的**
   `{"type":"image","data":{}}`（结构化字段与日志不携带 aeskey/CDN key，`raw_message` 保留原始 XML
   并照旧入库）。`POST /fetch_image` 时 bridge 按需触发微信 CDN 下载并解密，写入 `-media_dir/<yyyy-MM-dd>/`
@@ -241,6 +255,12 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   时行为与旧版一致。该链路尚未真机验证。引用本轮图片时按 `refermsg` 的 `svrid` 找回原图
   （`ChatMessage.id` 的 `ob-<svrid>` 对应），以「（引用图片内容：…）」附加到提示词，见
   [`core-services.md`](core-services.md) §3.3。
+- 朋友圈事件（WS 预留）：App 的 `OneBotClient` 能识别以 `sns_` 开头的 WS 帧（`sns_new_post` /
+  `sns_comment` / `sns_like`）并交给 `MomentsStore`；**当前 bridge 仍不推送该类帧**，同步以 App/P7
+  轮询 `POST /sns/sync` 为准：bridge 先解 `CmdBuf` 外层信封；cmd45 新动态与 cmd46 的 Type 1/2/3
+  评论可解码并合并到 `/sns/timeline`；**4.2.0.17 实测好友回复为 Type=11、无正文，只发
+  `sns_comment_hint`，当前不能展示正文/自动回复**；真正未知动作才计入 `unsupported_cmd_count`，见
+  [`sns.md`](sns.md) §4.5、§5.3。
 
 ### 3.3 WebSocket 动作（App → bridge）
 
@@ -270,12 +290,16 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   附在回复第一条消息前）。
 - 拍一拍：**App 已移除出站 `pat`**，不再发送原生拍一拍；bridge/hook 保留 `pat` 解析与
   `triggerSendPatMessage` 历史路径（`r3PatSend=false`，产品不调用）；入站 `pat_*` 保留，App 用它触发回复。
+- **朋友圈接口**：`POST http://127.0.0.1:58080/sns/status|timeline|detail|media|sync|post|comment|like|objectop`，
+  Header 与 OneBot 相同（`Authorization: Bearer <token>`）；功能关闭时读接口 404，写接口还需 `snsWrite`
+  打开（否则 404）。App 当前调用 `status/timeline/detail/media/sync/post/comment`；点赞/取消赞与删除等
+  objectop 写接口由 bridge 定义但 App 不发；请求/响应字段、错误码与媒体落盘见 [`sns.md`](sns.md) §4。
 
 ## 4. App 内部关键类型
 
 - `AppStore`（`Core/AppStore.swift`）：`@MainActor @Observable`，持有 settings/conversations/messages/
   logs/hookStatus/stats，UI 只读并调用其方法。多账号字段 `activeAccountID` / `activeAccountIsUnassigned` /
-  `accountSwitchNotice` / `savedWeChatAccounts` / `isSwitchingAccount`（见 §5）。
+  `accountSwitchNotice` / `savedWeChatAccounts` / `isSwitchingAccount`（见 §2.1 与 [`accounts.md`](accounts.md)）。
 - `AccountProfile` / `AccountLayout` / `WeChatAccountResolver`：账号档案布局、`account-state.json`、旧版
   迁移、`_unassigned` 认领与启动前账号识别，契约见 [`accounts.md`](accounts.md)。
 - `CharacterStore` / `MemoryEngine`：每会话角色目录 `characters/<key>/memory.sqlite`（人格单一来源，不写
@@ -288,21 +312,41 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - `UpdateCenter`（`Services/UpdateCenter.swift`，`@MainActor @Observable` 单例）：应用内更新唯一状态源；
   检查 Releases、节流/提示、下载与 SHA256 校验、安装门禁、停止机器人并启动更新助手；`UpdateInstaller` 负责
   解压/包校验/助手脚本/回滚与启动后清理。设置写入全局 `updates` 段，契约见 [`updates.md`](updates.md)。
-- `AppSettings`/`Conversation`/`ChatMessage`/`AIProvider`/`Persona`/`ScheduledTask`/`HookStatus`/`BotStats`
-  （`Models/Models.swift`，Lead 所有）。
+- `AppSettings`（`Models/AppSettings.swift`）/`Conversation`/`ChatMessage`/`AIProvider`/`Persona`/
+  `ScheduledTask`/`HookStatus`/`BotStats`（`Models/Models.swift`，Lead 所有）。
 - `ImageFetcher`（`Services/ImageFetcher.swift`）：入站图片获取的**串行队列**，只按消息入队、不持有
   `OneBotClient`/`AppStore`（闭包注入）；同一 `chatMessageID` 只尝试一次，失败不重试，`cancelAll()` 用于
   停止机器人或关闭设置。入队由 `Conversation.effectiveImageFetchEnabled(global:)` 决定
   （`image_fetch_enabled`：NULL 跟随、0 关、1 开），决策集中在 `ImageFetchPolicy.shouldFetch(...)`。
 - `VisionSupport`（`Services/VisionEngine.swift`，纯静态函数）：识图候选筛选（入站、无描述、10 分钟内、最多
   2 张）、ImageIO 缩放与 JPEG/base64 data URL、多模态请求与描述清洗；描述写入 `ChatMessage.imageDescription`。
+- `MomentsStore`（`Core/AppStore+Moments.swift`，`@MainActor @Observable`）：朋友圈唯一状态源，由
+  `AppStore.moments` 持有；时间线/详情/同步事件/媒体缓存/发布/评论回复状态都只在 MainActor 合并，网络与
+  JSON 解析在 `SnsClient`；切号或关闭功能由 `AppStore` 调 `apply(settings:onebot:accountID:)` 清空内存缓存。
+- `SnsClient`（`Services/SnsClient.swift`）：`/sns/*` HTTP 客户端，Bearer 复用 OneBot token，请求/响应字段见
+  [`sns.md`](sns.md) §4；`SnsClientProtocol` 便于注入 URLProtocol 单测。评论/回复由
+  `MomentsStore.submitComment` 调用 `SnsClient.comment`，成功回包与本地动态合并。
+- `SnsPublishScheduler` / `SnsPublishLedger`（`Services/SnsPublishScheduler.swift`）：自动发布编排（两种时机、
+  显式发布对象、每对象每日上限/最小间隔、目标间 ≥61s 节流、串行等待与取消），计数按账号命名空间持久化在
+  UserDefaults；内容生成与发布动作由
+  `AppStore+Runtime` 注入闭包（会话人格 + `MemoryStore.fetchMemoriesForPrompt` 读取的长期记忆 → AI 文案）；
+  写通道未就绪时失败并记录，不伪造成功。
+- `SnsInteractionScheduler` / `SnsInteractionLedger` / `SnsInteractionPlanner`
+  （`Services/SnsInteractionScheduler.swift`）：AI 自动互动编排。只在机器人运行且朋友圈/写开关/R3/互动开关
+  满足时创建；按检查间隔 native 刷新时间线，规划「评论新动态 / 回复我的动态 / 回复我收到的回复」，注入的
+  生成闭包（会话人格 + 识图 + 旧 memories 表）产出正文，再经 `/sns/comment` 提交。账本按账号写 UserDefaults
+  （已处理键、自己的评论 ID、每日次数、单帖回复数、启用时间），失败 10 分钟退避、最多 3 次；只在成功提交
+  后计数，不伪造成功。设置页可立即检查、重置记录。
+- `SnsMomentVision`（`Services/SnsMomentVision.swift`）：朋友圈自动互动的识图缓存层。复用
+  `VisionSupport` 的图片缩放/JPEG 编码与「AI 模型 → 识图模型」通道；一条动态内的全部图片整组一次分析，失败回退逐张（原图失败回退缩略图），
+  描述只驻留内存（80 条），不落库、不上传；纯视频动态跳过，识图不可用时不猜图片内容。
 - 服务协议建议：
   ```swift
   protocol OneBotTransport: AnyObject { func start() async throws; func stop(); func send(...) async throws }
   protocol AIChatService { func complete(messages:[AIMessage], provider:AIProvider) async throws -> String }
   protocol MemoryStoring { func conversations() throws -> [Conversation]; func messages(...) throws -> [ChatMessage]; ... }
   ```
-  具体协议由 swift-core 在 `Core/` 定义，UI 不直接依赖具体实现。
+  以上仅是建议形态；当前实现由 `AppStore`/`RuntimeCoordinator` 直接持有具体服务，尚未抽出这些协议，UI 只依赖 `AppStore`。
 
 ## 5. 配置与密钥
 
@@ -313,7 +357,7 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 账号配置：`accounts/<当前账号>/profile.json`（`ProfileSettings`：`bot`/`personas`/`schedules`）。缺失用
   默认值；解码失败备份为 `profile.corrupt-<ts>.json` 后回退默认，不影响全局配置。
 - 账号指针：`account-state.json`（`lastAccountID` / `updatedAt` / `legacyMigrationDone`）由 `AccountProfile`
-  原子写；只有旧库迁移真正完成才把 `legacyMigrationDone` 置 `true`。
+  原子写；旧库迁移真正完成（或确认没有旧库）才把 `legacyMigrationDone` 置 `true`，否则沿用旧值。
 - 数据库：`accounts/<当前账号>/chatbot.sqlite`（WAL）；旧版根目录 `chatbot.sqlite` 迁移后保留、不再写入。
   账号切换与旧版迁移见 [`accounts.md`](accounts.md)。
 - 记忆卡：`accounts/<当前账号>/characters/`（每会话只有 `memory.sqlite`，另有固定 `c-__global__/` 全局
@@ -327,28 +371,35 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 版本文件：`hook/versions/<version_with_underscores>_mac.json`，字段与上游/本项目脚本保持一致；
   **具体键名、地址与发送开关只以文件本身为准，文档不重复**。版本文件是 Hook 地址与开关的唯一数据源；
   修改必须真机验证并同步 `bridge/NOTICE`。
-- 当前目标：WeChat 4.2.0.12（arm64，`/Applications/WeChat.app/Contents/Resources/wechat.dylib`）；
-  历史版本 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53 的版本文件保留，安装脚本默认目标为 4.2.0.12。
-- 验证状态：4.2.0.12 / 4.2.0.9 / 4.2.0.5 均已完成真机验证（注入、入站消息、通讯录与 R3 文本发送）；
-  语音发送、图片获取与群聊 @ 未在每个版本逐一复测。任何 Hook 适配变更必须在真机验证文本收发后才能
-  标记为可用；历史验证记录见 `CHANGELOG.md`。
+- 当前目标：WeChat 4.2.0.17（arm64，`/Applications/WeChat.app/Contents/Resources/wechat.dylib`）；
+  历史版本 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53 的版本文件保留，安装脚本默认目标为 4.2.0.17。
+- 验证状态：4.2.0.17（2026-11-07）、4.2.0.12、4.2.0.9、4.2.0.5 均已完成真机验证（注入、入站消息、通讯录与
+  R3 文本发送）；4.2.0.17 的验证范围含群聊文本 / type=49 appmsg / 自身消息入站与 R3 文本发送；语音发送、
+  图片获取与群聊 @ 未在 4.2.0.17 复测；关闭 R3（legacy StartTask 路径）时曾观察到 1 次崩溃、后续未复现，
+  默认 R3 模式稳定。任何 Hook 适配变更必须在真机验证文本收发后才能标记为可用；历史验证记录见 `CHANGELOG.md`。
 - 发送附加配置（R3，仓库默认 `enableSend=false` / `req2bufSendMode=off`）：由 App 读取版本 JSON 后按
   设置合并生成运行期配置；具体键名、运行期参数与地址表只维护在 `hook/versions/*.json` 与
   `hook/script.js`，文档不展开。App 默认开启 R3（可在设置中关闭）；首次使用（或微信重启后）需在本机
   微信手动发一条消息捕获发送上下文，App/bridge 重启会按微信 PID 从本地缓存自动恢复。
-- 安装 Gadget 流程：完整备份 → 注入 load command → 复制 Gadget/配置 → ad-hoc 重签整个 App → 校验。
+- 朋友圈（SNS）：仅 `hook/versions/4_2_0_12_mac.json` 与 `4_2_0_17_mac.json` 含 SNS 锚点；其余版本 JSON
+  没有 SNS 键，bridge 因此保持 SNS 关闭。App 运行期按设置合并 `snsEnable` / `snsWrite` / `snsReadMode` 与
+  发布策略后传给 bridge；仓库 JSON 始终保持 `snsEnable=false` / `snsProbe=false`。锚点具体键名与地址只以
+  版本 JSON 为准，契约见 [`sns.md`](sns.md) §6.1。
+- 安装 Gadget 流程：完整备份 → 复制 Gadget/配置 → 注入 load command → ad-hoc 重签 App bundle（仅主 App，
+  保留原沙盒 entitlements）→ 校验。
 - 恢复：从备份 zip 还原整个 `/Applications/WeChat.app` 并重签（或直接用备份替换）。
 
 ## 7. 验收标准（首版）
 
-1. App 原生窗口可启动；总览/会话/机器人/AI/人格/记忆/定时/日志/设置 **九个页面齐全**，Apple 风格统一。
+1. App 原生窗口可启动；总览/会话/朋友圈/机器人/AI 模型/人格设定/记忆库/运行日志/设置 **九个页面齐全**，Apple 风格统一。
 2. 首次启动向导：检测微信版本 → 备份并安装 Gadget → 配置 AI → 启动机器人。
 3. 微信收到私聊/群消息 → App 实时显示 → 按触发设置与人设生成回复 → 微信实际发出（非 dry-run）。
 4. 群聊仅在被 @/关键词/前缀时回复；白/黑名单、冷却、频率限制生效。
 5. 重启 App/微信后能恢复连接；日志可查；数据本地持久化。
 6. 空闲时 App 内存占用低（目标 < 150MB），bridge < 80MB；无忙轮询。
 7. 多微信账号：换号后聊天/记忆卡/会话设置/机器人配置切到该账号档案，AI/Hook/OneBot/Keychain/本地
-   TTS 安装与音色保持全局；升级旧单库只 copy 不删，旧媒体路径仍可读；细节见 [`accounts.md`](accounts.md) §11。
+   TTS 安装与音色保持全局；升级旧单库只 copy 不删，旧媒体路径仍可读；细节见 [`accounts.md`](accounts.md)
+   §1–§2、§5–§7。
 
 ## 8. 运行时资源布局与安装契约（App bundle）
 
@@ -364,11 +415,11 @@ WeChat AI.app/Contents/Resources/
   AppIcon.icns、LICENSE、ThirdPartyNotices.txt、LICENSES/
 ```
 
-资源根解析顺序（HookManager）：
+资源根解析顺序（`AppResources`；`HookManager` 通过它定位 bridge 二进制与脚本）：
 
 1. `Bundle.main.resourceURL` 下存在 `bridge/onebot`；
 2. 环境变量 `WECHATAI_ROOT`；
-3. 从 `Bundle.main.bundleURL` / 可执行文件路径向上查找 `bridge/onebot`（`swift run` 开发态）；
+3. 从 `Bundle.main.bundleURL` / 可执行文件路径 / 当前工作目录向上查找 `bridge/onebot`（`swift run` 开发态）；
 4. 仍找不到则报明确错误，不崩溃。
 
 ### 8.1 安装脚本协议
@@ -388,7 +439,7 @@ stdout：
 - 默认逐行 `[stage]<0-1>|<message>`；`--json` 逐行 `{"progress":0.52,"stage":"..."}`；
 - 结束 `OK`（exit 0）或 `ERROR:<message>`（非 0）。
 
-内部流程：版本校验 → 完整备份（`ditto` zip）→ 注入 `LC_LOAD_DYLIB` → 复制 Gadget/配置 → **仅重签主
+内部流程：版本校验 → 完整备份（`ditto` zip）→ 复制 Gadget/配置并签名 Gadget → 注入 `LC_LOAD_DYLIB` → **仅重签主
 App**（保留原沙盒 entitlements，去掉 hardened runtime）→ `codesign --verify --strict` + otool 复核。
 
 ### 8.2 还原
@@ -405,8 +456,8 @@ App**（保留原沙盒 entitlements，去掉 hardened runtime）→ `codesign -
 4.1.15 起入站消息改为独立接收路径：
 
 - Frida 在微信进程内挂**只读的入站消息钩子**；具体函数地址与字段布局由 `hook/versions/*.json` 与
-  `hook/script.js` 按微信版本维护，**不在公开文档展开**。4.2.0.5 / 4.2.0.9 / 4.2.0.12 沿用同一路径与
-  版本文件机制，各版本分别适配并真机验证（入站与 R3 文本发送；语音发送与群聊 @ 未全部复测）。
+  `hook/script.js` 按微信版本维护，**不在公开文档展开**。4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 沿用同一路径与
+  版本文件机制，各版本分别适配并完成真机验证（4.2.0.17 于 2026-11-07 验证入站与 R3 文本发送；语音发送与群聊 @ 未全部复测）。
 - Hook 读取到新消息后发送 `incoming_message` 给 Go bridge；`bridge/incoming.go` 转成 OneBot 事件并经
   WebSocket/HTTP 推送，App 的 OneBotClient 消费。
 - 群聊 `from` 以 `@chatroom` 结尾；文本可能带 `sender_wxid:` 前缀，JS 会剥离并把 sender 作为 user_id。

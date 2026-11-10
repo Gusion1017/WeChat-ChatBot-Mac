@@ -448,7 +448,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func schedulePanelPrewarm() {
         guard panel == nil,
               statusItem != nil,
-              let store
+              store != nil
         else { return }
 
         prewarmTask?.cancel()

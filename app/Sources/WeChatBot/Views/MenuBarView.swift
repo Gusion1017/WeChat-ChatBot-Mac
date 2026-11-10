@@ -96,8 +96,8 @@ struct MenuBarView: View {
                 statusRow(
                     symbol: "sparkles",
                     label: "AI",
-                    value: store.defaultProvider?.name ?? "未配置",
-                    color: store.defaultProvider?.enabled == true ? Theme.success : .secondary
+                    value: aiMenuValue,
+                    color: aiMenuColor
                 )
                 statusRow(
                     symbol: batteryMenuSymbol,
@@ -176,7 +176,7 @@ struct MenuBarView: View {
             statDivider
             statCell(icon: "arrow.up.message", value: "\(store.stats.repliedToday)", label: "回复")
             statDivider
-            statCell(icon: "timer", value: UIFormat.duration(milliseconds: store.stats.aiLatencyAverageMs), label: "延迟")
+            statCell(icon: "timer", value: UIFormat.duration(milliseconds: store.stats.aiLatencyAverageMs), label: "AI 延迟")
         }
         .padding(.vertical, 5)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -213,6 +213,19 @@ struct MenuBarView: View {
     }
 
     // MARK: - System vitals
+
+    private var aiMenuValue: String {
+        guard let provider = store.defaultProvider else { return "未配置" }
+        if !provider.enabled { return "已停用" }
+        if provider.kind != .ollama && !provider.hasAPIKey { return "缺少密钥" }
+        return provider.name
+    }
+
+    private var aiMenuColor: Color {
+        guard let provider = store.defaultProvider, provider.enabled else { return .secondary }
+        if provider.kind != .ollama && !provider.hasAPIKey { return Theme.warning }
+        return Theme.success
+    }
 
     private var batteryMenuSymbol: String {
         let status = store.batteryStatus

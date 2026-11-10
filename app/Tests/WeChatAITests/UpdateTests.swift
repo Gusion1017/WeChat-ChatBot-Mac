@@ -635,7 +635,7 @@ final class UpdateTests: XCTestCase {
             expectedVersion: AppVersion(major: 3, minor: 0, patch: 0)
         )) { error in
             if case .invalidBundle(let detail) = error {
-                return detail.contains("CFBundleExecutable")
+                return detail.contains("主可执行文件")
             }
             return false
         }

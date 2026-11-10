@@ -49,6 +49,16 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 	var resultChans []chan error
 	var voiceDurations []int
 	for _, v := range req.Message {
+		// message 数组可能含 null 或缺少 data 的段（旧客户端/手工请求）：
+		// 直接解引用 v.Data 会 panic，让整个请求变成无响应的连接中断。
+		if v == nil || v.Data == nil {
+			segmentType := "<nil>"
+			if v != nil {
+				segmentType = v.Type
+			}
+			Error("消息段缺少 data，已忽略", "type", segmentType)
+			continue
+		}
 		if v.Type == "text" {
 			sendContent += v.Data.Text
 		} else if v.Type == "at" {

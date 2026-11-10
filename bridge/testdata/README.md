@@ -4,7 +4,7 @@
 
 - 用途：Go bridge 入站语音解码回归（`bridge/voice_test.go`），验证 Tencent SILK v3
   容器解析与 go-silk 解码链路。
-- 来源：**TTS 合成**（中文女声，5.08s、16 kHz、单声道、Tencent SILK 头），
+- 来源：**TTS 合成**（中文女声，5.20s、16 kHz、单声道、Tencent SILK 头），
   不含任何真人聊天录音；SILK 容器本身不携带可识别元数据。
 - 大小 / 校验：
 

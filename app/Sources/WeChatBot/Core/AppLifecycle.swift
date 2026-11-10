@@ -210,11 +210,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaultCenter = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
             windowObservers.append(defaultCenter.addObserver(forName: name, object: nil, queue: .main) { notification in
-                guard let window = notification.object as? NSWindow,
-                      ActivationPolicyController.isApplicationWindow(window)
-                else { return }
-                Task { @MainActor in
-                    ActivationPolicyController.windowsDidChange()
+                // 观察者注册在主队列，闭包内同步读取 MainActor 状态需要显式声明隔离；
+                // 后续的“窗口收尾后核对”仍放到 Task，避免在 AppKit 回调中间切换策略。
+                MainActor.assumeIsolated {
+                    guard let window = notification.object as? NSWindow,
+                          ActivationPolicyController.isApplicationWindow(window)
+                    else { return }
+                    Task { @MainActor in
+                        ActivationPolicyController.windowsDidChange()
+                    }
                 }
             })
         }

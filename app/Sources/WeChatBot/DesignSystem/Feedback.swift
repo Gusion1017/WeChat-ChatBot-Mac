@@ -30,12 +30,15 @@ struct EmptyState: View {
             VStack(spacing: 4) {
                 Text(L(title)).font(.headline)
                 if let message {
+                    // 不要在此加 `.fixedSize(horizontal: false, vertical: true)`：
+                    // macOS 26 的 NavigationSplitView 详情列会把这种多行文案的换行高度
+                    // 叠加进窗口拟合高度（表现为侧边栏整体上移、品牌与底部状态被裁掉）。
+                    // 320pt 的宽度已经能正常换行。
                     Text(L(message))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 320)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if let actionTitle, let action {
@@ -128,12 +131,7 @@ struct ConfirmSheet: View {
                 Image(systemName: isDestructive ? "exclamationmark.triangle.fill" : "questionmark.circle.fill")
                     .font(.system(size: 24))
                     .foregroundStyle(tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L(title)).font(.headline)
-                    Text(L("请确认此操作"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(L(title)).font(.headline)
                 Spacer()
             }
 

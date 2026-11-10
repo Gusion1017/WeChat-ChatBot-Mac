@@ -8,15 +8,19 @@
 | 版本 | 支持状态 |
 | --- | --- |
 | `main` 分支 / 最新提交 | ✅ 接收安全报告 |
-| App 3.1.x（当前打包版本） | ✅ 接收安全报告 |
+| App 4.0.x（当前打包版本） | ✅ 接收安全报告 |
 | 旧提交、个人 fork、二次分发版本 | ❌ 不保证，尽力而为 |
+| 微信 4.2.0.17 (270353) | ✅ 已完成适配与真机验证（2026-11-07；语音发送/图片下载/群聊 @ 未复测） |
 | 微信 4.2.0.12 (270348) | ✅ 已完成适配与真机验证（2026-11-02；语音发送与图片获取下载未复测） |
 | 微信 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365) | ✅ 这些版本经过适配 |
 | 其他微信版本 | ❌ 未验证，不作为安全承诺 |
 
+> 版本口径：3.1.6 发布包仅含 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53 的 Hook 版本表；
+> 4.2.0.17 适配与朋友圈（Moments）只在当前源码 / 下一版，需要时从源码构建（见 [`docs/install.md`](docs/install.md)）。
+
 ## 私密报告
 
-- 请使用 GitHub 仓库的 **Security → Advisories → Report a vulnerability**
+- 请使用 GitHub 仓库的 [**Security → Advisories → Report a vulnerability**](https://github.com/Gusion1017/WeChat-ChatBot-Mac/security/advisories/new)
   （GitHub Security Advisory）私下报告；**不要**在公开 issue、discussion 或 PR 中贴出
   密钥、聊天内容或个人身份信息（PII）。
 - 如果 API Key / Token 已经泄露：请先到对应服务商后台**吊销并轮换**，再提交报告，不要等待修复。
@@ -29,8 +33,9 @@
 - **仅本机回环**：App 与 bridge 的 HTTP / WebSocket（默认 `127.0.0.1:58080`）以及
   Frida Gadget（`127.0.0.1:27042`）只绑定回环地址，不提供公网或局域网接口。
   不要改成 `0.0.0.0`，也不要做端口转发。
-- **鉴权差异**：OneBot HTTP 发送接口需要 `Authorization: Bearer <token>`；
-  WebSocket `/ws` 以及调试端点（`/test_ws`、`/debug/pprof/*`）**无鉴权**，仅依赖回环绑定。
+- **鉴权差异**：OneBot HTTP 接口需要 `Authorization: Bearer <token>`；WebSocket `/ws`
+  也校验 token（`Authorization: Bearer` 或 `?token=`，仅当显式以空 token 启动 bridge 时放行）。
+  调试端点（`/test_ws`、`/debug/pprof/*`）**无鉴权**，仅依赖回环绑定。
   Frida Gadget 的 `listen` 模式同样无鉴权，任何本机进程都能连接 `127.0.0.1:27042`。
   因此不要在共享、多人使用或不受信任的机器上运行，也不要做端口转发。
 - **密钥存储**：AI API Key 保存在 macOS Keychain（service = `com.gusionw.wechatai`），
@@ -39,8 +44,9 @@
   也不要提交或截图真实 token。
 - **通讯录读取密钥**：只在本机内存与受限缓存（0600）中，日志不打印密钥；不要提交
   该缓存，也不要把日志中的密钥片段贴到 issue。仅用于自己的设备与账号。
-- **Hook 风险**：注入会破坏微信官方签名，脚本会尽力关闭 Sparkle 自动更新；微信升级后 Hook 可能失效、
-  崩溃或行为异常。安装前会完整备份，可用 restore 还原，但仍建议先自行备份聊天数据。
+- **Hook 风险**：注入会破坏微信官方签名，安装脚本（`tools/manage_wechat.sh`）会尽力关闭 Sparkle
+  自动更新；微信升级后 Hook 可能失效、崩溃或行为异常。安装前会完整备份，可用 restore 还原，
+  但仍建议先自行备份聊天数据。
 - **账号风控**：非官方客户端存在腾讯账号风控风险，可能被限制或封号；建议仅使用个人测试账号，
   风险自担。
 - **数据流向**：除发送给你所配置的 AI 服务商（DeepSeek / OpenAI / Ollama 等）的对话内容外，

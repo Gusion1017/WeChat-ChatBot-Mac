@@ -89,7 +89,7 @@ final class GitHubUpdateClient: @unchecked Sendable {
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw AppUpdateError.network("响应无效")
+            throw AppUpdateError.network("GitHub 返回了无法识别的响应")
         }
         switch http.statusCode {
         case 200:
@@ -151,7 +151,7 @@ final class GitHubUpdateClient: @unchecked Sendable {
             throw AppUpdateError.httpStatus(status)
         }
         guard data.count <= 1_048_576, let text = String(data: data, encoding: .utf8) else {
-            throw AppUpdateError.malformedResponse("校验文件内容无效")
+            throw AppUpdateError.malformedResponse("SHA256 校验文件内容无效")
         }
         return UpdateChecksum.parse(text)
     }

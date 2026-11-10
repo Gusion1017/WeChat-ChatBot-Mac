@@ -68,7 +68,7 @@ struct CosyVoiceVoiceManagerSheet: View {
             }
             Button(L("取消"), role: .cancel) {}
         } message: {
-            Text(L("会删除该音色的参考音频、参考文本与清单条目，无法恢复；内置音色不可删除。"))
+            Text(L("会删除该音色的参考音、参考文本与清单条目，无法恢复；内置音色不可删除。"))
         }
     }
 
@@ -105,7 +105,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 Button {
                     editor = .add
                 } label: {
-                    Label(L("新增音色…"), systemImage: "plus")
+                    Label(L("添加音色…"), systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -118,7 +118,7 @@ struct CosyVoiceVoiceManagerSheet: View {
 
     private var footer: some View {
         HStack(alignment: .center, spacing: 10) {
-            Text(L("App 不内置任何音色；内置音色只允许改名称/简介，自定义音色可编辑或删除。空音色时无法启动服务。"))
+            Text(L("内置音色只能改名称与简介；自定义音色可编辑或删除。空音色时无法启动本地服务。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -175,7 +175,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 .foregroundStyle(.tertiary)
             Text(L("还没有任何音色"))
                 .font(.callout.weight(.medium))
-            Text(L("App 不内置任何音色。添加 1–5 段清晰人声（每段至少 1 秒、合计 ≤30 秒，超长会自动截取）后，就可以用本机 Qwen3-TTS 合成语音。"))
+            Text(L("添加 1–5 段清晰人声，每段至少 1 秒、合计不超过 30 秒，超出部分自动截取。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -210,7 +210,7 @@ struct CosyVoiceVoiceManagerSheet: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(voice.name)
+                    Text(L(voice.name))
                         .font(.callout.weight(.medium))
                     Text(voice.builtin ? L("内置") : L("自定义"))
                         .font(.caption2)
@@ -220,7 +220,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                         .background(Color.primary.opacity(0.06), in: Capsule())
                 }
                 if !voice.description.isEmpty {
-                    Text(voice.description)
+                    Text(L(voice.description))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -228,7 +228,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 HStack(spacing: 8) {
                     Label(durationLabel(voice), systemImage: "clock")
                     Label(
-                        Lf("%d 条参考音频", max(1, voice.referenceCount)),
+                        Lf("%d 段参考音", max(1, voice.referenceCount)),
                         systemImage: "waveform")
                     Label(modeLabel(voice), systemImage: "text.bubble")
                     Label(
@@ -238,7 +238,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                         systemImage: voice.hasReferenceText ? "checkmark.circle" : "waveform"
                     )
                     if !voice.hasPromptWAV {
-                        Label(L("参考音频缺失"), systemImage: "exclamationmark.triangle")
+                        Label(L("参考音缺失"), systemImage: "exclamationmark.triangle")
                             .foregroundStyle(Theme.warning)
                     }
                     if voice.builtin {
@@ -271,7 +271,7 @@ struct CosyVoiceVoiceManagerSheet: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(!canPreview)
-                .help(canPreview ? L("试听") : L("服务未运行或缺少参考音频"))
+                .help(canPreview ? L("试听") : L("服务未运行或缺少参考音"))
 
                 Button(L("使用")) {
                     use(voice)
@@ -350,7 +350,7 @@ struct CosyVoiceVoiceManagerSheet: View {
         store.voicePreview.stop()
         store.settings.bot.voiceSettings.cosyVoiceVoiceID = voice.id
         store.persist()
-        toast.show(Lf("已切换到音色「%@」", voice.name), tone: .success)
+        toast.show(Lf("已切换到音色「%@」", L(voice.name)), tone: .success)
     }
 
     private func delete(_ voice: CosyVoiceManagedVoice) {
@@ -643,8 +643,8 @@ struct CosyVoiceVoiceEditorSheet: View {
         if isSaving { return L("正在保存…") }
         if trimmedName.isEmpty { return L("请填写名称") }
         if isBuiltin { return "" }
-        if clips.isEmpty { return L("请至少添加一条参考音频") }
-        if clips.contains(where: { !$0.hasAudio }) { return L("请为每条参考音频选择音频文件。") }
+        if clips.isEmpty { return L("请至少添加一段参考音") }
+        if clips.contains(where: { !$0.hasAudio }) { return L("请为每段参考音选择音频文件。") }
         if isBusyTranscribing { return L("正在转写参考文本，请稍候。") }
         if pendingTextCount > 0 {
             return hasAnyReferenceText
@@ -725,8 +725,8 @@ struct CosyVoiceVoiceEditorSheet: View {
                 Text(isAdding ? L("新增音色") : L("编辑音色"))
                     .font(.title3.weight(.semibold))
                 Text(isBuiltin
-                    ? L("内置音色只允许修改名称和简介；参考音频/参考文本与官方参考音严格对应，不可替换。")
-                    : L("支持 1–5 段参考音频，可拖入或一次多选；每段至少 1 秒，合计 ≤30 秒，超长会自动截取；保存时按顺序合并成一个 prompt。"))
+                    ? L("内置音色只能改名称与简介；参考音与参考文本不可替换。")
+                    : L("支持 1–5 段参考音；保存时按顺序合并为一个 prompt。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -750,9 +750,10 @@ struct CosyVoiceVoiceEditorSheet: View {
     private var referenceEditorSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                sectionTitle(L("参考音频与文本"), symbol: "waveform")
+                sectionTitle(L("参考音与文本"), symbol: "waveform")
+                HelpTip(text: "多段参考音在保存时按顺序拼接，段间插入 0.25 秒静音；服务端按单条 prompt 合成。")
                 Spacer()
-                Text(Lf("%d / %d 条", clips.count, maxReferenceCount))
+                Text(Lf("%d / %d 段", clips.count, maxReferenceCount))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if totalDuration > 0 {
@@ -769,7 +770,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 }
                 referenceActions
                 if isDropTargeted {
-                    Label(L("松开以添加参考音频"), systemImage: "arrow.down.doc.fill")
+                    Label(L("松开以添加参考音"), systemImage: "arrow.down.doc.fill")
                         .font(.caption2)
                         .foregroundStyle(Theme.violet)
                 }
@@ -777,22 +778,17 @@ struct CosyVoiceVoiceEditorSheet: View {
             if pendingTextCount > 0, !crossLingual {
                 Label(
                     hasAnyReferenceText
-                        ? Lf("还有 %d 条参考文本为空：保存时会自动转写；仍为空则按 cross-lingual 使用。", pendingTextCount)
-                        : Lf("%d 条参考文本为空：保存时按 cross-lingual 使用（相似度会下降）；可点「自动转写全部」补齐。", pendingTextCount),
+                        ? Lf("还有 %d 段参考音缺少参考文本：保存时会自动转写，仍为空则按 cross-lingual 使用。", pendingTextCount)
+                        : Lf("%d 段参考音没有参考文本：保存时按 cross-lingual 使用（相似度会下降），可先「自动转写全部」。", pendingTextCount),
                     systemImage: "info.circle")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(L("加一段 1–30 秒清晰人声即可；更长会自动截取；文本可自动识别并修改；支持 wav / mp3 / m4a / flac 等常见格式。参考文本越准确，克隆越像；留空也能合成，但相似度会下降。"))
+            Text(L("支持 wav / mp3 / m4a / flac 等常见格式。"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
-            if clips.isEmpty {
-                Text(L("也可以把音频文件直接拖进这里。"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
             loadDroppedProviders(providers)
@@ -805,9 +801,9 @@ struct CosyVoiceVoiceEditorSheet: View {
             Image(systemName: isDropTargeted ? "arrow.down.doc.fill" : "waveform.badge.plus")
                 .font(.system(size: 26))
                 .foregroundStyle(isDropTargeted ? Theme.violet : Color.secondary)
-            Text(L("拖入或选择参考音频"))
+            Text(L("拖入或选择参考音"))
                 .font(.callout.weight(.medium))
-            Text(Lf("一次可选择多条，最多 %d 条；每段至少 1 秒，超长会自动截取。", maxReferenceCount))
+            Text(Lf("一次可选择多段，最多 %d 段；每段至少 1 秒，超长会自动截取。", maxReferenceCount))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -837,14 +833,14 @@ struct CosyVoiceVoiceEditorSheet: View {
             Button {
                 beginImport(.append)
             } label: {
-                Label(L("添加参考音频…"), systemImage: "plus")
+                Label(L("添加参考音…"), systemImage: "plus")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(!canImport)
             .help(clips.count >= maxReferenceCount
-                ? Lf("最多保存 %d 条参考音频", maxReferenceCount)
-                : L("再添加一条参考音频（可多选或拖入）"))
+                ? Lf("最多保存 %d 段参考音", maxReferenceCount)
+                : L("再添加一段参考音（可多选或拖入）"))
             Button {
                 transcribeAll()
             } label: {
@@ -859,7 +855,7 @@ struct CosyVoiceVoiceEditorSheet: View {
             .disabled(!canTranscribeAny)
             .help(pendingTextCount == 0
                 ? L("所有参考文本都已填写")
-                : Lf("自动转写 %d 条尚未填写文本的参考音频", pendingTextCount))
+                : Lf("自动转写 %d 段缺少文本的参考音", pendingTextCount))
             Toggle(isOn: $autoTranscribeOnImport) {
                 Text(L("导入后自动转写"))
                     .font(.caption2)
@@ -884,7 +880,7 @@ struct CosyVoiceVoiceEditorSheet: View {
         let canEditText = !isSaving && !isTranscribing
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(Lf("参考音频 %d", index))
+                Text(Lf("参考音 %d", index))
                     .font(.caption.weight(.semibold))
                 if let duration = value.duration, duration > 0 {
                     Text(Lf("%.1f 秒", duration))
@@ -942,8 +938,8 @@ struct CosyVoiceVoiceEditorSheet: View {
                 .controlSize(.small)
                 .disabled(value.audioURL == nil || isSaving || isBusyTranscribing)
                 .help(value.audioURL == nil
-                    ? L("先选择参考音频")
-                    : L("用系统本地语音识别转写这条参考音频"))
+                    ? L("先选择参考音")
+                    : L("用系统本地语音识别转写这段参考音"))
                 Button(role: .destructive) {
                     removeClip(id: value.id)
                 } label: {
@@ -952,7 +948,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(clips.count <= 1 || isSaving || isBusyTranscribing)
-                .help(L("删除这条参考音频"))
+                .help(L("删除这段参考音"))
             }
             ZStack(alignment: .topLeading) {
                 ReferenceTextEditor(
@@ -975,7 +971,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 if value.text.isEmpty {
                     Text(crossLingual
                         ? L("cross-lingual 开启时此文本不参与合成")
-                        : L("与这条音频逐字对应的参考文本（可自动识别，也可手动填写）"))
+                        : L("与这段音频逐字对应的参考文本（可自动识别或手填）"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 12)
@@ -1019,8 +1015,8 @@ struct CosyVoiceVoiceEditorSheet: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             Text(crossLingual
-                ? L("已开启 cross-lingual：保存后参考文本不参与合成，只用参考音（相似度会下降）；开始手动输入文本会自动关闭它。")
-                : L("建议为每条参考音填写逐字对应的参考文本；导入后会自动识别，也可手动修改。文本越准确、克隆越像；全部留空也能合成，但相似度会下降（自动使用 cross-lingual）。"))
+                ? L("已开启 cross-lingual：参考文本不参与合成，只用参考音（相似度会下降）；开始输入文本会自动关闭。")
+                : L("为每段参考音填写逐字对应的参考文本，导入后会自动识别；全部留空则自动使用 cross-lingual，相似度会下降。"))
                 .font(.caption2)
                 .foregroundStyle(crossLingual ? Theme.warning : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1029,16 +1025,19 @@ struct CosyVoiceVoiceEditorSheet: View {
 
     private var builtinReadOnlySection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionTitle(L("参考音频与文本（只读）"), symbol: "lock.fill")
+            HStack(spacing: 8) {
+                sectionTitle(L("参考音与文本（只读）"), symbol: "lock.fill")
+                HelpTip(text: "内置音色的参考音与参考文本来自官方参考，严格对应，不可替换。")
+            }
             if clips.isEmpty {
-                Text(L("该音色没有可展示的参考音频。"))
+                Text(L("该音色没有可展示的参考音。"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
-                            Label(Lf("参考音频 %d", index + 1), systemImage: "waveform")
+                            Label(Lf("参考音 %d", index + 1), systemImage: "waveform")
                             if let duration = clip.duration, duration > 0 {
                                 Text(Lf("%.1f 秒", duration))
                                     .foregroundStyle(.secondary)
@@ -1062,10 +1061,6 @@ struct CosyVoiceVoiceEditorSheet: View {
                     .background(
                         Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                 }
-                Text(L("内置音色的参考音频/参考文本与官方参考音严格对应，不可替换。"))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1121,7 +1116,7 @@ struct CosyVoiceVoiceEditorSheet: View {
         guard !isSaving, transcribingClipID == nil, !isTranscribingAll else { return }
         let remainingCount = max(0, maxReferenceCount - clips.count)
         guard remainingCount > 0 else {
-            errorText = Lf("最多保存 %d 条参考音频。", maxReferenceCount)
+            errorText = Lf("最多保存 %d 段参考音。", maxReferenceCount)
             return
         }
         guard !urls.isEmpty else { return }
@@ -1152,7 +1147,7 @@ struct CosyVoiceVoiceEditorSheet: View {
         } else if stoppedForBudget {
             errorText = L("参考音总长已达 30 秒，请先删除或缩短参考音。")
         } else if addedIDs.count < urls.count {
-            errorText = Lf("最多保存 %d 条参考音频，多余的已忽略。", maxReferenceCount)
+            errorText = Lf("最多保存 %d 段参考音，多余的已忽略。", maxReferenceCount)
         } else {
             errorText = nil
         }
@@ -1276,7 +1271,7 @@ struct CosyVoiceVoiceEditorSheet: View {
             .filter { $0.hasAudio && !$0.hasText }
             .map(\.id)
         guard !targets.isEmpty else {
-            toast.show(L("没有需要转写的参考音频"), tone: .info)
+            toast.show(L("没有需要转写的参考音"), tone: .info)
             return
         }
         isTranscribingAll = true
@@ -1330,7 +1325,7 @@ struct CosyVoiceVoiceEditorSheet: View {
         let context = context
         if !isBuiltin {
             guard !clips.contains(where: { !$0.hasAudio }) else {
-                errorText = L("请为每条参考音频选择音频文件。")
+                errorText = L("请为每段参考音选择音频文件。")
                 return
             }
         }
@@ -1355,7 +1350,7 @@ struct CosyVoiceVoiceEditorSheet: View {
                 switch context {
                 case .add:
                     guard !inputs.isEmpty else {
-                        errorText = L("请先选择参考音频")
+                        errorText = L("请先选择参考音")
                         return
                     }
                     let voice = try await voiceStore.add(

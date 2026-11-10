@@ -1274,7 +1274,7 @@ final class CharacterMemoryTests: XCTestCase {
         let persona = makePersona()
         let markdown = CharacterMemoryExporter.markdown(snapshot: snapshot, persona: persona)
         XCTAssertTrue(markdown.contains("# 角色记忆卡"))
-        XCTAssertTrue(markdown.contains("## 人设（人格设定）"))
+        XCTAssertTrue(markdown.contains("## 人格（人格设定）"))
         XCTAssertTrue(markdown.contains("## 事实"))
         XCTAssertTrue(markdown.contains("## 已归档"))
         XCTAssertTrue(markdown.contains("## 全量互动记录"))

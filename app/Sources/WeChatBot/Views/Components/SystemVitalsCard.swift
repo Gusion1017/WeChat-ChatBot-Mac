@@ -14,6 +14,7 @@ struct DashboardSystemVitalsCard: View {
             subtitle: "本机电量与 DeepSeek 余额",
             symbol: "battery.75percent",
             tint: Theme.info,
+            help: "电量每 30 秒刷新；机器人运行时余额每 5 分钟刷新，也可手动刷新。",
             trailing: { refreshButton },
             content: {
                 HStack(alignment: .top, spacing: 0) {
@@ -180,7 +181,7 @@ struct DashboardSystemVitalsCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button(L("前往 AI 模型配置")) { store.sidebarSelection = .ai }
+            Button(L("打开 AI 模型页")) { store.sidebarSelection = .ai }
                 .buttonStyle(.plain)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(Theme.accent)
@@ -194,16 +195,27 @@ struct DashboardSystemVitalsCard: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(Theme.warning)
-                Text(L(message))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("查询失败"))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.warning)
+                    Text(L(message))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Button(L("重试")) { refresh() }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(Theme.accent)
+            HStack(spacing: 12) {
+                Button(L("重试")) { refresh() }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.accent)
+                Button(L("打开 AI 模型页")) { store.sidebarSelection = .ai }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.accent)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
     }

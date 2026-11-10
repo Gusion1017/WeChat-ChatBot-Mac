@@ -47,10 +47,10 @@ SwiftUI App
 > **分发包边界**：安装脚本不生成音色，App 包与仓库不含参考音频、`prompt.txt`、`voices.json`；音色需
 > 自行添加，已有 `voices/` 不会因重装删除，请勿提交/分享。
 
-安装目录（源码运行时；打包 App 为 `~/Library/Application Support/WeChatAI/cosyvoice/`）：
+安装目录（`<home>`；开发态默认 `<repo>/_local/cosyvoice`，首次安装时创建，仓库默认不包含该目录（`.gitignore` 已忽略 `_local/`）；打包 App 为 `~/Library/Application Support/WeChatAI/cosyvoice/`）：
 
 ```
-_local/cosyvoice/
+<home>/
   venv-qwen3tts/                        # Python 3.10
   models/Qwen3-TTS-12Hz-1.7B-Base-bf16/ # MLX 模型（约 4.2GB）
   voices/<voice-id>/{prompt.wav,prompt.txt,meta.json}
@@ -80,7 +80,7 @@ curl -s -X POST http://127.0.0.1:5051/tts \
   -o /tmp/voice.wav
 ```
 
-前置条件：macOS 26 + Apple Silicon（13/14 不保证可用）、`uv`（或 conda）、`ffmpeg`；约 5GB 磁盘。
+前置条件：macOS 26 + Apple Silicon（13/14 不保证可用）、`uv` / `python3.10` / conda 之一；约 5GB 磁盘。
 脚本不依赖 GUI 进程 PATH（显式搜 `/opt/homebrew/bin`、`/usr/local/bin`、`/opt/anaconda3/bin`）。
 
 ## 4. 音色与参考音（只存本机）
@@ -123,8 +123,8 @@ curl -s -X POST http://127.0.0.1:5051/tts \
 - 文本与校验：参考文本用原生文本视图，支持中文输入法组词；`cross-lingual` 不锁输入框，输入/转写
   出文本时自动关闭，保存前提交组词内容。片段 1–5 条、可解码、每段 ≥1 秒、合计 ≤30 秒；保存时统一转
   24k mono 16-bit 并峰值归一。
-- **导出自定义音色（本人备份）**：导出 `.zip`（`prompt.wav`、`prompt.txt`、`meta.json`、
-  `voice.json`、`README.txt`，多条参考音色另含 `refs/`），仅本机、无上传；预置音色不可导出。
+- **导出自定义音色（本人备份）**：导出 `.zip`（`<id>/prompt.wav`、`prompt.txt`、`meta.json`、
+  `voice.json`、`README.txt`，多条参考音色另含 `refs/`；zip 根目录含 `export.json`），仅本机、无上传；预置音色不可导出。
 
 `voices.json` 条目示例：
 
@@ -147,7 +147,7 @@ curl -s -X POST http://127.0.0.1:5051/tts \
 - `cosyVoiceEndpoint`：默认 `http://127.0.0.1:5051`（只允许回环）。
 - `cosyVoiceAutoStart`：默认 `true`；**仅当「允许语音回复」开启、本开关开启、已安装且有音色时**，
   启动 App/打开语音面板会拉起本地服务。
-- `cosyVoiceSpeed`：已无 UI 且 Qwen3 不支持，保留字段仅兼容旧配置，内部固定 1.0。
+- `cosyVoiceSpeed`：已无 UI 且 Qwen3 不支持（服务端忽略）；保留字段仅兼容旧配置，缺省 1.0、旧值 0.5–2.0 原样回写。
 
 ## 6. HTTP 契约（v2.0.0）
 
@@ -191,7 +191,7 @@ RTF 口径：`duration = samples / sample_rate`，`rtf = processing_time_seconds
 
 | 现象 | 排查 |
 | --- | --- |
-| 显示“未安装” | 看安装日志尾部；确认 `uv`/`conda`、磁盘 ≥5GB、网络可达 Hugging Face |
+| 显示“未安装” | 看安装日志尾部；确认 `uv`/`python3.10`/conda、磁盘 ≥5GB、网络可达 Hugging Face |
 | 旧服务/残留进程 | `/health.engine` 为空或 `cosyvoice3`：旧版服务仍在跑，退出旧版/重启 App 或 `pkill -f devtools/cosyvoice/server.py` 后「重新检测」 |
 | `/health` 一直 503 | GPU 模型仍在加载；查 sidecar stderr |
 | 端口 5051 被占 | 换端口或停旧进程：`lsof -nP -iTCP:5051 -sTCP:LISTEN` |
@@ -213,7 +213,7 @@ RTF 口径：`duration = samples / sample_rate`，`rtf = processing_time_seconds
 
 ## 11. 测试与验证状态
 
-- `swift test` **619 项（617 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
+- `swift test` **879 项（877 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
   与真实 GPU E2E 通过；`test_server.py` **72 项通过**（设备解析/auto、health、合成、x-vector
   fallback、headers 等）；完整真实下载/安装在早期版本已跑通。
 - 真实 GPU `/tts` 24k WAV、RTF≈0.54–0.78；`--device auto/gpu`、`--wait-health`、`bash -n`、

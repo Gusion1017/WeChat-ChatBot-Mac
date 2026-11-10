@@ -56,7 +56,9 @@ enum AIError: LocalizedError, Equatable {
     case providerError(String)
     case timedOut
     case cancelled
-    case emptyResponse
+    /// 响应正文为空。附带一段诊断信息（流式/非流式、finish_reason、token 用量），
+    /// 便于区分「思考内容吃满 max_tokens」与「上游返回了非预期格式」。
+    case emptyResponse(String?)
     case transport(String)
 
     var isRetryable: Bool {
@@ -73,28 +75,29 @@ enum AIError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "未配置 API Key，请在「AI 模型」中填写"
+            return L("尚未配置 API Key。请在「AI 模型」中填写后重试。")
         case .invalidBaseURL(let url):
-            return "API 地址无效：\(url)"
+            return Lf("API 地址无效：%@", url)
         case .malformedResponse(let detail):
-            return "AI 响应解析失败：\(detail)"
+            return Lf("无法解析 AI 响应：%@", detail)
         case .httpStatus(let status, let body):
             switch status {
-            case 401, 403: return "API 鉴权失败（HTTP \(status)），请检查 Key"
-            case 404: return "API 地址或模型不存在（HTTP 404）"
-            case 429: return "请求过于频繁或额度不足（HTTP 429）"
-            default: return "AI 服务错误（HTTP \(status)）：\(body.prefix(200))"
+            case 401, 403: return Lf("鉴权失败（HTTP %d）。请检查 API Key。", status)
+            case 404: return L("地址或模型不存在（HTTP 404）。请检查 Base URL 与模型名。")
+            case 429: return L("请求过于频繁或额度不足（HTTP 429）。请稍后重试。")
+            default: return Lf("AI 服务错误（HTTP %d）：%@", status, String(body.prefix(200)))
             }
         case .providerError(let message):
-            return "AI 服务返回错误：\(message)"
+            return Lf("AI 服务返回错误：%@", message)
         case .timedOut:
-            return "AI 请求超时"
+            return L("AI 请求超时。请检查网络后重试。")
         case .cancelled:
-            return "AI 请求已取消"
-        case .emptyResponse:
-            return "AI 返回了空内容"
+            return L("AI 请求已取消")
+        case .emptyResponse(let detail):
+            guard let detail, !detail.isEmpty else { return L("AI 返回了空内容") }
+            return Lf("AI 返回了空内容（%@）", detail)
         case .transport(let message):
-            return "AI 网络错误：\(message)"
+            return Lf("AI 网络错误：%@", message)
         }
     }
 }
@@ -288,7 +291,11 @@ final class AIClient: @unchecked Sendable {
         }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw AIError.emptyResponse }
+        guard !trimmed.isEmpty else {
+            throw AIError.emptyResponse(
+                Self.emptyResponseDetail(finishReason: finishReason, usage: usage, streamed: useStream)
+            )
+        }
         return AICompletionResult(
             text: trimmed,
             model: model.isEmpty ? Self.effectiveModel(for: provider) : model,
@@ -376,7 +383,7 @@ final class AIClient: @unchecked Sendable {
         let usage = Self.usage(from: object["usage"])
         let model = object["model"] as? String ?? ""
         let finish = choice?["finish_reason"] as? String
-        guard !text.isEmpty else { throw AIError.emptyResponse }
+        // 空内容统一由 `complete` 抛错，那里能带上 finish_reason / usage 诊断信息。
         return Outcome(text: text, model: model, usage: usage, finishReason: finish)
     }
 
@@ -448,7 +455,7 @@ final class AIClient: @unchecked Sendable {
                 try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 throw AIError.timedOut
             }
-            guard let first = try await group.next() else { throw AIError.emptyResponse }
+            guard let first = try await group.next() else { throw AIError.emptyResponse(nil) }
             group.cancelAll()
             return first
         }
@@ -514,6 +521,19 @@ final class AIClient: @unchecked Sendable {
             completionTokens: int(dictionary["completion_tokens"]),
             totalTokens: int(dictionary["total_tokens"])
         )
+    }
+
+    /// 空响应的诊断串：区分「流式/非流式」「模型把输出额度用完」「上游格式不符」。
+    /// 2026-11-10 朋友圈自动发布失败时只留下「AI 返回了空内容」，缺的正是这些字段。
+    static func emptyResponseDetail(finishReason: String?, usage: AIUsage, streamed: Bool) -> String {
+        var parts = [streamed ? "流式" : "非流式"]
+        if let finishReason, !finishReason.isEmpty {
+            parts.append("finish_reason=\(finishReason)")
+        }
+        if usage.promptTokens > 0 || usage.completionTokens > 0 || usage.totalTokens > 0 {
+            parts.append("tokens=\(usage.promptTokens)/\(usage.completionTokens)/\(usage.totalTokens)")
+        }
+        return parts.joined(separator: "，")
     }
 
     private static func int(_ value: Any?) -> Int {

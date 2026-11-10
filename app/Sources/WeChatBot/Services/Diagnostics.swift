@@ -355,22 +355,21 @@ enum Diagnostics {
               daily.nextFireAt?.timeIntervalSince(fireAt.addingTimeInterval(86_400)) == 0,
               daily.nextFireAt?.description ?? "nil")
 
-        var once = ScheduledTask(name: "once", conversationID: "c", content: "x",
+        let once = ScheduledTask(name: "once", conversationID: "c", content: "x",
                                  repeatRule: .once, fireAt: fireAt.addingTimeInterval(3600))
         check("Scheduler.once-future",
               SchedulerService.nextFireDate(for: once, after: fireAt, calendar: calendar) != nil)
         check("Scheduler.once-past",
               SchedulerService.nextFireDate(for: once, after: fireAt.addingTimeInterval(7200), calendar: calendar) == nil)
 
-        var weekly = ScheduledTask(name: "weekly", conversationID: "c", content: "x",
+        let weekly = ScheduledTask(name: "weekly", conversationID: "c", content: "x",
                                    repeatRule: .weekly, fireAt: fireAt, weekdays: [2]) // Monday
         let nextWeekly = SchedulerService.nextFireDate(for: weekly, after: fireAt.addingTimeInterval(3600),
                                                        calendar: calendar)
         let weekday = nextWeekly.map { calendar.component(.weekday, from: $0) }
         check("Scheduler.weekly", nextWeekly != nil && weekday == 2)
-        _ = weekly
 
-        var weekdays = ScheduledTask(name: "weekdays", conversationID: "c", content: "x",
+        let weekdays = ScheduledTask(name: "weekdays", conversationID: "c", content: "x",
                                      repeatRule: .weekdays, fireAt: fireAt)
         let friday = calendar.date(byAdding: .day, value: 4, to: fireAt) ?? fireAt
         let nextWorkday = SchedulerService.nextFireDate(for: weekdays, after: friday.addingTimeInterval(3600),
@@ -378,7 +377,6 @@ enum Diagnostics {
         let workdayWeekday = nextWorkday.map { calendar.component(.weekday, from: $0) }
         check("Scheduler.weekdays", workdayWeekday == 2 || workdayWeekday == 3 || workdayWeekday == 4
             || workdayWeekday == 5 || workdayWeekday == 6)
-        _ = weekdays
 
         let normalized = SchedulerService.normalize([
             ScheduledTask(name: "expired", conversationID: "c", content: "x",

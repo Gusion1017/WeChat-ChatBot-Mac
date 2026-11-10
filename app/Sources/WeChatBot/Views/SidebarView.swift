@@ -15,11 +15,17 @@ struct SidebarView: View {
         let items: [SidebarItem]
     }
 
-    private let sections: [SidebarSection] = [
-        SidebarSection(id: "main", title: "常用", items: SidebarItem.main),
-        SidebarSection(id: "automation", title: "自动化", items: SidebarItem.automation),
-        SidebarSection(id: "system", title: "系统", items: SidebarItem.system)
-    ]
+    private var sections: [SidebarSection] {
+        // 朋友圈内容入口在「会话」下方；关闭功能时隐藏（已在页面内时仍可访问并显示引导）。
+        let mainItems = SidebarItem.main.filter { item in
+            item != .moments || store.settings.bot.snsSettings.enabled
+        }
+        return [
+            SidebarSection(id: "main", title: "常用", items: mainItems),
+            SidebarSection(id: "automation", title: "自动化", items: SidebarItem.automation),
+            SidebarSection(id: "system", title: "系统", items: SidebarItem.system)
+        ]
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -87,14 +93,14 @@ struct SidebarView: View {
                 Text("WeChat AI")
                     .font(.system(.headline, design: .rounded, weight: .semibold))
                     .lineLimit(1)
-                Text(L("微信智能助手"))
+                Text(L("本地 AI 助手"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 2)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(L("WeChat AI 微信智能助手"))
+        .accessibilityLabel(L("WeChat AI"))
     }
 
     // MARK: Navigation
@@ -181,16 +187,16 @@ struct SidebarView: View {
 
     private func helpText(for item: SidebarItem, isSelected: Bool) -> String {
         if item == .conversations, isSelected, store.selectedConversationID != nil {
-            return "再次点击收起当前对话（\(item.shortcutLabel)）"
+            return Lf("再次点击收起当前对话（%@）", item.shortcutLabel)
         }
-        return "\(item.title)（\(item.shortcutLabel)）"
+        return Lf("%@（%@）", item.title, item.shortcutLabel)
     }
 
     private func hintText(for item: SidebarItem, isSelected: Bool) -> String {
         guard item == .conversations, isSelected, store.selectedConversationID != nil else {
             return ""
         }
-        return "收起当前对话"
+        return L("收起当前对话")
     }
 
     private func itemBackground(_ item: SidebarItem, isSelected: Bool) -> Color {
@@ -249,7 +255,7 @@ struct SidebarView: View {
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        return "版本 \(version)"
+        return Lf("版本 %@", version)
     }
 
     private var totalUnread: Int {
@@ -314,7 +320,13 @@ struct SidebarStatusCapsule: View {
         .buttonStyle(.plain)
         .help(L("查看机器人状态"))
         .accessibilityLabel(L("机器人状态"))
-        .accessibilityValue("机器人\(store.isBotRunning ? "运行中" : "已停止")，微信\(wechatValue)，Hook \(hookValue)，AI \(aiValue)")
+        .accessibilityValue(Lf(
+            "机器人：%@；微信：%@；Hook：%@；AI：%@",
+            L(store.isBotRunning ? "运行中" : "已停止"),
+            L(wechatValue),
+            L(hookValue),
+            L(aiValue)
+        ))
     }
 
     private func statusLine(symbol: String, label: String, value: String, color: Color) -> some View {
@@ -382,8 +394,16 @@ extension SidebarItem {
     }
 
     var shortcutLabel: String {
-        guard let index = SidebarItem.allCases.firstIndex(of: self) else { return "" }
-        if index < 9 { return "⌘\(index + 1)" }
-        return "⌘0"
+        switch self {
+        case .dashboard: "⌘1"
+        case .conversations: "⌘2"
+        case .moments: "⌘3"
+        case .bot: "⌘4"
+        case .ai: "⌘5"
+        case .personas: "⌘6"
+        case .memory: "⌘7"
+        case .logs: "⌘8"
+        case .settings: "⌘0"
+        }
     }
 }

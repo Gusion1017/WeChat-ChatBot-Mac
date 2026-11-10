@@ -152,3 +152,23 @@ func TestHandleMsgToleratesInboundImageSegmentWithoutText(t *testing.T) {
 		t.Fatal("raw_message 不应被清空")
 	}
 }
+
+// TestHandleMsgToleratesNilMessageSegments 覆盖 message 数组里的 null / 缺 data 段。
+// 旧实现按类型直接解引用 msg.Data.Media 会 panic，整条入站事件丢失。
+func TestHandleMsgToleratesNilMessageSegments(t *testing.T) {
+	raw := []byte(`{"self_id":"wxid_self","user_id":"wxid_x","message":[null,{"type":"text"},{"type":"record"},{"type":"text","data":{"text":"hi"}}]}`)
+	out, err := HandleMsg(raw)
+	if err != nil {
+		t.Fatalf("HandleMsg: %v", err)
+	}
+	var got WechatMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal output %q: %v", out, err)
+	}
+	if len(got.Message) != 4 {
+		t.Fatalf("len(message) = %d, want 4", len(got.Message))
+	}
+	if got.Message[3] == nil || got.Message[3].Data == nil || got.Message[3].Data.Text != "hi" {
+		t.Fatalf("last segment lost: %+v", got.Message[3])
+	}
+}

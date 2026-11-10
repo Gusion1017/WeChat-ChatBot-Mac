@@ -17,11 +17,25 @@ var searchSize = 1000 * 1024 * 1024;
 var searchEnd = moduleBase.add(searchSize);
 var _req2bufSearchAddr = null;
 var baseAddr = null;
+// 主库（wechat.dylib）尺寸：SNS 等扩展用 baseAddr+realModuleSize 判断可执行段，
+// 不能用顶层 module（那是 185KB 的 WeChat launcher）。
+var realModuleSize = 0;
 
 // 结构版本开关: 4.1.12 起上传完成结构 +0x08、下载任务结构 +0x18、寄存器漂移。
 // JSON 里 "structVer": "2" = 4.1.12 布局; 旧版 JSON 无此键(渲染为 <no value>),
 // 不等于 "2", 自动走 4.1.11 及以前的原路径。
 var structVer = "{{.structVer}}";
+
+// ===================== SNS（朋友圈）原生通道开关 =====================
+// snsProbe: 只读捕获真实 SNS 任务（opcode/url/body/closure 句柄），用于初始化与排障。
+// snsEnable: 允许通过 R3 通道发送 SNS 请求（读取时间线/详情/同步）；写操作另有开关。
+// 仓库版本 JSON 一律默认 false，由 App 运行期配置按设置开启。
+var snsProbeEnabled = "{{.snsProbe}}" === "true";
+var snsEnableEnabled = "{{.snsEnable}}" === "true";
+// sns.db 只读兜底（P0 探针阶段默认关；snsProbe=true 时也允许，便于真机诊断）。
+// 复用通讯录分区的 SQLCipher key 捕获/解密/WAL 工具，不写微信 DB。
+var snsDbReadEnabled = "{{.snsDbRead}}" === "true";
+
 
 // ===================== task-5: 版本化 req2buf layout =====================
 // 4.1.15.55 的 req2buf 函数被重编译(旧 0x413e96c -> 新 0x4635b9c):
@@ -286,6 +300,7 @@ setImmediate(function () {
     var realModule = resolveBaseFromModuleTable();
     if (realModule) {
         baseAddr = realModule.base;
+        realModuleSize = realModule.size;
         console.log("[+] 基址解析(模块表): " + realModule.path + " base=" + baseAddr + " size=" + realModule.size);
         initAddresses();
     } else {
@@ -2447,7 +2462,40 @@ var r3Cfg = {
     voiceTaskVtable: "{{.voiceTaskVtable}}",
     voiceClosureVtable: "{{.voiceClosureVtable}}",
     voiceOpcode: "{{.voiceOpcode}}",
-    voiceUrl: "{{.voiceUrl}}"
+    voiceUrl: "{{.voiceUrl}}",
+    // SNS（朋友圈）任务锚点/响应解码器，见 hook/versions/4_2_0_12_mac.json
+    snsTimelineCtor: "{{.snsTimelineCtor}}",
+    snsTimelineVtable: "{{.snsTimelineVtable}}",
+    snsTimelineSize: "{{.snsTimelineSize}}",
+    snsTimelineClosureVtable: "{{.snsTimelineClosureVtable}}",
+    snsTimelineDecoder: "{{.snsTimelineDecoder}}",
+    snsSyncCtor: "{{.snsSyncCtor}}",
+    snsSyncVtable: "{{.snsSyncVtable}}",
+    snsSyncSize: "{{.snsSyncSize}}",
+    snsSyncClosureVtable: "{{.snsSyncClosureVtable}}",
+    snsSyncDecoder: "{{.snsSyncDecoder}}",
+    snsPostCtor: "{{.snsPostCtor}}",
+    snsPostVtable: "{{.snsPostVtable}}",
+    snsPostSize: "{{.snsPostSize}}",
+    snsPostClosureVtable: "{{.snsPostClosureVtable}}",
+    snsPostDecoder: "{{.snsPostDecoder}}",
+    snsUserpageCtor: "{{.snsUserpageCtor}}",
+    snsUserpageVtable: "{{.snsUserpageVtable}}",
+    snsUserpageSize: "{{.snsUserpageSize}}",
+    snsUserpageClosureVtable: "{{.snsUserpageClosureVtable}}",
+    snsUserpageDecoder: "{{.snsUserpageDecoder}}",
+    snsCommentCtor: "{{.snsCommentCtor}}",
+    snsCommentVtable: "{{.snsCommentVtable}}",
+    snsCommentSize: "{{.snsCommentSize}}",
+    snsCommentClosureVtable: "{{.snsCommentClosureVtable}}",
+    snsCommentDecoder: "{{.snsCommentDecoder}}",
+    // 诊断锚点（仅 snsProbe=true 时安装只读计数 hook）
+    snsSlot13BranchSNS: "{{.snsSlot13BranchSNS}}",
+    snsSlot13BranchDefault: "{{.snsSlot13BranchDefault}}",
+    // timeline / sync slot2 调用 autoBufferWrite 后的返回地址；用它从函数入口安全抓 body。
+    snsTimelineBodyReturn: "{{.snsTimelineBodyReturn}}",
+    snsSyncBodyReturn: "{{.snsSyncBodyReturn}}",
+    snsPostBodyReturn: "{{.snsPostBodyReturn}}"
 };
 var r3State = {
     cfg: null,
@@ -2576,6 +2624,40 @@ function r3Ready() {
     // 缺键("<no value>")/非法/过小一律回退 0xE0, 保证旧版 4.1.15 JSON 行为不变。
     cfg.taskSize = r3ParseAddr(r3Cfg.newSendMsgTaskSize);
     if (cfg.taskSize === null || isNaN(cfg.taskSize) || cfg.taskSize < 0xE0) cfg.taskSize = 0xE0;
+    // SNS 任务锚点（4.2+）；缺键时 SNS 发送返回 not_configured，不影响聊天。
+    function snsAnchor(prefix) {
+        var a = {
+            ctor: r3ParseAddr(r3Cfg[prefix + "Ctor"]),
+            vtable: r3ParseAddr(r3Cfg[prefix + "Vtable"]),
+            size: r3ParseAddr(r3Cfg[prefix + "Size"]),
+            closureVtable: r3ParseAddr(r3Cfg[prefix + "ClosureVtable"]),
+            decoder: r3ParseAddr(r3Cfg[prefix + "Decoder"])
+        };
+        if (a.ctor === null || a.vtable === null || a.size === null ||
+            a.closureVtable === null || a.decoder === null) return null;
+        return a;
+    }
+    cfg.snsTasks = {
+        timeline: snsAnchor("snsTimeline"),
+        sync: snsAnchor("snsSync"),
+        post: snsAnchor("snsPost"),
+        userpage: snsAnchor("snsUserpage"),
+        comment: snsAnchor("snsComment")
+    };
+    cfg.snsSnsUrl = {
+        timeline: "/cgi-bin/micromsg-bin/mmsnstimeline",
+        sync: "/cgi-bin/micromsg-bin/mmsnssync",
+        post: "/cgi-bin/micromsg-bin/mmsnspost",
+        userpage: "/cgi-bin/micromsg-bin/mmsnsuserpage",
+        comment: "/cgi-bin/micromsg-bin/mmsnscomment"
+    };
+    cfg.snsOpcode = { timeline: 0xd3, sync: 0xd6, post: 0xd1, userpage: 0xd4, comment: 0xd5 };
+    // 诊断锚点（snsProbe 用）：slot13 内部分支/网络提交/服务门禁入口偏移。
+    cfg.snsSlot13BranchSNS = r3ParseAddr(r3Cfg.snsSlot13BranchSNS);
+    cfg.snsSlot13BranchDefault = r3ParseAddr(r3Cfg.snsSlot13BranchDefault);
+    cfg.snsTimelineBodyReturn = r3ParseAddr(r3Cfg.snsTimelineBodyReturn);
+    cfg.snsSyncBodyReturn = r3ParseAddr(r3Cfg.snsSyncBodyReturn);
+    cfg.snsPostBodyReturn = r3ParseAddr(r3Cfg.snsPostBodyReturn);
     if (missing.length) {
         r3State.lastError = "R3 JSON 缺少地址键: " + missing.join(",");
         console.error("[!] R3: " + r3State.lastError + " (需要与当前微信版本对应的版本 JSON)");
@@ -2840,6 +2922,756 @@ function r3StartPatBuilderCapture() {
     }
 }
 
+
+// ===================== SNS（朋友圈）捕获分区 =====================
+// 微信 4.2 的朋友圈走独立短链 CGI（opcode/url 见 hook 版本 JSON 与 docs/sns.md）。
+// 这里只做只读捕获：短链任务提交时记录 opcode/url/业务 protobuf/closure 句柄，
+// 供 bridge 初始化与后续 R3 发送复用；不修改任务、不写微信内存。
+var SNS_OP_NAMES = {
+    0xcf: "mmsnsupload",
+    0xd1: "mmsnspost",
+    0xd2: "mmsnsobjectdetail",
+    0xd3: "mmsnstimeline",
+    0xd4: "mmsnsuserpage",
+    0xd5: "mmsnscomment",
+    0xd6: "mmsnssync",
+    0xda: "mmsnsobjectop",
+    0x124: "mmsnstaglist"
+};
+var snsState = {
+    captured: {},
+    order: [],
+    count: 0,
+    lastError: null
+};
+
+// 只允许调用 wechat.dylib 可执行段内的函数指针，避免误调堆上的伪 vtable 造成崩溃。
+function snsIsExecInModule(p) {
+    try {
+        if (!p || p.isNull() || !baseAddr || !realModuleSize) return false;
+        var r = Process.findRangeByAddress(p);
+        if (!r || !r.protection || r.protection.indexOf("x") < 0) return false;
+        return p.compare(baseAddr) >= 0 && p.compare(baseAddr.add(realModuleSize)) < 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function snsHexFromPtr(p, len) {
+    try {
+        if (!p || len <= 0 || len > 4 * 1024 * 1024) return null;
+        var buf = p.readByteArray(len);
+        if (!buf) return null;
+        var u8 = new Uint8Array(buf);
+        var out = "";
+        for (var i = 0; i < u8.length; i++) out += ("0" + u8[i].toString(16)).slice(-2);
+        return out;
+    } catch (e) {
+        return null;
+    }
+}
+
+// task+0x78 内嵌 B1 serializer（首 qword = vtable）；+0x48 ByteSize / +0x58 SerializeToArray。
+// 与 sendpat 捕获使用同一接口，且调用前校验两个函数指针都在主库可执行段内。
+function snsDumpSerializer(task) {
+    try {
+        var ser = task.add(0x78);
+        var vt = readPointerIfReadable(ser);
+        if (!vt) return null;
+        var sizeFnPtr = readPointerIfReadable(vt.add(0x48));
+        var writeFnPtr = readPointerIfReadable(vt.add(0x58));
+        if (!snsIsExecInModule(sizeFnPtr) || !snsIsExecInModule(writeFnPtr)) return null;
+        var sizeFn = new NativeFunction(sizeFnPtr, "uint32", ["pointer"]);
+        var n = sizeFn(ser);
+        if (n <= 0 || n > 4 * 1024 * 1024) return null;
+        var buf = Memory.alloc(n);
+        new NativeFunction(writeFnPtr, "pointer", ["pointer", "pointer"])(ser, buf);
+        return snsHexFromPtr(buf, n);
+    } catch (e) {
+        snsState.lastError = "serializer: " + e;
+        return null;
+    }
+}
+
+function snsCaptureTask(task, op, url, service) {
+    try {
+        // 生产路径也需要「真实请求体 + service + closure seed」来做主动刷新；
+        // 只有朋友圈功能启用时才捕获（snsProbe 只影响日志/额外快照）。
+        if (!snsEnableEnabled) return;
+        var name = SNS_OP_NAMES[op];
+        if (!name) return;
+        // 只抓第一份（post/comment 例外：用户再发一次可刷新模板，评论需要真实报文做 patch）。
+        if (snsState.captured[name] && name !== "mmsnspost" && name !== "mmsnscomment") return;
+        var rec = { op: op, opHex: "0x" + op.toString(16), url: url || "", ts: Date.now() };
+        if (service) {
+            try { rec.service = service.toString(); } catch (eSvc) { }
+        }
+        var taskVt = readPointerIfReadable(task);
+        rec.taskVtable = taskVt ? taskVt.toString() : null;
+        // factory 写入、slot13 路由消费的字段：R3 直调 ctor 会缺失，必须从真实任务复制。
+        try { rec.p70 = task.add(0x70).readU8(); } catch (e70) { rec.p70 = null; }
+        try { rec.p74 = task.add(0x74).readU32(); } catch (e74) { rec.p74 = null; }
+        try { rec.p30 = task.add(0x30).readU32(); } catch (e30) { rec.p30 = null; }
+        try { rec.p31 = task.add(0x31).readU8(); } catch (e31) { rec.p31 = null; }
+        try { rec.p33 = task.add(0x33).readU8(); } catch (e33) { rec.p33 = null; }
+        try { rec.p38 = readStdStringCompat(task.add(0x38), 512) || ""; } catch (e38) { rec.p38 = ""; }
+        if (snsProbeEnabled) {
+            try { rec.memPre = snsHexFromPtr(task, 0x110) || null; } catch (eMem) { rec.memPre = null; }
+        }
+        try {
+            if (service && !service.isNull()) {
+                rec.pendingCount = service.add(0x78).readU64().toString();
+            }
+        } catch (ePend) { }
+        var serVt = readPointerIfReadable(task.add(0x78));
+        rec.serVt = serVt ? serVt.toString() : null;
+        var clo = readPointerIfReadable(task.add(0x68));
+        if (clo) {
+            rec.closure = clo.toString();
+            var cvt = readPointerIfReadable(clo);
+            rec.closureVtable = cvt ? cvt.toString() : null;
+            if (snsProbeEnabled) {
+                try { rec.closureMem = snsHexFromPtr(clo, 0x80) || null; } catch (eClo) { }
+            }
+            // 禁止在 slot13 onEnter（微信网络线程）里调用 native clone：实测会卡住微信。
+            // 推迟到 JS 线程，任务此时仍在 pending 表里，闭包通常还存活。
+            setImmediate(function () {
+                try {
+                    var cv = readPointerIfReadable(ptr(rec.closure));
+                    if (!cv) return;
+                    var cloneFn = readPointerIfReadable(cv.add(0x10));
+                    if (!snsIsExecInModule(cloneFn)) return;
+                    var clone = new NativeFunction(cloneFn, "pointer", ["pointer"])(ptr(rec.closure));
+                    if (clone && !clone.isNull()) {
+                        rec.closureSeed = clone.toString();
+                        snsState.seeds = snsState.seeds || {};
+                        snsState.seeds[name] = clone;
+                        r3State.pendingCaptures.push("[sns] seed cloned " + name + " => " + clone);
+                        r3ScheduleLogFlush();
+                    }
+                } catch (eClone) {
+                    r3State.pendingCaptures.push("[sns] seed clone failed " + name + ": " + eClone);
+                    r3ScheduleLogFlush();
+                }
+            });
+        }
+        if (!snsState.captured[name]) {
+            snsState.order.push(name);
+            snsState.count++;
+        }
+        snsState.captured[name] = rec;
+        if (snsProbeEnabled) {
+            r3State.pendingCaptures.push("[sns] captured " + name + " op=" + rec.opHex +
+                " url=" + rec.url +
+                " service=" + (rec.service || "none") +
+                " closure=" + (rec.closure || "none") +
+                " pending=" + (rec.pendingCount || "?"));
+        } else {
+            r3State.pendingCaptures.push("[sns] captured " + name + " (service/closure/body ready)");
+        }
+        r3ScheduleLogFlush();
+    } catch (e) {
+        snsState.lastError = "capture: " + e;
+    }
+}
+
+// SNS 请求 body：在 autoBufferWrite 函数入口（安全点）按返回地址过滤，
+// 直接读 x1(data)/x2(len)。切勿在 slot2 内部 mid-function 挂 hook——4.2.0.17 实测
+// 会破坏协程栈并让微信 PAC 崩溃（crash report: 0x3bb59d4 -> autoBufferWrite）。
+var snsBodyHooked = false;
+function snsBodyNameForReturn(ret) {
+    if (!r3State.cfg) return null;
+    if (r3State.cfg.snsTimelineBodyReturn &&
+        ret.equals(baseAddr.add(r3State.cfg.snsTimelineBodyReturn))) return "timeline";
+    if (r3State.cfg.snsSyncBodyReturn &&
+        ret.equals(baseAddr.add(r3State.cfg.snsSyncBodyReturn))) return "sync";
+    if (r3State.cfg.snsPostBodyReturn &&
+        ret.equals(baseAddr.add(r3State.cfg.snsPostBodyReturn))) return "post";
+    return null;
+}
+// 评论请求（0xD5）没有 bodyReturn 锚点（版本 JSON 不带 snsCommentBodyReturn）；
+// 用真实报文里的 clientId 标记 "sns_comment:" 兜底识别，只保存含该标记的请求体，
+// 不复制/不记录其它报文（聊天消息、上传等）的内容。
+function snsBodyContainsMarker(dataPtr, len, marker) {
+    try {
+        // 评论请求实测 160–300B；把扫描限制在这个范围，避免对聊天/媒体等
+        // 其它 autoBufferWrite 做无谓的逐字节检查（网络线程上要尽量轻）。
+        if (len < 64 || len > 2048) return false;
+        for (var i = 0; i <= len - marker.length; i++) {
+            var ok = true;
+            for (var j = 0; j < marker.length; j++) {
+                if (dataPtr.add(i + j).readU8() !== marker.charCodeAt(j)) { ok = false; break; }
+            }
+            if (ok) return true;
+        }
+    } catch (e) { }
+    return false;
+}
+
+function snsInstallTimelineBodyHook() {
+    if (snsBodyHooked || !snsEnableEnabled || !r3State.cfg) return;
+    if (!autoBufferWriteFunc) return;
+    try {
+        Interceptor.attach(autoBufferWriteFunc, {
+            onEnter: function (args) {
+                try {
+                    if (!snsEnableEnabled || snsSendState.window) return;
+                    // 不做「expectation」竞争：按调用点返回地址识别是哪个 SNS 请求，
+                    // 只要命中就记录（SNS 请求频率很低，读一次内存成本可忽略）。
+                    var name = snsBodyNameForReturn(this.returnAddress);
+                    var dataPtr = args[1];
+                    var len = args[2].toUInt32();
+                    if (!dataPtr || dataPtr.isNull() || len <= 0 || len > 64 * 1024) return;
+                    if (!name) {
+                        // 评论/点赞请求：没有 bodyReturn 锚点，按 clientId 标记识别。
+                        if (!snsBodyContainsMarker(dataPtr, len, "sns_comment:")) return;
+                        name = "comment";
+                    }
+                    var hex = snsHexFromPtr(dataPtr, len);
+                    if (!hex) return;
+                    snsState.bodies = snsState.bodies || {};
+                    snsState.bodies[name] = hex;
+                    // 不把请求体（可能含 session/scene）写进日志；只记长度。
+                    if (snsProbeEnabled) {
+                        r3State.pendingCaptures.push("[sns] body " + name + " captured len=" + len);
+                        r3ScheduleLogFlush();
+                    }
+                } catch (e) { }
+            }
+        });
+        snsBodyHooked = true;
+        console.log("[sns] SNS body hook (autoBufferWrite entry) installed");
+    } catch (e) {
+        console.log("[sns] SNS body hook failed: " + e);
+    }
+}
+
+// ===================== SNS 发送（R3 同构） =====================
+// 用版本 JSON 的 task 锚点构造 SNS 任务：desc(opcode/url) → ctor → 替换 B1 为 fake serializer
+// → 克隆真实 closure seed → slot13 提交；响应由 task vtable slot3 的 decoder 回填。
+var snsSendState = {
+    fakeVt: null,
+    stub: null,
+    sizeCb: null,
+    writeCb: null,
+    protoBytes: null,
+    protoLen: 0,
+    seq: 0,
+    pending: {},     // taskPtr -> request
+    pendingById: {}, // taskId -> request（decoder 中的 task 指针可能不是我们构造的那个）
+    requests: {},    // requestId -> request
+    passive: {},     // opName -> {hex, len, ts}：用户原生刷新时捕获的响应
+    lastResponses: {},
+    sizeCalls: 0,
+    writeCalls: 0,
+    window: false    // 合成请求进行中：body hook 不覆盖真实 body
+};
+
+function snsEnsureFakeVt() {
+    if (snsSendState.fakeVt) return true;
+    try {
+        if (typeof NativeCallback !== "function") throw new Error("NativeCallback unavailable");
+        // 每个槽独立回调，用于诊断 native req2buf 实际调用了 B1 的哪些方法。
+        snsSendState.slotCbs = [];
+        for (var slotIdx = 0; slotIdx < 16; slotIdx++) {
+            (function (idx) {
+                snsSendState.slotCbs.push(new NativeCallback(function () {
+                    try {
+                        if (snsSendState.slotCallCount < 40) {
+                            snsSendState.slotCallCount = (snsSendState.slotCallCount || 0) + 1;
+                            console.log("[sns] fakeB1 slot=+" + (idx * 8).toString(16) + " called");
+                        }
+                    } catch (e) { }
+                    return 1;
+                }, "pointer", ["pointer", "pointer", "pointer", "pointer", "pointer", "pointer"]));
+            })(slotIdx);
+        }
+        snsSendState.stub = snsSendState.slotCbs[0];
+        snsSendState.sizeCb = new NativeCallback(function (ser) {
+            snsSendState.sizeCalls = (snsSendState.sizeCalls || 0) + 1;
+            return snsSendState.protoLen >>> 0;
+        }, "uint32", ["pointer"]);
+        snsSendState.writeCb = new NativeCallback(function (ser, dst) {
+            snsSendState.writeCalls = (snsSendState.writeCalls || 0) + 1;
+            var bytes = snsSendState.protoBytes;
+            if (!bytes || !dst || dst.isNull()) return dst;
+            dst.writeByteArray(bytes);
+            return dst.add(bytes.length);
+        }, "pointer", ["pointer", "pointer"]);
+        var vt = Memory.alloc(0x80);
+        for (var i = 0; i < 16; i++) vt.add(i * 8).writePointer(snsSendState.slotCbs[i]);
+        vt.add(0x48).writePointer(snsSendState.sizeCb);
+        vt.add(0x58).writePointer(snsSendState.writeCb);
+        snsSendState.fakeVt = vt;
+        return true;
+    } catch (e) {
+        snsState.lastError = "fake serializer: " + e;
+        return false;
+    }
+}
+
+function snsAnchorFor(opName) {
+    if (!r3State.cfg || !r3State.cfg.snsTasks) return null;
+    return r3State.cfg.snsTasks[opName] || null;
+}
+
+function snsWriteStdString(addr, value) {
+    var text = String(value || "");
+    if (text.length <= 23) {
+        addr.writeByteArray(new Array(24).fill(0));
+        if (text.length > 0) addr.writeUtf8String(text);
+        addr.add(23).writeU8(text.length);
+        return;
+    }
+    var data = Memory.allocUtf8String(text);
+    addr.writePointer(data);
+    addr.add(8).writeU64(text.length);
+    addr.add(16).writeU64(uint64("0x8000000000000000").add(text.length + 1));
+}
+
+function snsSendRequest(opName, bodyHex) {
+    try {
+        if (!snsEnableEnabled) return JSON.stringify({ ok: false, error: "sns_disabled" });
+        if (!r3ModeActive || !r3State.cfg) return JSON.stringify({ ok: false, error: "r3_not_ready" });
+        var anchor = snsAnchorFor(opName);
+        if (!anchor) return JSON.stringify({ ok: false, error: "not_configured" });
+        var capName = SNS_OP_NAMES[r3State.cfg.snsOpcode[opName]];
+        var seed = (snsState.seeds || {})[capName];
+        // 没有 seed 时尝试从捕获到的真实 closure 现场 clone（RPC 线程调用 native 是安全的；
+        // 绝不能在 slot13 onEnter 里做）。
+        if (!seed) {
+            var capForSeed = snsState.captured[capName];
+            if (capForSeed && capForSeed.closure) {
+                try {
+                    var cloPtr = ptr(capForSeed.closure);
+                    var cvt = readPointerIfReadable(cloPtr);
+                    if (cvt) {
+                        var cloneFnNow = readPointerIfReadable(cvt.add(0x10));
+                        if (snsIsExecInModule(cloneFnNow)) {
+                            var cloned = new NativeFunction(cloneFnNow, "pointer", ["pointer"])(cloPtr);
+                            if (cloned && !cloned.isNull()) {
+                                snsState.seeds = snsState.seeds || {};
+                                snsState.seeds[capName] = cloned;
+                                seed = cloned;
+                            }
+                        }
+                    }
+                } catch (eSeedNow) {
+                    console.log("[sns] lazy seed clone failed: " + eSeedNow);
+                }
+            }
+        }
+        if (!seed) return JSON.stringify({ ok: false, error: "need_prime", op: opName });
+        var bytes = [];
+        try { bytes = hexToByteArray(bodyHex || ""); } catch (e) { bytes = []; }
+        if (!bytes.length) return JSON.stringify({ ok: false, error: "empty_body" });
+        if (!snsEnsureFakeVt()) return JSON.stringify({ ok: false, error: "fake_vt_failed" });
+        var opcode = r3State.cfg.snsOpcode[opName];
+        var url = r3State.cfg.snsSnsUrl[opName];
+        var desc = Memory.alloc(0x38);
+        desc.add(0x00).writeU32(opcode);
+        desc.add(0x04).writeU32(0);
+        desc.add(0x08).writeU32(0);
+        desc.add(0x0c).writeU32(1);
+        desc.add(0x10).writeU32(opcode);
+        desc.add(0x14).writeU32(0);
+        new NativeFunction(baseAddr.add(r3State.cfg.stringCtorAddr), "pointer", ["pointer", "pointer"])(
+            desc.add(0x18), Memory.allocUtf8String(url));
+        desc.add(0x30).writeU8(1);
+        var operatorNew = new NativeFunction(baseAddr.add(r3State.cfg.operatorNewAddr), "pointer", ["size_t"]);
+        var task = operatorNew(anchor.size);
+        if (!task || task.isNull()) throw new Error("operator new failed");
+        new NativeFunction(baseAddr.add(anchor.ctor), "void", ["pointer", "pointer"])(task, desc);
+        var taskVt = task.readPointer();
+        if (!taskVt.equals(baseAddr.add(anchor.vtable))) {
+            throw new Error("task vtable mismatch: " + taskVt + " expect=" + baseAddr.add(anchor.vtable));
+        }
+        // R3 直调 ctor 绕过 factory：把捕获到的路由字段补回 task（slot13 会读 +0x70/+0x74）。
+        var cap = snsState.captured[SNS_OP_NAMES[opcode]];
+        if (cap) {
+            try {
+                if (cap.p70 !== null && cap.p70 !== undefined) task.add(0x70).writeU8(cap.p70);
+                if (cap.p74 !== null && cap.p74 !== undefined) task.add(0x74).writeU32(cap.p74);
+                if (cap.p30 !== null && cap.p30 !== undefined) task.add(0x30).writeU32(cap.p30);
+                if (cap.p31 !== null && cap.p31 !== undefined) task.add(0x31).writeU8(cap.p31);
+                if (cap.p33 !== null && cap.p33 !== undefined) task.add(0x33).writeU8(cap.p33);
+                if (cap.p38) snsWriteStdString(task.add(0x38), cap.p38);
+            } catch (eCopy) {
+                console.log("[sns] copy routing fields failed: " + eCopy);
+            }
+        }
+        snsSendState.protoBytes = bytes;
+        snsSendState.protoLen = bytes.length;
+        snsSendState.sizeCalls = 0;
+        snsSendState.writeCalls = 0;
+        // 合成任务在 slot13 前的内存快照（与真实任务同偏移比对）。
+        var preMem = null;
+        try { preMem = snsHexFromPtr(task, 0x110); } catch (eMem2) { preMem = null; }
+        // 安全路线：继续使用 fake B1 伪 vtable（与文本 R3 同构）；不碰真实 B1
+        // ParseFromArray（4.2.0.17 实测该路线会让微信卡死，已禁用）。
+        task.add(0x78).writePointer(snsSendState.fakeVt);
+        var cloneFn = readPointerIfReadable(baseAddr.add(anchor.closureVtable).add(0x10));
+        if (!snsIsExecInModule(cloneFn)) throw new Error("closure clone fn not executable");
+        var closure = new NativeFunction(cloneFn, "pointer", ["pointer"])(seed);
+        if (!closure || closure.isNull()) throw new Error("closure clone failed");
+        task.add(0x68).writePointer(closure);
+        var id = "sns-" + (++snsSendState.seq) + "-" + Date.now();
+        var req = {
+            id: id,
+            op: opName,
+            task: task.toString(),
+            bodyLen: bytes.length,
+            sentAt: Date.now(),
+            state: "pending",
+            responseHex: null,
+            error: null
+        };
+        snsSendState.pending[task.toString()] = req;
+        snsSendState.requests[id] = req;
+        var slot13 = new NativeFunction(baseAddr.add(r3State.cfg.slot13Addr), "int", ["pointer", "pointer"]);
+        // 优先使用「真实 SNS 任务捕获到的 service」；没有捕获时退回 classA（文本发送服务）。
+        var svc = r3State.classA;
+        var svcSource = "classA";
+        if (cap && cap.service) {
+            try { svc = ptr(cap.service); svcSource = "captured"; } catch (eSvc) { svc = r3State.classA; }
+        }
+        snsSendState.window = true;
+        var pendingBefore = "";
+        var pendingAfter = "";
+        try { pendingBefore = svc.add(0x78).readU64().toString(); } catch (ePb) { }
+        var ret = slot13(svc, task);
+        snsSendState.window = false;
+        try { pendingAfter = svc.add(0x78).readU64().toString(); } catch (ePa) { }
+        var cloneMem = null;
+        try { cloneMem = snsHexFromPtr(closure, 0x80); } catch (eCm) { }
+        var cloneVt = "";
+        try { cloneVt = closure.readPointer().toString(); } catch (eCvt) { }
+        console.log("[sns] send-debug op=" + opName + " svc=" + svcSource +
+            " svcPtr=" + svc + " classA=" + r3State.classA +
+            " ret=" + ret +
+            " sizeCalls=" + (snsSendState.sizeCalls || 0) +
+            " writeCalls=" + (snsSendState.writeCalls || 0) +
+            " pendingBefore=" + pendingBefore +
+            " pendingAfter=" + pendingAfter +
+            " cloneVt=" + cloneVt +
+            " cloneMem=" + (cloneMem || "") +
+            " body=" + bytes.length +
+            " memPre=" + (preMem || ""));
+        try { req.taskId = task.add(0x08).readU32(); } catch (e) { req.taskId = 0; }
+        req.ret = ret;
+        if (req.taskId > 0) snsSendState.pendingById[req.taskId] = req;
+        console.log("[sns] send " + opName + " id=" + id + " body=" + bytes.length + " ret=" + ret +
+            " task=" + task + " taskId=" + req.taskId);
+        return JSON.stringify({ ok: true, requestId: id, task: task.toString(), taskId: req.taskId, ret: ret });
+    } catch (e) {
+        snsState.lastError = "send: " + e;
+        return JSON.stringify({ ok: false, error: "send_failed", message: String(e) });
+    }
+}
+
+// AutoBuffer: ab -> inner; inner+0 -> data ptr; inner+0xC -> u32 len（4.2.0.12 实测）
+function snsReadAutoBuffer(ab) {
+    try {
+        if (!ab || ab.isNull()) return null;
+        var inner = readPointerIfReadable(ab);
+        if (!inner) return null;
+        var data = readPointerIfReadable(inner);
+        if (!data) return null;
+        var len = inner.add(0xC).readU32();
+        if (!len || len > 4 * 1024 * 1024) return null;
+        return { data: data, len: len };
+    } catch (e) {
+        return null;
+    }
+}
+
+// task vtable slot3 = response decoder：x0=task，x1=AutoBuffer*
+function snsInstallDecoders() {
+    if (!r3State.cfg || !r3State.cfg.snsTasks) return 0;
+    var count = 0;
+    for (var key in r3State.cfg.snsTasks) {
+        if (!Object.prototype.hasOwnProperty.call(r3State.cfg.snsTasks, key)) continue;
+        var anchor = r3State.cfg.snsTasks[key];
+        if (!anchor || anchor.decoder === null) continue;
+        (function (opName, off) {
+            try {
+                Interceptor.attach(baseAddr.add(off), {
+                    onEnter: function (args) {
+                        try {
+                            var task = args[0];
+                            if (!task || task.isNull()) return;
+                            var buf = snsReadAutoBuffer(args[1]);
+                            if (!buf) return;
+                            var keyTask = task.toString();
+                            var req = snsSendState.pending[keyTask];
+                            var taskId = 0;
+                            try { taskId = task.add(0x08).readU32(); } catch (eTid) { taskId = 0; }
+                            if (!req && taskId > 0) req = snsSendState.pendingById[taskId];
+                            var hex = snsHexFromPtr(buf.data, buf.len);
+                            console.log("[sns] decoder " + opName + " task=" + keyTask +
+                                " taskId=" + taskId + " len=" + buf.len + " matched=" + !!req);
+                            if (req && hex) {
+                                req.responseHex = hex;
+                                req.responseLen = buf.len;
+                                req.state = "done";
+                                req.doneAt = Date.now();
+                                delete snsSendState.pending[keyTask];
+                                if (req.taskId) delete snsSendState.pendingById[req.taskId];
+                                console.log("[sns] response " + req.op + " id=" + req.id + " len=" + buf.len);
+                                try {
+                                    send({ type: "sns_response", requestId: req.id, op: req.op, len: buf.len });
+                                } catch (eSend) { }
+                            } else {
+                                snsSendState.lastResponses[opName] = { len: buf.len, ts: Date.now() };
+                                if (hex) {
+                                    snsSendState.passive[opName] = { hex: hex, len: buf.len, ts: Date.now() };
+                                }
+                            }
+                        } catch (e) {
+                            snsState.lastError = "decoder: " + e;
+                        }
+                    }
+                });
+                count++;
+            } catch (e2) {
+                snsState.lastError = "attach decoder " + opName + ": " + e2;
+            }
+        })(key, anchor.decoder);
+    }
+    console.log("[sns] response decoders installed: " + count);
+    return count;
+}
+
+function snsInit() {
+    if (!snsEnableEnabled && !snsProbeEnabled) return;
+    if (!r3ModeActive || !r3State.cfg) return;
+    if (snsEnableEnabled) {
+        snsEnsureFakeVt();
+        snsInstallDecoders();
+    }
+    if (snsEnableEnabled || snsProbeEnabled) {
+        snsInstallTimelineBodyHook();
+    }
+    console.log("[sns] init (probe=" + snsProbeEnabled + ", enable=" + snsEnableEnabled + ")");
+}
+
+// bridge RPC：状态/初始化/发送/轮询
+function snsStatus() {
+    var seeds = snsState.seeds || {};
+    var captured = snsState.captured || {};
+    var timelineSeed = !!seeds["mmsnstimeline"];
+    var postSeed = !!seeds["mmsnspost"];
+    // 评论/点赞共用一个 0xD5 句柄；captured 记录或已 clone 的 seed 任一存在即可用。
+    var commentSeed = !!seeds["mmsnscomment"] || !!captured["mmsnscomment"];
+    var out = {
+        ok: true,
+        enabled: snsEnableEnabled,
+        probe: snsProbeEnabled,
+        // bridge 兼容字段：ready/seedReady/writeReady/commentReady/captured（数值）
+        ready: snsEnableEnabled && timelineSeed,
+        seedReady: timelineSeed,
+        writeReady: snsEnableEnabled && postSeed,
+        commentReady: snsEnableEnabled && commentSeed,
+        count: snsState.count,
+        captured: snsState.count,
+        capturedOps: snsState.order.slice(),
+        anchors: {},
+        pending: Object.keys(snsSendState.requests).length,
+        lastError: snsState.lastError
+    };
+    if (r3State.cfg && r3State.cfg.snsTasks) {
+        for (var k in r3State.cfg.snsTasks) {
+            out.anchors[k] = !!r3State.cfg.snsTasks[k];
+        }
+    }
+    for (var i = 0; i < snsState.order.length; i++) {
+        var name = snsState.order[i];
+        var r = snsState.captured[name];
+        // 请求体按 op 名保存（timeline/sync/post），捕获记录按任务名保存
+        // （mmsnstimeline/mmsnssync/mmsnspost）；两者不是同一个 key，必须映射，
+        // 否则 bridge 的 `body_captured` 会误报 false（真机验证 2026-11-08）。
+        var bodyKey = { mmsnstimeline: "timeline", mmsnssync: "sync", mmsnspost: "post" }[name] || null;
+        var bodyHex = bodyKey && snsState.bodies ? snsState.bodies[bodyKey] : null;
+        out[name] = {
+            op: r.opHex,
+            url: r.url,
+            bodyLen: bodyHex ? Math.floor(String(bodyHex).length / 2) : (r.bodyLen || 0),
+            hasSeed: !!r.closureSeed
+        };
+    }
+    return JSON.stringify(out);
+}
+
+function snsPrime() {
+    return JSON.stringify({
+        ok: false,
+        reason: "open_moments_once",
+        captured: snsState.order.slice(),
+        seeds: Object.keys(snsState.seeds || {})
+    });
+}
+
+function snsRequest(opName, bodyHex) {
+    return snsSendRequest(String(opName || ""), String(bodyHex || ""));
+}
+
+function snsPoll(requestId) {
+    var req = snsSendState.requests[String(requestId || "")];
+    if (!req) return JSON.stringify({ ok: false, error: "unknown_request" });
+    var out = {
+        ok: true,
+        requestId: req.id,
+        op: req.op,
+        state: req.state,
+        elapsedMs: Date.now() - req.sentAt,
+        error: req.error
+    };
+    if (req.state === "done") out.responseHex = req.responseHex;
+    return JSON.stringify(out);
+}
+
+function snsLastResponse(opName) {
+    var item = (snsSendState.passive || {})[String(opName || "")];
+    if (!item) return JSON.stringify({ ok: false, error: "no_passive_response" });
+    return JSON.stringify({ ok: true, len: item.len, ts: item.ts, hex: item.hex });
+}
+
+function snsCapturedBody(opName) {
+    var name = String(opName || "timeline");
+    var hex = (snsState.bodies || {})[name];
+    if (!hex) return JSON.stringify({ ok: false });
+    return JSON.stringify({ ok: true, len: hex.length / 2, hex: hex });
+}
+
+function snsClosureVtableFor(name) {
+    if (!r3State.cfg || !r3State.cfg.snsTasks) return null;
+    var taskKey = null;
+    if (name === "mmsnstimeline") taskKey = "timeline";
+    else if (name === "mmsnssync") taskKey = "sync";
+    else if (name === "mmsnspost") taskKey = "post";
+    else if (name === "mmsnscomment") taskKey = "comment";
+    if (!taskKey) return null;
+    var anchor = r3State.cfg.snsTasks[taskKey];
+    return anchor && anchor.closureVtable !== undefined ? anchor.closureVtable : null;
+}
+
+// bridge 重启后恢复样本：导出/导入「service + closure seed + 请求体 + 路由字段」。
+// 指针只在同一个微信进程内有效，导入时用 Process.id/moduleBase 双重校验。
+function snsExportCapture() {
+    try {
+        var out = {
+            ok: true,
+            pid: Process.id,
+            moduleBase: baseAddr.toString(),
+            exportedAt: Date.now(),
+            records: {},
+            bodies: {},
+            seeds: {}
+        };
+        var names = Object.keys(snsState.captured || {});
+        for (var i = 0; i < names.length; i++) {
+            var name = names[i];
+            var r = snsState.captured[name];
+            out.records[name] = {
+                opHex: r.opHex,
+                url: r.url,
+                service: r.service || null,
+                closureSeed: r.closureSeed || null,
+                p70: (r.p70 === undefined ? null : r.p70),
+                p74: (r.p74 === undefined ? null : r.p74),
+                p30: (r.p30 === undefined ? null : r.p30),
+                p31: (r.p31 === undefined ? null : r.p31),
+                p33: (r.p33 === undefined ? null : r.p33),
+                p38: r.p38 || "",
+                serVt: r.serVt || null,
+                taskVtable: r.taskVtable || null
+            };
+        }
+        var bodies = snsState.bodies || {};
+        for (var b in bodies) {
+            if (Object.prototype.hasOwnProperty.call(bodies, b)) out.bodies[b] = bodies[b];
+        }
+        var seeds = snsState.seeds || {};
+        for (var sd in seeds) {
+            if (Object.prototype.hasOwnProperty.call(seeds, sd) && seeds[sd]) {
+                out.seeds[sd] = seeds[sd].toString();
+            }
+        }
+        return JSON.stringify(out);
+    } catch (e) {
+        return JSON.stringify({ ok: false, error: String(e) });
+    }
+}
+
+function snsImportCapture(jsonStr) {
+    try {
+        var d = JSON.parse(String(jsonStr || ""));
+        if (!d || !d.ok) return JSON.stringify({ ok: false, error: "invalid_state" });
+        if (Number(d.pid) !== Process.id || String(d.moduleBase) !== baseAddr.toString()) {
+            return JSON.stringify({ ok: false, error: "process_changed" });
+        }
+        var restored = [];
+        var records = d.records || {};
+        for (var name in records) {
+            if (!Object.prototype.hasOwnProperty.call(records, name)) continue;
+            var r = records[name];
+            if (!r || !r.opHex) continue;
+            var svc = null;
+            if (r.service) {
+                try { svc = ptr(r.service); } catch (eSvc) { svc = null; }
+                if (svc && !Process.findRangeByAddress(svc)) continue;
+            }
+            var seed = null;
+            if (r.closureSeed) {
+                try { seed = ptr(r.closureSeed); } catch (eSeed) { seed = null; }
+                if (!seed || !Process.findRangeByAddress(seed)) continue;
+                var expectedVt = snsClosureVtableFor(name);
+                var actualVt = readPointerIfReadable(seed);
+                if (expectedVt === null || expectedVt === undefined || !actualVt ||
+                    !actualVt.equals(baseAddr.add(expectedVt))) {
+                    continue;
+                }
+            }
+            if (!svc && !seed) continue;
+            snsState.captured[name] = {
+                op: parseInt(r.opHex, 16),
+                opHex: r.opHex,
+                url: r.url || "",
+                ts: d.exportedAt || Date.now(),
+                service: r.service || null,
+                closureSeed: r.closureSeed || null,
+                p70: (r.p70 === undefined ? null : r.p70),
+                p74: (r.p74 === undefined ? null : r.p74),
+                p30: (r.p30 === undefined ? null : r.p30),
+                p31: (r.p31 === undefined ? null : r.p31),
+                p33: (r.p33 === undefined ? null : r.p33),
+                p38: r.p38 || "",
+                serVt: r.serVt || null,
+                taskVtable: r.taskVtable || null
+            };
+            snsState.seeds = snsState.seeds || {};
+            if (seed) snsState.seeds[name] = seed;
+            restored.push(name);
+        }
+        var bodies = d.bodies || {};
+        snsState.bodies = snsState.bodies || {};
+        for (var b in bodies) {
+            if (Object.prototype.hasOwnProperty.call(bodies, b) && typeof bodies[b] === "string" && bodies[b].length > 0) {
+                snsState.bodies[b] = bodies[b];
+            }
+        }
+        snsState.order = restored.slice();
+        snsState.count = restored.length;
+        return JSON.stringify({ ok: true, restored: restored });
+    } catch (e) {
+        return JSON.stringify({ ok: false, error: String(e) });
+    }
+}
+
+function snsMedia() {
+    return JSON.stringify({ ok: false, error: "not_implemented" });
+}
+
 function r3StartSlot13Capture(quiet) {
     if (r3State.slot13Hooked) return;
     if (!r3State.cfg) return;
@@ -2850,151 +3682,98 @@ function r3StartSlot13Capture(quiet) {
                 try {
                     var task = args[1];
                     if (!r3IsHeapPtr(task)) return;
-                    r3State.slot13Calls++;
                     var op = task.add(0xC).readU32();
-                    r3State.slot13OpCounts[op] = (r3State.slot13OpCounts[op] || 0) + 1;
-                    // 诊断/取证：只记录 appmsg/非 newsendmsg 任务，避免在高频文本
-                    // 发送/启动同步流量里调用 JS/native（曾导致 bridge 启动卡住）。
-                    if (op !== 0x20A) {
-                        try {
-                            var vt = task.readPointer().toString();
-                            var url = readStdStringCompat(task.add(0x18), 512) || "";
-                            var closure2 = task.add(0x68).readPointer();
-                            var cvt2 = (closure2 && !closure2.isNull()) ? closure2.readPointer().toString() : "";
-                            var serVt = "";
-                            try { serVt = task.add(0x78).readPointer().toString(); } catch (e2) { serVt = ""; }
-                            var sig = op + "|" + vt + "|" + url + "|" + cvt2;
-                            if (!r3State.taskSeen[sig]) {
-                                r3State.taskSeen[sig] = true;
-                                // 不能在 slot13 onEnter 里 console.log（Frida IPC 可能与
-                                // bridge 的同步 RPC 互相等待）；交给 0ms 日志 flush 输出。
-                                if (r3State.pendingCaptures.length < 8) {
-                                    var line = "[capture] slot13 task=" + task +
-                                        " op=0x" + op.toString(16) + " vtable=" + vt + " url=" + url +
-                                        " closureVtable=" + cvt2 + " serVt=" + serVt;
-                                    try {
-                                        var vtMod = Process.findModuleByAddress(task.readPointer());
-                                        if (vtMod) line += " vtModule=" + vtMod.name + "@0x" + vtMod.base.toString(16);
-                                        var cvtMod = Process.findModuleByAddress(ptr(cvt2));
-                                        if (cvtMod) line += " cvtModule=" + cvtMod.name + "@0x" + cvtMod.base.toString(16);
-                                    } catch (eMod) { }
-                                    r3State.pendingCaptures.push(line);
-                                    r3ScheduleLogFlush();
-                                    if (op === 0x351) {
-                                        try {
-                                            var ser = task.add(0x78);
-                                            var sVt = ser.readPointer();
-                                            var sizeFn = new NativeFunction(sVt.add(0x48).readPointer(), 'uint32', ['pointer']);
-                                            var protoLen = sizeFn(ser);
-                                            var protoHex = "";
-                                            if (protoLen > 0 && protoLen < 65536) {
-                                                var outBuf = Memory.alloc(protoLen);
-                                                var writeFn = new NativeFunction(sVt.add(0x58).readPointer(), 'pointer', ['pointer', 'pointer']);
-                                                writeFn(ser, outBuf);
-                                                var arr = new Uint8Array(outBuf.readByteArray(protoLen));
-                                                for (var bi = 0; bi < arr.length; bi++) {
-                                                    protoHex += ("0" + arr[bi].toString(16)).slice(-2);
-                                                }
-                                            }
-                                            var closure3 = task.add(0x68).readPointer();
-                                            var seedHex = "";
-                                            if (r3IsHeapPtr(closure3)) {
-                                                var cvt3 = closure3.readPointer();
-                                                var cloneFn3 = cvt3.add(0x10).readPointer();
-                                                var clone3 = new NativeFunction(cloneFn3, 'pointer', ['pointer'])(closure3);
-                                                if (clone3 && !clone3.isNull()) {
-                                                    r3State.appmsgSeed = clone3;
-                                                    seedHex = clone3.toString();
-                                                }
-                                            }
-                                            var extra = "";
-                                            try {
-                                                extra = " t10=" + task.add(0x10).readU32() +
-                                                    " b31=" + task.add(0x31).readU8() +
-                                                    " b33=" + task.add(0x33).readU8() +
-                                                    " s38=" + JSON.stringify(readStdStringCompat(task.add(0x38), 512) || "") +
-                                                    " b70=" + task.add(0x70).readU8() +
-                                                    " u74=" + task.add(0x74).readU32() +
-                                                    " b8vt=" + task.add(0xB8).readPointer();
-                                            } catch (eFields) { extra = " fields_error=" + eFields.message; }
-                                            r3State.pendingCaptures.push("[capture] sendpat protoLen=" + protoLen +
-                                                " protoHex=" + protoHex + " seed=" + seedHex + extra);
-                                            r3ScheduleLogFlush();
-                                        } catch (ePat) {
-                                            r3State.pendingCaptures.push("[capture] sendpat inspect failed: " + ePat.message);
-                                            r3ScheduleLogFlush();
-                                        }
-                                    }
-                                    if (op === 0x7F) {
-                                        try {
-                                            var vClosure = task.add(0x68).readPointer();
-                                            var vCvt = (vClosure && !vClosure.isNull()) ? vClosure.readPointer() : ptr(0);
-                                            try {
-                                                var voser = task.add(0x78);
-                                                var vosVt = voser.readPointer();
-                                                var vosSizeFn = new NativeFunction(vosVt.add(0x48).readPointer(), 'uint32', ['pointer']);
-                                                var vosLen = vosSizeFn(voser);
-                                                if (vosLen > 0 && vosLen < 65536) {
-                                                    var vosBuf = Memory.alloc(vosLen);
-                                                    var vosWriteFn = new NativeFunction(vosVt.add(0x58).readPointer(), 'pointer', ['pointer', 'pointer']);
-                                                    vosWriteFn(voser, vosBuf);
-                                                    var vosArr = new Uint8Array(vosBuf.readByteArray(vosLen));
-                                                    var vosHex = "";
-                                                    for (var vi = 0; vi < vosArr.length; vi++) vosHex += ("0" + vosArr[vi].toString(16)).slice(-2);
-                                                    var vhHex = r3VoiceHeaderHexFromProto(vosHex);
-                                                    if (vhHex) {
-                                                        r3State.voiceHeaderHex = vhHex;
-                                                        r3State.pendingVoiceHeaderPersist = vhHex;
-                                                    }
-                                                }
-                                            } catch (eVP) { }
-                                            r3State.pendingCaptures.push("[capture] voice task=" + task +
-                                                " vtable=" + vt + " closure=" + vClosure + " cvt=" + vCvt +
-                                                " sizeGuess=0x168");
-                                            if (r3IsHeapPtr(vClosure) && r3State.cfg &&
-                                                r3State.cfg.voiceClosureVtable !== null &&
-                                                vCvt.equals(baseAddr.add(r3State.cfg.voiceClosureVtable))) {
-                                                var vCloneFn = vCvt.add(0x10).readPointer();
-                                                var vClone = new NativeFunction(vCloneFn, 'pointer', ['pointer'])(vClosure);
-                                                if (vClone && !vClone.isNull()) {
-                                                    r3State.voiceSeed = vClone;
-                                                    r3State.pendingVoiceSeedPersist = vClone.toString();
-                                                    r3State.pendingCaptures.push("[capture] voice seed=" + vClone);
-                                                }
-                                            }
-                                            r3ScheduleLogFlush();
-                                        } catch (eVC) {
-                                            r3State.pendingCaptures.push("[capture] voice inspect failed: " + eVC.message);
-                                            r3ScheduleLogFlush();
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e4) {
-                            console.log("[capture] task inspect failed: " + e4.message);
+
+                    // 1) 朋友圈请求（timeline 0xd3 / sync 0xd6 / post 0xd1 / comment 0xd5）：
+                    //    只在 SNS 开启时捕获。0xd5 同时承载评论与点赞，捕获一次即可让
+                    //    bridge 的 /sns/comment、/sns/like 复用同一个闭包句柄；用户需在
+                    //    微信里手动点一次评论或赞来完成这一步。
+                    if ((snsEnableEnabled || snsProbeEnabled) && !snsSendState.window &&
+                        (op === 0xd3 || op === 0xd6 || op === 0xd1 || op === 0xd5)) {
+                        var name = SNS_OP_NAMES[op];
+                        if (name) {
+                            var snsUrl = "/cgi-bin/micromsg-bin/mmsnspost";
+                            if (op === 0xd3) snsUrl = "/cgi-bin/micromsg-bin/mmsnstimeline";
+                            else if (op === 0xd6) snsUrl = "/cgi-bin/micromsg-bin/mmsnssync";
+                            else if (op === 0xd5) snsUrl = "/cgi-bin/micromsg-bin/mmsnscomment";
+                            snsCaptureTask(task, op, snsUrl, args[0]);
                         }
                         return;
                     }
-                    var closure = task.add(0x68).readPointer();
-                    if (!r3IsHeapPtr(closure)) return;
-                    var cvt = closure.readPointer();
-                    if (!cvt.equals(baseAddr.add(r3State.cfg.closureVtable))) return;
-                    if (r3State.captureSeen[closure.toString()]) return;
-                    r3State.captureSeen[closure.toString()] = true;
-                    var cloneFn = cvt.add(0x10).readPointer();
-                    var clone = new NativeFunction(cloneFn, 'pointer', ['pointer'])(closure);
-                    if (!clone || clone.isNull()) return;
-                    r3State.capturedCount++;
-                    if (!r3State.seed) r3State.seed = clone;
-                    if (r3State.clones.length < r3State.cfg.maxClones) r3State.clones.push(clone);
-                    r3State.pendingLog = "[+] R3: slot13 捕获 newsendmsg 闭包 " + closure + " -> clone " + clone +
-                        " (captured=" + r3State.capturedCount + ", kept=" + r3State.clones.length + ")";
-                    r3State.pendingSeedPersist = clone.toString();
-                    r3ScheduleFlush();
-                    r3ScheduleLogFlush();
-                } catch (e) {
-                    r3State.lastError = "slot13 capture: " + e.message;
-                }
+
+                    // 2) 文本发送（newsendmsg，opcode 0x20A）：UI 提交时兜底克隆闭包，
+                    //    与 r3ConsiderTask 的 map 扫描互补（2026-11-08 恢复：
+                    //    SNS 捕获改造时这里曾只剩 SNS 分支，导致手动发送捕获失效）。
+                    if (op === 0x20A) {
+                        var closure = task.add(0x68).readPointer();
+                        if (!r3IsHeapPtr(closure)) return;
+                        var cvt = closure.readPointer();
+                        if (!cvt.equals(baseAddr.add(r3State.cfg.closureVtable))) return;
+                        var key = closure.toString();
+                        if (r3State.captureSeen[key]) return;
+                        r3State.captureSeen[key] = true;
+                        var cloneFn = cvt.add(0x10).readPointer();
+                        var clone = new NativeFunction(cloneFn, 'pointer', ['pointer'])(closure);
+                        if (!clone || clone.isNull()) return;
+                        r3State.capturedCount++;
+                        if (!r3State.seed) r3State.seed = clone;
+                        if (r3State.clones.length < r3State.cfg.maxClones) r3State.clones.push(clone);
+                        r3State.pendingSeedPersist = clone.toString();
+                        if (r3State.pendingCaptures.length < 8) {
+                            r3State.pendingCaptures.push("[capture] slot13 newsendmsg 闭包 " +
+                                closure + " -> clone " + clone);
+                        }
+                        r3ScheduleFlush();
+                        r3ScheduleLogFlush();
+                        return;
+                    }
+
+                    // 3) 语音发送（uploadvoice，opcode 0x7F）：手动发一条语音时克隆真实
+                    //    uploadvoice task 的 hand-off 闭包，并从内嵌 serializer 提取
+                    //    voice header；两者都会持久化，供 R3 语音发送复用。
+                    if (op === 0x7F && r3State.cfg.voiceSend &&
+                        r3State.cfg.voiceClosureVtable !== null) {
+                        var vClosure = task.add(0x68).readPointer();
+                        if (!r3IsHeapPtr(vClosure)) return;
+                        var vCvt = vClosure.readPointer();
+                        if (!vCvt.equals(baseAddr.add(r3State.cfg.voiceClosureVtable))) return;
+                        var vKey = "v:" + vClosure.toString();
+                        if (r3State.captureSeen[vKey]) return;
+                        r3State.captureSeen[vKey] = true;
+                        try {
+                            var voser = task.add(0x78);
+                            var vosVt = voser.readPointer();
+                            var vosSizeFn = new NativeFunction(vosVt.add(0x48).readPointer(), 'uint32', ['pointer']);
+                            var vosLen = vosSizeFn(voser);
+                            if (vosLen > 0 && vosLen < 65536) {
+                                var vosBuf = Memory.alloc(vosLen);
+                                var vosWriteFn = new NativeFunction(vosVt.add(0x58).readPointer(), 'pointer', ['pointer', 'pointer']);
+                                vosWriteFn(voser, vosBuf);
+                                var vosArr = new Uint8Array(vosBuf.readByteArray(vosLen));
+                                var vosHex = "";
+                                for (var vi = 0; vi < vosArr.length; vi++) {
+                                    vosHex += ("0" + vosArr[vi].toString(16)).slice(-2);
+                                }
+                                var vhHex = r3VoiceHeaderHexFromProto(vosHex);
+                                if (vhHex) {
+                                    r3State.voiceHeaderHex = vhHex;
+                                    r3State.pendingVoiceHeaderPersist = vhHex;
+                                }
+                            }
+                        } catch (eVP) { }
+                        var vCloneFn = vCvt.add(0x10).readPointer();
+                        var vClone = new NativeFunction(vCloneFn, 'pointer', ['pointer'])(vClosure);
+                        if (!vClone || vClone.isNull()) return;
+                        r3State.voiceSeed = vClone;
+                        r3State.pendingVoiceSeedPersist = vClone.toString();
+                        if (r3State.pendingCaptures.length < 8) {
+                            r3State.pendingCaptures.push("[capture] slot13 voice 闭包 " +
+                                vClosure + " -> clone " + vClone);
+                        }
+                        r3ScheduleLogFlush();
+                        return;
+                    }
+                } catch (e) { }
             }
         });
         r3State.slot13Hooked = true;
@@ -3142,7 +3921,8 @@ function r3Init() {
     if (!r3Ready()) return;
     r3BuildFakeSerializer();
     r3TryResolve(true);
-    if (r3State.cfg.slot13Capture) r3StartSlot13Capture();
+    if (r3State.cfg.slot13Capture || snsProbeEnabled) r3StartSlot13Capture();
+    if (snsProbeEnabled || snsEnableEnabled) snsInit();
     if (r3State.cfg.patSend) r3StartPatRequestCapture();
     if (r3State.cfg.patSend) r3StartPatBuilderCapture();
     if (r3State.cfg.closureCapture) r3StartCaptureLoop();
@@ -3621,6 +4401,9 @@ function r3Status() {
 // 密钥只用页 1 试解密校验（SQLite format 3\0），不依赖 HMAC 实现。
 // 契约见 docs/architecture.md §3。
 var contactDirectoryEnabled = "{{.contactDirectory}}" === "true";
+// SNS DB 兜底也需要 CCCrypt/PBKDF2 key 捕获：contact 关闭时不能直接停掉 hook。
+// snsEnable=true 时 timeline 会做 DB 评论补全，因此同样需要 key 捕获。
+var dbKeyCaptureEnabled = contactDirectoryEnabled || snsDbReadEnabled || snsProbeEnabled || snsEnableEnabled;
 var CONTACT_PAGE_SIZE = 4096;
 var CONTACT_RESERVE = 80;
 var CONTACT_CT_LEN = CONTACT_PAGE_SIZE - CONTACT_RESERVE; // 4016
@@ -3723,7 +4506,7 @@ function contactNoteCandidate(hex, source) {
 
 function contactCaptureAesKey(keyPtr, keyLen, source) {
     try {
-        if (!contactDirectoryEnabled || contactState.inCrypto) return;
+        if (!dbKeyCaptureEnabled || contactState.inCrypto) return;
         if (keyLen !== 32) return;
         contactNoteCandidate(contactPtrHex(keyPtr, 32), source);
     } catch (e) {
@@ -3733,8 +4516,8 @@ function contactCaptureAesKey(keyPtr, keyLen, source) {
 
 function contactSetupHooks() {
     if (contactState.installed) return;
-    if (!contactDirectoryEnabled) {
-        console.log("[contact] 通讯录读取未启用（版本 JSON contactDirectory != true）");
+    if (!dbKeyCaptureEnabled) {
+        console.log("[contact] DB key 捕获未启用（contactDirectory/snsDbRead/snsProbe 均为 false）");
         return;
     }
     try {
@@ -3884,23 +4667,23 @@ function contactResolveKeyByPage1(page1) {
         if (!page1 || page1.length < CONTACT_PAGE_SIZE) return null;
         var salt = contactBytesToHex(page1.subarray(0, 16));
         var cached = contactState.keysBySalt[salt];
-        if (cached && contactPage1MatchesKey(cached, page1)) return { salt: salt, keyHex: cached };
+        if (cached && contactPage1MatchesKey(cached, page1)) return { salt: salt, keyHex: cached, source: "cached" };
         var provided = contactState.providedKeys[salt];
         if (provided && contactPage1MatchesKey(provided, page1)) {
             contactState.keysBySalt[salt] = provided;
-            return { salt: salt, keyHex: provided };
+            return { salt: salt, keyHex: provided, source: "provided" };
         }
         var derived = contactState.derivedBySalt[salt];
         if (derived && contactPage1MatchesKey(derived, page1)) {
             contactState.keysBySalt[salt] = derived;
-            return { salt: salt, keyHex: derived };
+            return { salt: salt, keyHex: derived, source: "derived" };
         }
         for (var i = 0; i < contactState.candidates.length; i++) {
             var candidate = contactState.candidates[i];
             if (contactPage1MatchesKey(candidate, page1)) {
                 contactState.keysBySalt[salt] = candidate;
                 contactDebug("页 1 校验通过 salt=" + salt.substring(0, 8) + " source=candidate");
-                return { salt: salt, keyHex: candidate };
+                return { salt: salt, keyHex: candidate, source: "candidate" };
             }
         }
         if (contactState.passphraseHex) {
@@ -3908,7 +4691,7 @@ function contactResolveKeyByPage1(page1) {
             if (k && contactPage1MatchesKey(k, page1)) {
                 contactState.keysBySalt[salt] = k;
                 contactDebug("页 1 校验通过 salt=" + salt.substring(0, 8) + " source=passphrase");
-                return { salt: salt, keyHex: k };
+                return { salt: salt, keyHex: k, source: "passphrase" };
             }
         }
         return null;
@@ -4056,11 +4839,12 @@ function contactTempDir(dbStoragePath) {
     return null;
 }
 
-function contactWriteTempDb(bytes, dbStoragePath) {
+function contactWriteTempDb(bytes, dbStoragePath, tag) {
     try {
         var dir = contactTempDir(dbStoragePath);
         if (!dir) return null;
-        var path = dir + "/wechatai-contact-" + Process.id + "-" + Date.now().toString(36) + ".db";
+        var prefix = tag ? String(tag) : "contact";
+        var path = dir + "/wechatai-" + prefix + "-" + Process.id + "-" + Date.now().toString(36) + ".db";
         File.writeAllBytes(path, bytes.buffer);
         return path;
     } catch (e) {
@@ -4089,6 +4873,241 @@ function contactCleanupTempDb(path) {
     contactUnlink(path + "-shm");
     contactUnlink(path + "-journal");
 }
+
+// ===================== SNS sns.db 只读兜底（P0 探针） =====================
+// 背景：Mac 微信 UI 不会发 0xd2 mmsnsobjectdetail，原生对象详情不可用。
+// sns.db 是 SQLCipher4（4096 页、reserve 80、salt 16、PBKDF2-HMAC-SHA512
+// 256000、AES-256-CBC），与 contact/session 同一套格式；复用上面的通用
+// key 捕获 / 页解密 / WAL 合并 / 临时库逻辑，只读、不写微信 DB。
+// 对外 RPC 只返回脱敏 schema/评论，绝不返回 key（key 由 bridge 落盘后剥离）。
+var SNS_DB_MAX_BYTES = 64 * 1024 * 1024;
+
+function snsDbReadAllowed() {
+    // timeline 评论补全是 SNS 读链路的一部分：snsEnable=true 时默认启用；
+    // snsDbRead=true 让「只读 DB、不开原生 SNS 通道」时也能用；snsProbe 为排障强制。
+    return snsDbReadEnabled || snsProbeEnabled || snsEnableEnabled;
+}
+
+function snsDbPath(dbStoragePath) {
+    var base = String(dbStoragePath || "").replace(/\/+$/, "");
+    if (!base) return null;
+    return base + "/sns/sns.db";
+}
+
+// 只返回计数，不含 key/salt 本身。
+function snsDbKeyStatus() {
+    try {
+        return {
+            installed: !!contactState.installed,
+            validated: Object.keys(contactState.keysBySalt).length,
+            provided: Object.keys(contactState.providedKeys).length,
+            candidates: contactState.candidates.length,
+            passphrase: !!contactState.passphraseHex
+        };
+    } catch (e) {
+        return { installed: false, error: String(e) };
+    }
+}
+
+// 解密 sns.db（含当前代 WAL）到容器 tmp，返回临时明文库路径与元数据。
+// 调用方必须在 finally 中 contactCleanupTempDb(tempPath)。
+function snsDbOpenPlaintext(dbStoragePath) {
+    var started = Date.now();
+    try {
+        if (!snsDbReadAllowed()) return { ok: false, reason: "unsupported" };
+        if (!contactState.installed) contactSetupHooks();
+        if (!contactState.installed || !contactState.ccCrypt) {
+            return { ok: false, reason: "unsupported", key_status: snsDbKeyStatus() };
+        }
+        var dbPath = snsDbPath(dbStoragePath);
+        if (!dbPath) return { ok: false, reason: "db_missing" };
+        var dbBytes;
+        try {
+            dbBytes = new Uint8Array(File.readAllBytes(dbPath));
+        } catch (eDb) {
+            return { ok: false, reason: "db_missing" };
+        }
+        if (dbBytes.length < CONTACT_PAGE_SIZE) return { ok: false, reason: "db_too_small" };
+        if (dbBytes.length > SNS_DB_MAX_BYTES) return { ok: false, reason: "db_too_large" };
+        var resolved = contactResolveKeyByPage1(dbBytes.subarray(0, CONTACT_PAGE_SIZE));
+        if (!resolved) {
+            return { ok: false, reason: "key_missing", key_status: snsDbKeyStatus() };
+        }
+        var dec = contactDecryptDatabase(dbBytes, resolved.keyHex, dbPath);
+        if (!dec || !dec.pages) return { ok: false, reason: "decrypt_failed" };
+        var tmpPath = contactWriteTempDb(dec.bytes, dbStoragePath, "sns");
+        if (!tmpPath) return { ok: false, reason: "decrypt_failed" };
+        return {
+            ok: true,
+            tempPath: tmpPath,
+            dbPath: dbPath,
+            keyHex: resolved.keyHex,
+            salt: resolved.salt,
+            keySource: resolved.source || "candidate",
+            walApplied: dec.walApplied,
+            pages: dec.pages,
+            decryptMs: Date.now() - started
+        };
+    } catch (e) {
+        contactState.lastError = String(e);
+        return { ok: false, reason: "decrypt_failed", key_status: snsDbKeyStatus() };
+    }
+}
+
+// P0：只查表名/建表 SQL/COUNT(*)/page_count，不 SELECT 内容；查完立即删临时库。
+
+// P1：按 signed feed_id 列表查 SnsMessage_tmp3 的评论行（只读）。
+// feedIDsSignedJSON 是 JSON 字符串数组：feed_id 在 SQLite 是 64 位有符号整数
+// （uint64 - 2^64），不能先转 JS Number（>2^53 会丢精度）；这里只接受
+// 十进制字符串并用白名单校验后拼进 SQL 字面量。
+// 返回字段与 bridge 的 snsCommentJSON 映射对齐；不返回 key/正文以外的隐私字段。
+var SNS_DB_COMMENTS_MAX_IDS = 50;
+var SNS_DB_COMMENTS_MAX_ROWS = 500;
+
+function snsDbComments(dbStoragePath, feedIDsSignedJSON) {
+    if (!snsDbReadAllowed()) return JSON.stringify({ ok: false, reason: "unsupported" });
+    var ids = [];
+    try {
+        var arr = JSON.parse(String(feedIDsSignedJSON || "[]"));
+        if (!Array.isArray(arr)) return JSON.stringify({ ok: false, reason: "bad_request" });
+        for (var i = 0; i < arr.length && ids.length < SNS_DB_COMMENTS_MAX_IDS; i++) {
+            var s = String(arr[i] === null || arr[i] === undefined ? "" : arr[i]).trim();
+            if (/^-?[0-9]{1,20}$/.test(s)) ids.push(s);
+        }
+    } catch (e) {
+        return JSON.stringify({ ok: false, reason: "bad_request" });
+    }
+    if (ids.length === 0) return JSON.stringify({ ok: true, rows: [], count: 0, truncated: false });
+    var opened = snsDbOpenPlaintext(dbStoragePath);
+    if (!opened.ok) {
+        return JSON.stringify({
+            ok: false,
+            reason: opened.reason,
+            key_status: opened.key_status || snsDbKeyStatus()
+        });
+    }
+    var db = null;
+    try {
+        db = SqliteDatabase.open(opened.tempPath);
+        // comment_id/comment64_id 用 CAST(... AS TEXT) 返回十进制字符串，避免 Frida
+        // 把 >2^53 的 id 转成不精确的 JS Number；feed_id 同理用于分组。
+        var sql = "SELECT CAST(feed_id AS TEXT), content, from_username, from_nickname, " +
+            "to_username, to_nickname, create_time, CAST(comment_id AS TEXT), " +
+            "CAST(comment64_id AS TEXT), type, is_relative_me, del_status, " +
+            "hex(serialized_comment_buf), hex(serialized_ref_buf) " +
+            "FROM SnsMessage_tmp3 WHERE feed_id IN (" + ids.join(",") + ") " +
+            "ORDER BY create_time ASC, local_id ASC LIMIT " + (SNS_DB_COMMENTS_MAX_ROWS + 1) + ";";
+        var stmt = db.prepare(sql);
+        var rows = [];
+        var row = stmt.step();
+        while (row) {
+            rows.push({
+                feed_id: row[0] ? String(row[0]) : "",
+                content: row[1] ? String(row[1]) : "",
+                from_username: row[2] ? String(row[2]) : "",
+                from_nickname: row[3] ? String(row[3]) : "",
+                to_username: row[4] ? String(row[4]) : "",
+                to_nickname: row[5] ? String(row[5]) : "",
+                create_time: Number(row[6]) || 0,
+                comment_id: row[7] ? String(row[7]) : "",
+                comment64_id: row[8] ? String(row[8]) : "",
+                type: Number(row[9]) || 0,
+                is_relative_me: Number(row[10]) || 0,
+                del_status: Number(row[11]) || 0,
+                serialized_comment_buf_hex: row[12] ? String(row[12]) : "",
+                serialized_ref_buf_hex: row[13] ? String(row[13]) : ""
+            });
+            row = stmt.step();
+        }
+        var truncated = rows.length > SNS_DB_COMMENTS_MAX_ROWS;
+        if (truncated) rows = rows.slice(0, SNS_DB_COMMENTS_MAX_ROWS);
+        var result = {
+            ok: true,
+            generated_at: Date.now(),
+            count: rows.length,
+            truncated: truncated,
+            rows: rows,
+            keys: {}
+        };
+        result.keys.sns = { salt: opened.salt, key: opened.keyHex };
+        return JSON.stringify(result);
+    } catch (e) {
+        return JSON.stringify({ ok: false, reason: "schema_unsupported", message: String(e) });
+    } finally {
+        try { if (db) db.close(); } catch (eClose) { }
+        contactCleanupTempDb(opened.tempPath);
+    }
+}
+
+function snsDbSchema(dbStoragePath) {
+    var started = Date.now();
+    var opened = snsDbOpenPlaintext(dbStoragePath);
+    if (!opened.ok) {
+        return JSON.stringify({
+            ok: false,
+            reason: opened.reason,
+            key_source: null,
+            decrypt_ms: 0,
+            key_status: opened.key_status || snsDbKeyStatus()
+        });
+    }
+    var db = null;
+    try {
+        db = SqliteDatabase.open(opened.tempPath);
+        var tables = [];
+        var stmt = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name;");
+        var row = stmt.step();
+        while (row) {
+            var name = row[0] ? String(row[0]) : "";
+            var sql = row[1] ? String(row[1]) : "";
+            if (name && name.indexOf("sqlite_") !== 0) {
+                var rows = -1;
+                try {
+                    var escaped = name.replace(/"/g, '""');
+                    var countStmt = db.prepare('SELECT COUNT(*) FROM "' + escaped + '";');
+                    var countRow = countStmt.step();
+                    if (countRow) rows = Number(countRow[0]) || 0;
+                } catch (eCount) {
+                    rows = -1;
+                }
+                tables.push({ name: name, sql: sql, rows: rows });
+            }
+            row = stmt.step();
+        }
+        var pageCount = 0;
+        try {
+            var pcRow = db.prepare("PRAGMA page_count;").step();
+            if (pcRow) pageCount = Number(pcRow[0]) || 0;
+        } catch (ePc) { }
+        var result = {
+            ok: true,
+            generated_at: Date.now(),
+            key_source: opened.keySource,
+            decrypt_ms: opened.decryptMs,
+            query_ms: Math.max(0, Date.now() - started - opened.decryptMs),
+            wal_applied: opened.walApplied,
+            pages: opened.pages,
+            page_count: pageCount,
+            tables: tables,
+            key_status: snsDbKeyStatus(),
+            keys: {}
+        };
+        // key 只交给 bridge 落盘（响应前剥离）；RPC 直连也不打印。
+        result.keys.sns = { salt: opened.salt, key: opened.keyHex };
+        return JSON.stringify(result);
+    } catch (e) {
+        return JSON.stringify({
+            ok: false,
+            reason: "query_failed",
+            message: String(e),
+            key_status: snsDbKeyStatus()
+        });
+    } finally {
+        try { if (db) db.close(); } catch (eClose) { }
+        contactCleanupTempDb(opened.tempPath);
+    }
+}
+
 
 // 群成员「群昵称」解析：chat_room.ext_buffer 是 protobuf：
 //   field 1 (repeated) Member { 1: username, 2: group_nickname, 3: flags(varint), 4: inviter }
@@ -4385,9 +5404,20 @@ rpc.exports = {
     r3Status: r3Status,
     r3ScanOnce: r3ScanOnce,
     r3MapDump: r3MapDump,
+    snsStatus: snsStatus,
+    snsPrime: snsPrime,
+    snsRequest: snsRequest,
+    snsPoll: snsPoll,
+    snsLastResponse: snsLastResponse,
+    snsCapturedBody: snsCapturedBody,
+    snsExportCapture: snsExportCapture,
+    snsImportCapture: snsImportCapture,
+    snsMedia: snsMedia,
     getContactDirectory: getContactDirectory,
     setDbKeys: setDbKeys,
     getDbKeyStatus: getDbKeyStatus,
+    snsDbSchema: snsDbSchema,
+    snsDbComments: snsDbComments,
 };
 
 // -------------------------发送图片消息分区-------------------------

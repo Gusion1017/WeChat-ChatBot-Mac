@@ -152,7 +152,7 @@ final class WorkingHoursEditorTests: XCTestCase {
         XCTAssertTrue(overnight.summaryText.contains(overnight.timeRangeText))
 
         let noWeekdays = WorkingHours(enabled: true, weekdays: [])
-        XCTAssertEqual(noWeekdays.summaryText, L("未选择任何星期，不会生效"))
+        XCTAssertEqual(noWeekdays.summaryText, L("未选择星期，不会生效"))
     }
 
     func testMinuteTextClampsOutOfRangeValues() {

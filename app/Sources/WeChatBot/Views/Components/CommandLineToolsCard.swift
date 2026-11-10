@@ -25,10 +25,12 @@ struct CommandLineToolsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             header
-            Text(L("Hook 安装与状态检测需要 Xcode Command Line Tools（提供 python3 与 otool）。"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if status?.isReady != true {
+                Text(L("Hook 安装需要 Xcode Command Line Tools。"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             details
             if let noticeMessage {
                 InlineNotice(kind: noticeKind, message: noticeMessage)
@@ -57,8 +59,11 @@ struct CommandLineToolsCard: View {
         HStack(spacing: 10) {
             IconTile(symbol: "hammer.fill", tint: headerTint, size: 28)
             VStack(alignment: .leading, spacing: 1) {
-                Text(L("运行环境"))
-                    .font(.callout.weight(.medium))
+                HStack(spacing: 3) {
+                    Text(L("运行环境"))
+                        .font(.callout.weight(.medium))
+                    HelpTip(text: "Command Line Tools 提供 python3 与 otool，用于安装 Hook 与检测微信版本。")
+                }
                 Text(L("Command Line Tools"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -69,7 +74,7 @@ struct CommandLineToolsCard: View {
                 color: statusColor,
                 symbol: statusSymbol
             )
-            .accessibilityLabel(L("Command Line Tools 状态") + "：" + L(statusText))
+            .accessibilityLabel(L("Command Line Tools 状态") + L10n.keyValueSeparator + L(statusText))
         }
     }
 
@@ -89,7 +94,7 @@ struct CommandLineToolsCard: View {
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .accessibilityLabel(L("开发者目录") + "：" + developer)
+                        .accessibilityLabel(L("开发者目录") + L10n.keyValueSeparator + developer)
                 }
             }
             .accessibilityElement(children: .contain)

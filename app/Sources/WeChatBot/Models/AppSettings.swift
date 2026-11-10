@@ -131,9 +131,9 @@ enum SleepPreventionMode: String, Codable, CaseIterable, Hashable, Identifiable 
 
     var detail: String {
         switch self {
-        case .never: L("允许系统按节能设置进入空闲睡眠。")
-        case .externalPowerOnly: L("仅接入电源适配器时阻止系统空闲睡眠；使用电池时允许系统按节能设置睡眠。")
-        case .always: L("即使使用电池也阻止系统空闲睡眠。")
+        case .never: L("不阻止系统空闲睡眠。")
+        case .externalPowerOnly: L("仅接入电源时阻止空闲睡眠；使用电池时不阻止。")
+        case .always: L("电池供电时也阻止空闲睡眠。")
         }
     }
 }

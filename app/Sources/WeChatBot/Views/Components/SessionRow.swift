@@ -63,10 +63,10 @@ struct SessionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(isSelected ? "再次点击收起当前对话" : "打开会话")
+        .help(L(isSelected ? "再次点击收起当前对话" : "打开会话"))
         .accessibilityLabel("\(conversation.displayTitle)，\(conversation.kind.label)")
         .accessibilityValue(accessibilityValue)
-        .accessibilityHint(isSelected ? "再次点击收起当前对话" : "打开会话")
+        .accessibilityHint(L(isSelected ? "再次点击收起当前对话" : "打开会话"))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -84,9 +84,11 @@ struct SessionRow: View {
     }
 
     private var accessibilityValue: String {
-        var parts = [conversation.unreadCount > 0 ? "\(conversation.unreadCount) 条未读" : "无未读"]
-        if !conversation.aiEnabled { parts.append("AI 自动回复已关闭") }
-        return parts.joined(separator: "，")
+        var parts = [conversation.unreadCount > 0
+            ? Lf("%d 条未读", conversation.unreadCount)
+            : L("无未读")]
+        if !conversation.aiEnabled { parts.append(L("AI 自动回复已关闭")) }
+        return parts.joined(separator: L10n.listSeparator)
     }
 
     private var background: Color {

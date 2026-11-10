@@ -78,7 +78,7 @@ struct ScheduleRow: View {
                 Text(nextFire.map { UIFormat.time.string(from: $0) } ?? "--:--")
                     .font(.system(.title3, design: .rounded, weight: .semibold))
                     .foregroundStyle(task.enabled ? Color.primary : Color.secondary)
-                Text(nextFire.map { ScheduleMath.dayLabel(for: $0) } ?? L("已结束"))
+                Text(nextFire.map { ScheduleMath.dayLabel(for: $0) } ?? (task.enabled ? L("已结束") : "—"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -100,7 +100,7 @@ struct ScheduleRow: View {
                         PillLabel(text: UIFormat.weekdaySummary(task.weekdays), color: Theme.violet)
                     }
                     if !task.enabled {
-                        PillLabel(text: "已暂停", color: .secondary)
+                        PillLabel(text: "已停用", color: .secondary)
                     }
                 }
                 Text(task.content)
@@ -112,10 +112,10 @@ struct ScheduleRow: View {
                     Label(conversationLabel ?? (task.conversationTitle.isEmpty ? task.conversationID : task.conversationTitle),
                           systemImage: "bubble.left")
                     if let nextFire {
-                        Label(L("下次 \(UIFormat.relative(nextFire))"), systemImage: "calendar.badge.clock")
+                        Label(Lf("下次 %@", UIFormat.relative(nextFire)), systemImage: "calendar.badge.clock")
                     }
                     if let last = task.lastFiredAt {
-                        Label(L("上次 \(UIFormat.relative(last))"), systemImage: "clock.arrow.circlepath")
+                        Label(Lf("上次 %@", UIFormat.relative(last)), systemImage: "clock.arrow.circlepath")
                     }
                 }
                 .font(.caption2)
@@ -133,16 +133,14 @@ struct ScheduleRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .help(task.enabled ? "暂停此任务" : "启用此任务")
-                .accessibilityLabel(L("启用任务 \(task.name)"))
+                .help(L(task.enabled ? "停用此任务" : "启用此任务"))
+                .accessibilityLabel(Lf("启用任务「%@」", task.name))
 
                 HStack(spacing: 6) {
                     Button(L("编辑")) { onEdit() }
                         .buttonStyle(.glass)
                         .controlSize(.small)
                     Menu {
-                        Button(L("编辑…"), action: onEdit)
-                        Divider()
                         Button(L("删除任务…"), role: .destructive, action: onDelete)
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -151,7 +149,7 @@ struct ScheduleRow: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .accessibilityLabel(L("\(task.name) 更多操作"))
+                    .accessibilityLabel(Lf("%@ 更多操作", task.name))
                 }
             }
         }

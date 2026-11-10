@@ -11,4 +11,4 @@
   [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。
 
 > 本项目是个人自用 / 学习研究项目，不提供商业支持或 SLA，也不对微信账号风控、签名失效、
-> 数据丢失承担责任。提问前请先搜索已有 issue 并阅读文档。
+> 数据丢失承担责任。提问前请先搜索[已有 issue](https://github.com/Gusion1017/WeChat-ChatBot-Mac/issues)并阅读文档。

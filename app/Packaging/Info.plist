@@ -24,9 +24,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>3.1.6</string>
+    <string>4.0.0</string>
     <key>CFBundleVersion</key>
-    <string>33</string>
+    <string>34</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.social-networking</string>
     <key>LSMinimumSystemVersion</key>
@@ -47,13 +47,11 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>WeChat AI ChatBot · 个人使用 · 基于 GPL-3.0 开源方案</string>
+    <string>WeChat AI · GPL-3.0 · 非官方第三方客户端</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>用于退出并重启微信以完成 Frida 注入与恢复。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

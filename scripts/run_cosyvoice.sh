@@ -18,10 +18,12 @@
 #   scripts/run_cosyvoice.sh [--home DIR] [--host 127.0.0.1] [--port 5051]
 #                            [--model-dir DIR] [--venv DIR] [--refs DIR]
 #                            [--device gpu|cpu|auto] [--log-level info]
-#                            [--wait-health] [--require-voices]
+#                            [--wait-health] [--no-wait-health] [--wait-timeout 90]
+#                            [--require-voices] [--allow-empty-voices]
 #   （同名环境变量：COSYVOICE_HOME / COSYVOICE_HOST / COSYVOICE_PORT /
 #     COSYVOICE_MODEL_DIR / COSYVOICE_VENV / COSYVOICE_REFS / COSYVOICE_DEVICE /
-#     COSYVOICE_LOCAL_DIR）
+#     COSYVOICE_LOG_LEVEL / COSYVOICE_WAIT_HEALTH / COSYVOICE_WAIT_TIMEOUT /
+#     COSYVOICE_REQUIRE_VOICES / COSYVOICE_LOCAL_DIR / COSYVOICE_SERVER_DIR）
 #
 # 退出码：0 正常；2 前置检查失败/端口占用；3 脚本层错误（venv/server.py 缺失、参数非法）
 set -uo pipefail

@@ -22,7 +22,7 @@ struct DashboardView: View {
                 toggleBot()
             } label: {
                 Label(
-                    store.isBotRunning ? "停止机器人" : "启动机器人",
+                    L(store.isBotRunning ? "停止机器人" : "启动机器人"),
                     systemImage: store.isBotRunning ? "stop.fill" : "play.fill"
                 )
             }
@@ -30,9 +30,9 @@ struct DashboardView: View {
             .tint(store.isBotRunning ? Theme.danger : Theme.accent)
             .controlSize(.regular)
             .disabled(store.isSwitchingAccount || store.isBotTransitioning)
-            .accessibilityHint(store.isSwitchingAccount
+            .accessibilityHint(L(store.isSwitchingAccount
                 ? "正在切换微信账号数据，请稍候"
-                : (store.isBotRunning ? "停止接收与自动回复" : "开始接收消息并按触发设置自动回复"))
+                : (store.isBotRunning ? "停止接收与自动回复" : "开始接收消息并按触发设置自动回复")))
         } content: {
             statusGrid
 
@@ -53,7 +53,7 @@ struct DashboardView: View {
             if isInstallingHook {
                 ProgressPanel(
                     title: "正在安装 Hook",
-                    detail: installMessage ?? "正在备份微信、注入 Gadget 并重新签名，请勿退出微信。",
+                    detail: installMessage ?? "备份、注入与重签名中，请勿打开微信…",
                     progress: installProgress
                 )
             }
@@ -66,14 +66,14 @@ struct DashboardView: View {
                 )
             }
 
-            SectionCard(title: "快捷操作", subtitle: "常用动作一步直达", symbol: "bolt.fill") {
+            SectionCard(title: "快捷操作", subtitle: "六个常用入口", symbol: "bolt.fill") {
                 // Non-lazy fixed grid: three equal-width columns, two rows. A LazyVGrid
                 // here only added LazyLayoutViewCache prefetch churn during layout for a
                 // six-item grid that always fits on screen.
                 VStack(spacing: 9) {
                     HStack(spacing: 9) {
                         QuickActionButton(
-                            title: "安装 Hook",
+                            title: store.hookStatus.gadgetInstalled ? "Hook 已安装" : "安装 Hook",
                             symbol: "wrench.and.screwdriver.fill",
                             tint: Theme.warning,
                             isBusy: isInstallingHook,
@@ -82,7 +82,7 @@ struct DashboardView: View {
                             showHookConfirm = true
                         }
                         QuickActionButton(
-                            title: "测试 AI",
+                            title: store.defaultProvider == nil ? "AI 未配置" : "测试 AI",
                             symbol: "bolt.horizontal",
                             tint: Theme.info,
                             isBusy: isTestingAI,
@@ -119,19 +119,19 @@ struct DashboardView: View {
                 InlineNotice(
                     kind: .warning,
                     title: "OneBot 服务未连接",
-                    message: "启动机器人后会连接本地 OneBot 桥接。若仍无法连接，请在设置 → Hook 中检查微信与 Hook 状态。"
+                    message: "启动机器人后会连接本地 OneBot 服务。若仍未连接，请在「设置 → OneBot」中检查 Host、端口与 Token。"
                 )
             }
         }
         .sheet(isPresented: $showHookConfirm) {
             ConfirmSheet(
-                title: "安装 Frida Gadget 到微信",
-                message: "此操作会修改官方微信的应用包，用于注入消息收发 Hook。请先完全退出微信。",
+                title: "备份并安装 Hook",
+                message: "会修改官方微信的应用包并重新签名。请先完全退出微信。",
                 details: [
-                    "会先完整备份 /Applications/WeChat.app，再注入 Gadget 并 ad-hoc 重签。",
-                    "微信更新后需要重新安装；部分功能（如小程序、更新）可能受影响。",
-                    "仅在本机运行，不修改微信服务器数据；备份可在设置中一键还原。",
-                    "操作期间请勿打开微信，安装完成后重新启动微信。"
+                    "先完整备份 /Applications/WeChat.app，再注入 Frida Gadget 并 ad-hoc 重签。",
+                    "微信更新后需重新安装；小程序、自动更新等功能可能受影响。",
+                    "只在本机运行，不改微信服务器数据；可从备份还原。",
+                    "安装约需 1–2 分钟，期间请勿打开微信；完成后重新打开微信。"
                 ],
                 confirmTitle: "备份并安装",
                 cancelTitle: "取消"
@@ -150,8 +150,7 @@ struct DashboardView: View {
             StatusCard(
                 title: "微信",
                 value: store.hookStatus.wechatVersion.isEmpty ? L("未检测") : Lf("微信 %@", store.hookStatus.wechatVersion),
-                detail: URL(fileURLWithPath: store.settings.hook.wechatPath).lastPathComponent
-                    + (store.hookStatus.wechatRunning ? " · 运行中" : " · 未运行"),
+                detail: URL(fileURLWithPath: store.settings.hook.wechatPath).lastPathComponent,
                 symbol: "iphone",
                 tint: Theme.accent,
                 statusText: store.hookStatus.wechatRunning ? "运行中" : "未运行",
@@ -167,7 +166,7 @@ struct DashboardView: View {
                 detail: hookDetail,
                 symbol: "link",
                 tint: Theme.info,
-                statusText: store.hookStatus.matchedVersion ? "版本匹配" : (store.hookStatus.gadgetInstalled ? "待匹配" : "未安装"),
+                statusText: hookStatusText,
                 statusTint: store.hookStatus.matchedVersion ? Theme.success : Theme.warning,
                 isLive: store.hookStatus.state == .connected
             ) {
@@ -189,15 +188,20 @@ struct DashboardView: View {
         }
     }
 
+    private var hookStatusText: String? {
+        guard store.hookStatus.gadgetInstalled else { return nil }
+        return store.hookStatus.matchedVersion ? "版本匹配" : "待匹配"
+    }
+
     private var hookDetail: String {
         var parts: [String] = []
-        parts.append(store.hookStatus.gadgetInstalled ? "Gadget 已安装" : "Gadget 未安装")
-        if store.hookStatus.bridgeRunning { parts.append("Bridge 运行中") }
-        if store.hookStatus.gatewayConnected { parts.append("网关已连接") }
+        parts.append(L(store.hookStatus.gadgetInstalled ? "Gadget 已安装" : "Gadget 未安装"))
+        if store.hookStatus.bridgeRunning { parts.append(L("bridge 运行中")) }
+        if store.hookStatus.gatewayConnected { parts.append(L("网关已连接")) }
         if store.hookStatus.r3Active {
-            parts.append(store.hookStatus.r3Seeded ? "R3 句柄就绪" : "R3 等待信号")
+            parts.append(L(store.hookStatus.r3Seeded ? "R3 发送句柄已就绪" : "R3 发送句柄未就绪"))
         }
-        if !store.hookStatus.detail.isEmpty { parts.append(store.hookStatus.detail) }
+        if !store.hookStatus.detail.isEmpty { parts.append(L(store.hookStatus.detail)) }
         return parts.joined(separator: " · ")
     }
 
@@ -205,7 +209,6 @@ struct DashboardView: View {
         guard let provider = store.defaultProvider else { return "在 AI 模型页添加通道" }
         var parts = [provider.model]
         if let host = URL(string: provider.baseURL)?.host { parts.append(host) }
-        if !provider.hasAPIKey, provider.kind != .ollama { parts.append("缺少 API Key") }
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
@@ -213,7 +216,7 @@ struct DashboardView: View {
         guard let provider = store.defaultProvider else { return "未配置" }
         if !provider.enabled { return "已停用" }
         if provider.kind != .ollama && !provider.hasAPIKey { return "缺少密钥" }
-        return "已启用"
+        return "已配置"
     }
 
     private var aiStatusTint: Color {
@@ -241,7 +244,7 @@ struct DashboardView: View {
             } else {
                 await store.startBot()
                 toast.show(
-                    store.isBotRunning ? "机器人已启动" : "启动请求已提交",
+                    store.isBotRunning ? "机器人已启动" : "启动失败，请查看运行日志",
                     tone: store.isBotRunning ? .success : .warning,
                     symbol: "play.circle.fill"
                 )
@@ -261,12 +264,10 @@ struct DashboardView: View {
             isTestingAI = false
             switch result {
             case .success(let message):
-                let text = message.isEmpty ? "连接成功" : message
+                let text = message.isEmpty ? L("连接成功") : message
                 aiTestResult = (true, text)
-                toast.show("AI 连接正常", tone: .success)
             case .failure(let error):
                 aiTestResult = (false, error.localizedDescription)
-                toast.show("AI 连接失败：\(error.localizedDescription)", tone: .error)
             }
         }
     }
@@ -311,10 +312,10 @@ struct DashboardView: View {
         let hour = Calendar.current.component(.hour, from: Date())
         let greeting: String
         switch hour {
-        case 5..<11: greeting = "早上好"
-        case 11..<14: greeting = "中午好"
-        case 14..<18: greeting = "下午好"
-        default: greeting = "晚上好"
+        case 5..<11: greeting = L("早上好")
+        case 11..<14: greeting = L("中午好")
+        case 14..<18: greeting = L("下午好")
+        default: greeting = L("晚上好")
         }
         let date = Date().formatted(.dateTime.month().day().weekday(.wide))
         return "\(greeting) · \(date)"
@@ -390,7 +391,7 @@ private struct DashboardRecentConversationsCard: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        SectionCard(title: "最近会话", subtitle: "点击继续查看", symbol: "bubble.left.and.bubble.right.fill", tint: Theme.accent) {
+        SectionCard(title: "最近会话", subtitle: "最近 5 个会话", symbol: "bubble.left.and.bubble.right.fill", tint: Theme.accent) {
             HStack {
                 Spacer()
                 Button(L("全部会话")) { store.sidebarSelection = .conversations }

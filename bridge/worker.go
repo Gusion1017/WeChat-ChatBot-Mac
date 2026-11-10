@@ -366,6 +366,11 @@ func HandleMsg(jsonData []byte) ([]byte, error) {
 	}
 
 	for _, msg := range m.Message {
+		// JSON message 数组里可能有 null 或缺少 data 的段（外部事件/旧 hook）：
+		// 解引用会 panic 并丢掉整条事件，这里跳过该段、保留其余字段。
+		if msg == nil || msg.Data == nil {
+			continue
+		}
 		switch msg.Type {
 		case "record":
 			path, err := SaveAudioFile(msg.Data.Media)

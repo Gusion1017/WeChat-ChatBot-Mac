@@ -1,6 +1,6 @@
 # 微信 AI 助手（WeChat AI）— 常用开发命令入口
 #
-# 所有目标都是 scripts/ 下脚本的薄封装；参数与细节见各脚本头部和 docs/README.md。
+# 所有目标都是 scripts/ 下脚本的薄封装；参数与细节见各脚本头部，文档索引见 docs/README.md。
 # 用法：make            # 列出全部目标
 #       make test       # Swift 单元测试
 
@@ -33,7 +33,7 @@ install: ## 把 dist 中的 App 安装到 ~/Applications
 run: ## 打开已安装的 App
 	open "$$HOME/Applications/WeChat AI.app"
 
-dev: ## 启动本地 Mock（AI 8787 + OneBot 58080），无需真机
+dev: ## 打印本地 Mock 启动命令（AI 8787 + OneBot 58080），无需真机
 	@printf '分别在两个终端运行：\n  python3 devtools/mock_ai.py --port 8787\n  python3 devtools/mock_onebot.py --port 58080 --token wechatai-local-token --demo\n'
 
 test: ## Swift 单元测试（app/；SWIFT_DISABLE_SANDBOX=1 适配受限沙箱）
@@ -51,5 +51,5 @@ docs-check: ## 只检查文档链接、hook/bridge 脚本副本一致性与版�
 clean: ## 预览可清理的构建产物（真正删除加 --yes）
 	bash scripts/clean.sh
 
-clean-all: ## 清理构建产物、bridge 二进制与 dist（需重新构建）
+clean-all: ## 清理构建产物、bridge 二进制、dist 与日志缓存（不含 Frida Gadget；需重新构建）
 	bash scripts/clean.sh --yes

@@ -22,7 +22,7 @@ struct ChatCleanupSheet: View {
                 Spacer()
             }
 
-            Text(L("删除当前会话在本地 SQLite 中保存的聊天记录。微信端消息、记忆卡与全量记录都不受影响。"))
+            Text(L("只删除本机保存的聊天记录；微信端消息、记忆卡与全量记录不受影响。"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -45,14 +45,14 @@ struct ChatCleanupSheet: View {
             InlineNotice(
                 kind: .warning,
                 title: "清理前请确认",
-                message: "清理后无法恢复，AI 将失去该会话的聊天上下文。建议先在「设置 → 数据」中备份。"
+                message: "AI 将失去该会话的聊天上下文。建议先在「设置 → 数据与备份」中备份。"
             )
 
             HStack {
                 Spacer()
                 Button(L("取消")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(isBusy ? "清理中…" : "确认清理") {
+                Button(L(isBusy ? "清理中…" : "确认清理")) {
                     onClear()
                 }
                 .buttonStyle(.borderedProminent)

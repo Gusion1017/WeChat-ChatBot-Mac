@@ -53,14 +53,13 @@ struct ConversationRenameSheet: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($isNameFocused)
                 .onSubmit(save)
-            Text(L(hint))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(L("微信接口只下发会话 ID，App 取不到真实昵称；给常用会话起名后，列表、AI 提示词与日志都会使用它。"))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 3) {
+                Text(L(hint))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HelpTip(text: "微信只下发会话 ID，App 无法获取真实昵称。自定义名称会用于列表、AI 提示词与日志。")
+            }
         }
         .padding(20)
     }

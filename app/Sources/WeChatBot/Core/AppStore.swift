@@ -52,6 +52,15 @@ final class AppStore {
     /// 由 Runtime 刷新；「机器人 → 语音」与句柄捕获引导只读展示，语音回复决策用它拦截未就绪状态。
     var voiceRuntimeStatus: VoiceRuntimeStatus = .unavailable
 
+    /// 朋友圈自动发布：最近一轮汇总（不持久化；设置页展示「上次自动发布」）。
+    var snsPublishRun: SnsPublishRunSummary?
+    /// 朋友圈 AI 自动互动：最近一轮检查汇总（不持久化；设置页展示「上次检查」）。
+    var snsInteractionRun: SnsInteractionRunSummary?
+    /// 朋友圈 AI 自动互动：最近若干条记录（内存，最多 `snsInteractionActivityLimit` 条）。
+    var snsInteractionActivity: [SnsInteractionActivity] = []
+    /// 朋友圈通道配置改动后尚未同步给 bridge（设置页提示「重启机器人生效」）。
+    var snsBridgeConfigStale = false
+
     // MARK: 微信账号档案（多账号数据隔离）
 
     /// 当前微信账号（wxid）；尚未识别时为 `_unassigned`。
@@ -73,9 +82,9 @@ final class AppStore {
     /// `settings == nil` 时由 AppStore 自己解析账号档案；注入设置的测试/诊断不触碰本机账号目录。
     let managesAccountProfiles: Bool
 
-    /// 首次启用语音回复 / 运行时启动后检测到发送句柄缺失时，由 RootView 弹出的捕获引导。
-    /// 与语音设置面板内的局部弹窗相互独立：面板负责「用户刚开启开关」，这里负责「启动时检测」。
-    var isVoiceSetupPromptPresented = false
+    /// 统一「捕获发送句柄」弹窗：语音开关开启、朋友圈开关开启、运行时启动检测三处共用。
+    /// 由 `RootView` 负责 `.sheet`，保证同一时刻只有一个弹窗（文案/条目按已开启功能裁剪）。
+    var isCaptureSetupPromptPresented = false
 
     /// 本机电池快照。Runtime 每 30 秒刷新一次；台式机保持 `.unavailable`。
     var batteryStatus: BatteryStatus = .unavailable
@@ -98,6 +107,61 @@ final class AppStore {
     /// 入站语音获取队列（`POST /fetch_voice`，串行 + 去重 + 重试 1 次）。
     /// 同样由 Runtime 注入闭包；转写服务是 actor，可在后台串行执行。
     let voiceFetcher = VoiceFetcher()
+
+    /// 朋友圈（SNS）状态机：列表/详情/同步/图片缓存/发布。
+    /// 网络与解析在 `SnsClient` 的后台异步任务里执行；见 `AppStore+Moments.swift`。
+    let moments = MomentsStore()
+
+    /// 朋友圈自动发布的演练草稿（按账号目录隔离，只存本机；只读）。
+    let snsOutbox = SnsOutboxStore()
+
+    /// 朋友圈发布配额账本（按账号隔离）：自动发布与确认草稿共用，避免两套计数。
+    @ObservationIgnored private var snsLedger: SnsPublishLedger?
+    @ObservationIgnored private var snsLedgerAccountID = ""
+
+    /// 朋友圈自动互动账本（按账号隔离）：已处理的动态/评论、自己的评论 ID、
+    /// 每天次数与最近互动时间。账户切换后重建，避免把上一账号的互动记录串过来。
+    @ObservationIgnored private var snsInteractionLedgerCache: SnsInteractionLedger?
+    @ObservationIgnored private var snsInteractionLedgerAccountID = ""
+
+    /// 当前账号的发布账本；切号后重建，保证计数不跨账号。
+    func snsPublishLedger() -> SnsPublishLedger {
+        if let ledger = snsLedger, snsLedgerAccountID == activeAccountID {
+            return ledger
+        }
+        let ledger = SnsPublishLedger(accountID: activeAccountID)
+        snsLedger = ledger
+        snsLedgerAccountID = activeAccountID
+        return ledger
+    }
+
+    /// 当前账号的自动互动账本；切号后重建。
+    func snsInteractionLedger() -> SnsInteractionLedger {
+        if let ledger = snsInteractionLedgerCache, snsInteractionLedgerAccountID == activeAccountID {
+            return ledger
+        }
+        let ledger = SnsInteractionLedger(accountID: activeAccountID)
+        snsInteractionLedgerCache = ledger
+        snsInteractionLedgerAccountID = activeAccountID
+        return ledger
+    }
+
+    /// 记录一条自动互动（内存展示用，不落库）。
+    static let snsInteractionActivityLimit = 30
+
+    func recordSNSInteractionActivity(_ activity: SnsInteractionActivity) {
+        var updated = snsInteractionActivity
+        updated.insert(activity, at: 0)
+        if updated.count > Self.snsInteractionActivityLimit {
+            updated.removeLast(updated.count - Self.snsInteractionActivityLimit)
+        }
+        snsInteractionActivity = updated
+    }
+
+    func clearSNSInteractionActivity() {
+        snsInteractionActivity.removeAll()
+        snsInteractionRun = nil
+    }
 
     /// 本地语音转写（SpeechAnalyzer actor）；UI 查询资源状态、Runtime 调用转写。
     let voiceTranscription = VoiceTranscriptionService()
@@ -129,6 +193,18 @@ final class AppStore {
         self.savedWeChatAccounts = AccountProfile.savedAccounts()
         L10n.apply(loaded.general.language)
         self.hookStatus.versionConfigFile = loaded.hook.versionConfigPath
+        // 朋友圈演练草稿：按账号目录加载（只读本机 JSON，不发网络请求）。
+        self.snsOutbox.load(accountID: activeAccountID)
+        // 朋友圈功能默认关闭；这里只同步配置镜像，不发起网络请求。
+        self.moments.apply(
+            settings: loaded.bot.snsSettings,
+            onebot: loaded.onebot,
+            accountID: activeAccountID
+        )
+        // 发布账本在 App 启动时就注入：自动发布可能在本机从未打开过朋友圈页/设置面板的
+        // 情况下触发，若等到 `prepareMoments()`（视图 onAppear）才注入，成功发布不会记账，
+        // 每日上限与最小间隔就会失效。这里与视图注入的是同一个实例（按账号缓存）。
+        self.moments.publishLedger = snsPublishLedger()
         // Reading WeChat's Info.plist is disk I/O and used to run synchronously in init.
         // It is filled in off-main by the runtime bootstrap instead (`AppStore+Runtime`),
         // which also refreshes the full hook status shortly after.
@@ -158,6 +234,12 @@ final class AppStore {
         settings.personas = personas
         settings.schedules = schedules
         settings.bot.defaultProviderID = settings.ai.defaultProviderID
+        // 设置修改后同步朋友圈配置镜像（关闭功能/切 token 时由状态机自行清理）。
+        moments.apply(
+            settings: settings.bot.snsSettings,
+            onebot: settings.onebot,
+            accountID: activeAccountID
+        )
         let snapshot = settings
         // profile 路径在调用时捕获：切号后延迟执行的旧快照仍写回旧账号的 profile，
         // 不会把 A 账号的机器人配置写进 B 账号。
@@ -182,6 +264,11 @@ final class AppStore {
         personas = loaded.personas
         schedules = loaded.schedules
         L10n.apply(loaded.general.language)
+        moments.apply(
+            settings: loaded.bot.snsSettings,
+            onebot: loaded.onebot,
+            accountID: activeAccountID
+        )
     }
 
     /// 同步 `AccountProfile` 的静态状态到 UI（切号/启动迁移后调用）。
@@ -192,6 +279,21 @@ final class AppStore {
             accountSwitchNotice = notice
         }
         savedWeChatAccounts = AccountProfile.savedAccounts()
+        // 切号时清空内存里的朋友圈列表/详情/图片缓存与发布账本，不跨账号复用。
+        snsLedger = nil
+        snsLedgerAccountID = ""
+        snsInteractionLedgerCache = nil
+        snsInteractionLedgerAccountID = ""
+        snsInteractionActivity = []
+        snsInteractionRun = nil
+        snsOutbox.load(accountID: activeAccountID)
+        moments.apply(
+            settings: settings.bot.snsSettings,
+            onebot: settings.onebot,
+            accountID: activeAccountID
+        )
+        // 账本随账号重建（`snsLedger` 已清空）；重新注入，避免自动发布继续写上一个账号的计数。
+        moments.publishLedger = snsPublishLedger()
     }
 
     func dismissAccountSwitchNotice() {

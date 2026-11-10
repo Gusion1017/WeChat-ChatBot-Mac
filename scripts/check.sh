@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 本地质量门禁：一条命令跑完「脚本语法 + hook/bridge 脚本一致性 + 文档链接 + Swift 测试」。
+# 本地质量门禁：一条命令跑完「脚本语法 + hook/bridge 脚本一致性 + 文档链接 + 版本 JSON + Swift 测试」。
 #
 # 用法：
 #   bash scripts/check.sh              # 快速检查（约 10s，需已构建过 SwiftPM 缓存）
@@ -81,6 +81,53 @@ for json in "${ROOT_DIR}"/hook/versions/*.json; do
   fi
 done
 (( json_ok )) || true
+
+# ---------- 4b. Hook 默认版本与版本 JSON 一致性 ----------
+step "Hook 默认版本与版本 JSON"
+default_version_from() {
+  /usr/bin/grep -E -o 'WECHAT_SUPPORTED_VERSION:-[0-9][0-9.]*' "$1" 2>/dev/null \
+    | head -n 1 | sed 's/.*:-//'
+}
+manage_default_version="$(default_version_from "${ROOT_DIR}/tools/manage_wechat.sh")"
+install_default_version="$(default_version_from "${ROOT_DIR}/tools/install_gadget.sh")"
+run_conf_version="$(/usr/bin/grep -E -o 'hook/versions/[0-9][0-9_]*_mac\.json' "${ROOT_DIR}/scripts/run_bridge.sh" 2>/dev/null \
+  | head -n 1 | sed 's|.*/||; s|_mac\.json$||')"
+default_version_norm="$(printf '%s' "${manage_default_version}" | tr '.' '_')"
+version_ok=1
+if [ -z "${manage_default_version}" ]; then
+  say "  ✘ 无法从 tools/manage_wechat.sh 解析默认微信版本"
+  version_ok=0; FAILED=1
+fi
+if [ "${manage_default_version}" != "${install_default_version}" ]; then
+  say "  ✘ 默认版本不一致：manage_wechat.sh=${manage_default_version:-?} install_gadget.sh=${install_default_version:-?}"
+  version_ok=0; FAILED=1
+fi
+if [ "${default_version_norm}" != "${run_conf_version}" ]; then
+  say "  ✘ run_bridge.sh 默认 --wechat-conf 不匹配：${run_conf_version:-?}（期望 ${default_version_norm:-?}）"
+  version_ok=0; FAILED=1
+fi
+if [ -n "${default_version_norm}" ] && [ ! -f "${ROOT_DIR}/hook/versions/${default_version_norm}_mac.json" ]; then
+  say "  ✘ 缺少默认版本 JSON：hook/versions/${default_version_norm}_mac.json"
+  version_ok=0; FAILED=1
+fi
+# KNOWN_VERSION_PAIRS 必须两份脚本一致，且每个已知版本都要有版本 JSON。
+manage_pairs="$(sed -n 's/^KNOWN_VERSION_PAIRS="\(.*\)"$/\1/p' "${ROOT_DIR}/tools/manage_wechat.sh" | head -n 1)"
+install_pairs="$(sed -n 's/^KNOWN_VERSION_PAIRS="\(.*\)"$/\1/p' "${ROOT_DIR}/tools/install_gadget.sh" | head -n 1)"
+if [ "${manage_pairs}" != "${install_pairs}" ]; then
+  say "  ✘ KNOWN_VERSION_PAIRS 在 manage_wechat.sh 与 install_gadget.sh 中不一致"
+  version_ok=0; FAILED=1
+fi
+for pair in ${manage_pairs}; do
+  known_version="${pair%%:*}"
+  known_json="${ROOT_DIR}/hook/versions/$(printf '%s' "${known_version}" | tr '.' '_')_mac.json"
+  if [ ! -f "${known_json}" ]; then
+    say "  ✘ 已知版本 ${known_version} 缺少版本 JSON：hook/versions/$(basename "${known_json}")"
+    version_ok=0; FAILED=1
+  fi
+done
+if (( version_ok )); then
+  say "  ✔ 默认 ${manage_default_version} 与已知版本列表均有版本 JSON，脚本默认值一致"
+fi
 
 if (( DOCS_ONLY == 1 )); then
   step "结果"

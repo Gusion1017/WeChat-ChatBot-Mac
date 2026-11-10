@@ -55,6 +55,10 @@ main.go
   2026-10-23：新增 `-media_dir`（入站图片落盘根目录）与 `POST /fetch_image` 路由。
   2026-10-26：注册语音路由 `POST /fetch_voice`（入站语音下载/解密/解码）与
   `POST /send_voice`（语音发送别名，与 /send_private_msg 的 voice 段共用契约）。
+  2026-11-07：新增 `initSNSConfig()`（从 `-wechat_conf` 读取 snsEnable/snsWrite、
+  以及发布时段/每日上限/最小间隔配置）与 `registerSNSHandlers()`（注册
+  `/sns/status|timeline|detail|media|sync|post|comment|like|objectop`）。
+  未启用时 handler 返回 404；SNS 请求全部在 bridge 内编解码（protobuf 不经过 hook）。
 
 logger.go
   日志文件路径改为由 `-log_file` 指定，并在启动时创建所在目录。
@@ -142,6 +146,28 @@ http_auth_test.go         无 Gadget 场景下验证 HTTP 鉴权、参数校验�
 incoming_msg_test.go      `HandleMsg` 序列化保留 mentions / 自消息字段的回归测试
 incoming_normalize_test.go 入站事件归一化（自消息、群聊、@、非法帧、非法群 ID
                           清洗、旧 hook 群自消息补群）单元测试
+sns_proto.go              朋友圈（SNS）protobuf 编解码（2026-11-07）：手写
+                          google.golang.org/protobuf/encoding/protowire，覆盖
+                          TimeLine/Sync/Post/Comment/ObjectOp/SnsObject/评论，
+                          mac 4.2 规则（无 BaseRequest、4 处 SKBuiltinBuffer_t 包裹、
+                          ClientCheckDat=field 28、snsId uint64、未知字段跳过），
+                          以及 <TimelineObject> XML 解析/纯文字构造。不依赖 protoc。
+sns.go                    朋友圈客户端状态层：snsEnable/snsWrite 开关、SNSRPC 接口
+                          （snsStatus/snsPrime/snsRequest+snsPoll/snsMedia）、
+                          可注入 fake、读/写串行、8s/12s 超时、只读帖缓存、
+                          写频率限制与发布时段/每日上限策略、错误码映射。
+sns_http.go               `/sns/*` HTTP 端点：Bearer 鉴权、404/401/403/409/429/502/
+                          503/504 错误码、timeline/detail/media/sync 读取与写接口
+                          门禁（写开关默认关；发布协议未验证前不发送半成品）。
+sns_proto_test.go         上述编解码/SyncKey/XML 单测（含 Frida 适配器 JSON 解析）。
+sns_test.go               开关/并发/超时/限流/缓存/可见性与发布策略单测。
+sns_http_test.go          httptest 端点测试（fake SNSRPC，不连接 Frida/微信）。
+sns_fixtures_test.go      mac 4.2.0.12 真机抓包的脱敏请求 fixture（hex 文本；
+                          wxid/昵称/正文/ClientId/ClientCheckDat/snsId 均为占位符）。
+sns_response_fixtures_test.go 真机 SnsTimeLineResponse（33,908B，10 条动态）的
+                          脱敏子集（3 条动态、保留 mac 未知字段），用于校准解析器；
+                          原始响应只在本机 _local/（gitignored），不入库。
+sns_response_test.go      真机响应 fixture 的字段/包裹/归一化回归测试。
 contact.go                通讯录目录：`get_contact_directory` 的路径推导、
                           目录缓存与入站昵称/群名补全、群 @ 昵称回退，以及
                           本机受限密钥缓存（0600、原子写）与启动回灌

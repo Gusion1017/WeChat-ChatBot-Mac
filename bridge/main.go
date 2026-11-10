@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -33,7 +34,13 @@ func str(m map[string]interface{}, key string) string {
 func main() {
 	initFlag()
 	initLogger()
+	// 上游默认 token 是公开常量；未显式 -token 时任何本机进程都能调用发送接口。
+	// App 与 scripts/run_bridge.sh 始终传入随机 token，这里只提示直接运行二进制的场景。
+	if config.OnebotToken == "MuseBot" {
+		Warn("未通过 -token 指定 OneBot token，正在使用上游默认值；仅建议在本机开发时使用，App 会传入随机 token")
+	}
 	initR3ModeFromConfig()
+	initSNSConfig()
 	if config.FridaType == "gadget" {
 		initFridaGadget()
 	} else {
@@ -48,6 +55,8 @@ func main() {
 	http.HandleFunc("/fetch_voice", fetchVoiceHandler)
 	http.HandleFunc("/send_voice", sendVoiceHandler)
 	http.HandleFunc("/voice_status", voiceStatusHandler)
+	// 朋友圈（docs/sns.md）：未启用时 handler 返回 404，写接口默认关闭。
+	registerSNSHandlers()
 
 	http.HandleFunc("/ws", handleWebSocket)
 	http.HandleFunc("/test_ws", testWebSocket)
@@ -74,11 +83,48 @@ func main() {
 	}()
 
 	// 3. 启动服务
-	Info("HTTP 服务启动在", "host", config.ReceiveHost)
-	if err := http.ListenAndServe(config.ReceiveHost, nil); err != nil {
+	listenAddr, loopback := normalizeListenAddr(config.ReceiveHost)
+	if !loopback {
+		// 空 host（如 ":58080"）会监听所有网卡；这里统一收敛到回环，其它显式
+		// 非回环地址只告警不阻断（文档允许高级用户改 host，但必须知情）。
+		Warn("bridge 将监听非回环地址；任何能访问该地址的客户端都可携带 token 调用接口", "addr", listenAddr)
+	}
+	Info("HTTP 服务启动在", "host", listenAddr)
+	if err := listenAndServe(listenAddr); err != nil {
+		// 端口占用/地址非法时必须非 0 退出：App 用退出码区分「正常停止」与
+		// 「bridge 异常退出」，返回 0 会被显示成「bridge 已退出」而掩盖真实失败。
 		Error("服务启动失败", "err", err)
+		os.Exit(1)
 	}
 
+}
+
+// listenAndServe 封装默认 mux 的 HTTP 监听，便于单测覆盖「端口被占用」。
+// 返回错误时 main 必须以非 0 退出：App 依据退出码区分正常停止与异常退出。
+func listenAndServe(addr string) error {
+	return http.ListenAndServe(addr, nil)
+}
+
+// normalizeListenAddr 把 -receive_host 归一化为可监听地址，并报告是否仅回环。
+//   - 空值 → 127.0.0.1:58080（与 flag 默认一致）；
+//   - ":58080"（host 为空，ListenAndServe 会监听所有网卡）→ 127.0.0.1:58080；
+//   - "localhost" / 127.0.0.0/8 / ::1 → loopback=true；
+//   - 非法地址原样返回，交给 ListenAndServe 报错（main 非 0 退出）。
+func normalizeListenAddr(addr string) (string, bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "127.0.0.1:58080", true
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, false
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	ip := net.ParseIP(host)
+	loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+	return net.JoinHostPort(host, port), loopback
 }
 
 func initFlag() {

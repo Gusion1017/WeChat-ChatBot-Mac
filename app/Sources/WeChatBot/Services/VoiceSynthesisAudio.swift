@@ -188,7 +188,6 @@ enum VoiceSynthesisAudio {
         guard fmtOffset >= 0, fmtOffset + 16 <= data.count else {
             throw VoiceSynthesisAudioError.unreadableAudio(url.path)
         }
-        let audioFormat = u16(fmtOffset)
         let channels = u16(fmtOffset + 2)
         let sampleRate = u32(fmtOffset + 4)
         let bits = u16(fmtOffset + 14)

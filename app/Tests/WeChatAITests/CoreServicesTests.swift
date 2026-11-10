@@ -1538,6 +1538,27 @@ final class CoreServicesTests: XCTestCase {
         XCTAssertEqual(custom?["temperature"] as? Double ?? -1, 0.3, accuracy: 0.0001)
     }
 
+    /// 空内容错误要带诊断信息（流式/非流式、finish_reason、token 用量），
+    /// 否则只能看到「AI 返回了空内容」，无法区分是思考吃满额度还是上游格式不符
+    /// （2026-11-10 朋友圈自动发布失败即因此难以定位）。
+    func testEmptyResponseErrorCarriesDiagnostics() {
+        let detail = AIClient.emptyResponseDetail(
+            finishReason: "length",
+            usage: AIUsage(promptTokens: 120, completionTokens: 800, totalTokens: 920),
+            streamed: true
+        )
+        XCTAssertEqual(detail, "流式，finish_reason=length，tokens=120/800/920")
+        let detailed = AIError.emptyResponse(detail)
+        XCTAssertTrue(detailed.isRetryable, "空回包可重试，调用方才能按 ai.retryCount 重试")
+        XCTAssertEqual(detailed.errorDescription, Lf("AI 返回了空内容（%@）", detail))
+        // 没有诊断信息时保持原文案，避免影响既有日志/测试。
+        XCTAssertEqual(AIError.emptyResponse(nil).errorDescription, L("AI 返回了空内容"))
+
+        // 没有 finish_reason / usage 时只保留通道形态，不留空括号。
+        let minimal = AIClient.emptyResponseDetail(finishReason: nil, usage: AIUsage(), streamed: false)
+        XCTAssertEqual(minimal, "非流式")
+    }
+
     func testModelTemperatureConfiguration() {
         var settings = AppSettings.default
         XCTAssertNil(settings.ai.temperature(forModel: "deepseek-chat"))

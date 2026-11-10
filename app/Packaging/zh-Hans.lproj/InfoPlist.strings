@@ -1,0 +1,3 @@
+/* 简体中文 Info.plist 文案。键名对应被覆盖的 Info.plist 字段。 */
+"CFBundleDisplayName" = "微信 AI 助手";
+"NSHumanReadableCopyright" = "WeChat AI · GPL-3.0 · 非官方第三方客户端";
