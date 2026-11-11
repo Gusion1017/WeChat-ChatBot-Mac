@@ -4,8 +4,8 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.0.1**，包含朋友圈（Moments）与 4.2.0.17 适配；
-> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.1.md`](releases/4.0.1.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.0.2**，包含朋友圈（Moments）与 4.2.0.17 适配；
+> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.2.md`](releases/4.0.2.md)。
 
 ## 1. 文件清单
 
@@ -834,7 +834,7 @@ swift test --scratch-path .build-verify
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 886 项执行（884 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
+当前实测基线：Swift 891 项执行（889 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
 + 132 子测试，0 失败；19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。

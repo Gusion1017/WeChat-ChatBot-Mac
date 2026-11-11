@@ -540,7 +540,7 @@ python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前实测基线：Swift 886 项执行（884 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件）；
+当前实测基线：Swift 891 项执行（889 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，41 个测试文件）；
 Go 312 项用例（180 顶层 + 132 子测试，0 失败，19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
 72 项 unittest 通过。
 

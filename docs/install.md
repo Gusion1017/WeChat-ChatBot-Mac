@@ -2,7 +2,7 @@
 
 > 本项目是 **macOS 原生 App + 微信 Hook**，不是双击即用的普通应用：GitHub 的「Download ZIP」默认只给
 > **源码**，不含已编译的 App、bridge 二进制和 Frida Gadget；非开发者请用 Releases 里的 App 压缩包，
-> 只有源码时按「源码构建」操作。当前发布版本：**4.0.1（build 35，2026-11-11）**，压缩包约 70 MB（66 MiB）。
+> 只有源码时按「源码构建」操作。当前发布版本：**4.0.2（build 36，2026-11-11）**，压缩包约 70 MB（66 MiB）。
 
 ## 1. 先确认环境
 
@@ -19,7 +19,7 @@
 
 > 微信版本必须**精确匹配列表**；不在列表时向导会提示不匹配，不要强行安装 Hook。
 > 安装脚本默认以 4.2.0.17 (270353) 为目标，其余五个历史版本仍可直接安装。
-> **4.2.0.17 真机验证（2026-11-07，4.0.1）**：`manage_wechat.sh install` 完整备份（约 670MB）后注入 Gadget + ad-hoc 重签
+> **4.2.0.17 真机验证（2026-11-07，4.0.2）**：`manage_wechat.sh install` 完整备份（约 670MB）后注入 Gadget + ad-hoc 重签
 > （保留 sandbox entitlements）；模块基址与版本地址表解析通过；Message finalizer 入站（群聊文本、type=49 appmsg、
 > 自身消息）字段正常；R3 classA/service vptr、slot13 捕获、newsendmsg closure seed 均通过；R3 文本发送到
 > 文件传输助手（slot13 返回 0、worker result=1）；通讯录读取正常（联系人 / 群聊）；R3 模式下连续运行数分钟稳定。
@@ -32,12 +32,12 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.0.1（约 70 MB / 66 MiB）**。
+发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.0.2（约 70 MB / 66 MiB）**。
 
-1. 下载 `WeChat-AI-4.0.1.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
+1. 下载 `WeChat-AI-4.0.2.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-4.0.1.zip.sha256
+   shasum -a 256 -c WeChat-AI-4.0.2.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）；下文分别示例。
@@ -146,7 +146,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
 
 ## 4. 发布者：如何制作可下载的 App 压缩包
 
-当前发布版本 **4.0.1（build 35，2026-11-11）**，zip 约 **70 MB（66 MiB）**；在具备 Xcode 27 / CLT 的机器上按顺序构建：
+当前发布版本 **4.0.2（build 36，2026-11-11）**，zip 约 **70 MB（66 MiB）**；在具备 Xcode 27 / CLT 的机器上按顺序构建：
 
 ```bash
 bash scripts/fetch_gadget.sh
@@ -155,13 +155,13 @@ bash scripts/build_app.sh
 bash scripts/package_release.sh      # 或 make release
 ```
 
-脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.0.1.zip` + `.sha256`）；
+脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.0.2.zip` + `.sha256`）；
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包，也可手动执行：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.0.1.zip"
-( cd dist && shasum -a 256 "WeChat-AI-4.0.1.zip" > "WeChat-AI-4.0.1.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.0.2.zip"
+( cd dist && shasum -a 256 "WeChat-AI-4.0.2.zip" > "WeChat-AI-4.0.2.zip.sha256" )
 ```
 
 签名与公证的预期：
@@ -177,10 +177,10 @@ bash scripts/build_app.sh
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-4.0.1.zip.sha256
+shasum -a 256 -c WeChat-AI-4.0.2.zip.sha256
 ```
 
-把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.0.1`，新版本请先升版本号再打 tag），在说明里写清：
+把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.0.2`，新版本请先升版本号再打 tag），在说明里写清：
 
 - 支持 Apple Silicon / macOS 26+ / 微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53；
 - **安装 Hook 需要 Xcode Command Line Tools**（`xcode-select --install`，无需开发者账号），首启向导会检测并引导安装；
@@ -194,14 +194,14 @@ shasum -a 256 -c WeChat-AI-4.0.1.zip.sha256
 | 现象 | 处理 |
 | --- | --- |
 | 双击提示“无法验证开发者”，且找不到「仍要打开」 | macOS 15+ 已取消右键打开。先双击触发拦截，再进 系统设置 → 隐私与安全性 → 仍要打开（需管理员/Touch ID）；仍没有条目就 `xattr -dr com.apple.quarantine "<App 实际路径>"` 后 `open`。两种路径示例见方式 A 第 3 步 |
-| 设置里没有「更新」分类 | 应用内更新自 **3.1.0** 起提供，当前 **4.0.1** 已包含；若仍看不到「更新」，请确认运行的是 Releases 里的 `WeChat AI.app`（`swift run` 开发态不计），或按方式 A 手动下载最新 Releases 覆盖安装 |
+| 设置里没有「更新」分类 | 应用内更新自 **3.1.0** 起提供，当前 **4.0.2** 已包含；若仍看不到「更新」，请确认运行的是 Releases 里的 `WeChat AI.app`（`swift run` 开发态不计），或按方式 A 手动下载最新 Releases 覆盖安装 |
 | 应用内更新失败 / 更新后打不开 | App 内失败不会退出，更新页显示原因并可重试；助手阶段失败会自动恢复旧版并重新打开，详情见 `~/Library/Logs/WeChatAI/update.log`。若新版本仍被 Gatekeeper 拦截，按「仍要打开」流程放行；仍失败则手动重新下载覆盖安装 |
 | 提示“App 已损坏” / 校验失败 | 重新下载并核对 `.sha256`；确认 App 完整解压、没有被安全软件截断；不要从不可信镜像下载 |
 | 向导提示缺少 Command Line Tools / 安装 Hook 按钮禁用 | 点「安装 Command Line Tools」或终端执行 `xcode-select --install`，完成系统安装后点「重新检测」；完整 Xcode 亦可；不需要开发者账号。终端报 `invalid active developer path` 时执行 `sudo xcode-select -s /Library/Developer/CommandLineTools` |
 | 微信从 App Store 安装，或 `/Applications/WeChat.app` 属主是 root | Hook 需要当前用户可写 `/Applications/WeChat.app`。App Store 版路径/签名不同，建议换官网 arm64 版；属主异常时重装微信，或在明确风险后 `sudo chown -R "$USER":staff /Applications/WeChat.app`。可用 `ls -ld /Applications/WeChat.app` 检查 |
 | 打开后没有窗口 | 这是菜单栏 App：启动时显示主窗口；关闭窗口后 Dock 图标消失，仅保留菜单栏。**左键**单击顶部菜单栏图标开合状态面板，面板内提供「打开主窗口」、启停、设置与退出；右键 / Control-左键不执行操作 |
 | 换微信账号后聊天记录、记忆、会话设置会切换吗 | **会，且旧账号数据不会被删除。** App 以当前登录的微信账号为边界：聊天记录/记忆卡（角色目录）/会话设置/机器人配置/人格/定时任务/新媒体自动切到该账号自己的档案（`~/Library/Application Support/WeChatAI/accounts/<wxid>/`）；AI 通道/Keychain/Hook/OneBot/本地 TTS 安装与音色/崩溃与 bridge 日志仍全局共享。升级旧版时会把旧单库复制到旧 `settings.onebot.self_id` 所属账号（只 copy 不删，旧媒体保留），因此升级后需要**切回原微信账号**才能看到旧聊天。运行中换号会停止机器人、提示后需手动重新启动；App 不提供手动选库。未登录时数据先写 `_unassigned`，登录后自动认领。详见 [`accounts.md`](accounts.md) |
-| 微信版本不匹配 | 4.0.1 支持 4.2.0.17 (270353) / 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365)。用 `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/WeChat.app/Contents/Info.plist` 与 `:CFBundleVersion` 核对。其他版本需自行适配、用 `WECHAT_SUPPORTED_VERSION`/`WECHAT_SUPPORTED_BUILD` 覆盖或还原，**不要强装** |
+| 微信版本不匹配 | 4.0.2 支持 4.2.0.17 (270353) / 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341) / 4.1.15.55 (270135) / 4.1.12.53 (269365)。用 `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/WeChat.app/Contents/Info.plist` 与 `:CFBundleVersion` 核对。其他版本需自行适配、用 `WECHAT_SUPPORTED_VERSION`/`WECHAT_SUPPORTED_BUILD` 覆盖或还原，**不要强装** |
 | 图片/语音获取失败，或 `image_path` 检测失败 | 检查 系统设置 → 隐私与安全性 → App 数据 中是否允许 WeChat AI；拒绝授权会导致这些功能失败。修改微信时可能还需要「App 管理」授权 |
 | 安装 Hook 后微信打不开 | 先完全退出微信，再用 App 的「设置 → Hook → 还原官方微信」或 `bash tools/manage_wechat.sh restore` 还原 |
 | 发送不出去 / 一直排队 | 确认「R3 原生发送」开关已开；首次或微信重启后在本机微信手动发一条消息（语音再发一条语音）捕获句柄；`bridge` 刚启动的 60 秒内登录尚未稳定，可等「捕获发送句柄」弹窗/语音面板状态行的倒计时结束后点「重新检测」 |

@@ -9,14 +9,25 @@ struct SnsInteractionCandidate: Hashable {
     /// `.commentOnPost` 时为 nil；回复类互动为被回复的评论。
     var comment: SnsComment?
 
-    /// 稳定的去重键：评论动态按动态 ID，回复按评论 ID。
+    /// 稳定的去重键：评论动态按动态 ID，回复按「动态 ID + 评论 ID」。
+    ///
+    /// 4.2.0.17 原生评论 `comment_id` 是**每条动态内**的短 ID（真机 多组短 ID，
+    /// 不同动态会复用同一个数字），不是全局唯一的服务端 ID。只按评论 ID 去重会让
+    /// 一条动态下处理过的评论把其它动态的同 ID 评论也判成「已处理」（评论 ID=3 几乎
+    /// 每条动态都会出现），自动回复因此整轮 0 候选。
     var key: String {
         switch kind {
         case .commentOnPost:
             return "post:\(post.id)"
         case .replyOnOwnPost, .replyToMyComment:
-            return "comment:\(comment?.commentID ?? "")"
+            return Self.replyKey(postID: post.id, commentID: comment?.commentID ?? "")
         }
+    }
+
+    /// 回复候选的去重键（动态 ID + 评论 ID）：评论 ID 只在单条动态内唯一，
+    /// 账本/失败重试预算与「0 候选」诊断都必须带上动态 ID。
+    static func replyKey(postID: String, commentID: String) -> String {
+        "comment:\(postID):\(commentID)"
     }
 
     /// 互动的对象 wxid（评论动态=作者；回复=被回复评论的作者）。
@@ -680,8 +691,13 @@ final class SnsInteractionScheduler {
     typealias Logger = @MainActor (String) -> Void
     typealias AccountProvider = @MainActor () -> String
 
-    /// 同一轮里最多处理几条（最小间隔为 0 时才可能连续处理；否则一轮只做一条）。
-    static let maxActionsPerCheck = 2
+    /// 一轮检查最多提交几条互动。
+    ///
+    /// bridge 对 comment/like 的写入有 10 秒最小间隔（`bridge/sns.go` 的
+    /// `snsWriteRateRules`），同一轮连续提交第二条必然 429（2026-11-11 真机：
+    /// 第一条成功、第二条 `sns_rate_limited`，还被记成失败尝试并 10 分钟内不再重试）。
+    /// 因此每轮只提交一条，其余候选留给下一轮检查。
+    static let maxActionsPerCheck = 1
     /// 同一条候选失败达到该次数后不再重试（等账本过期/用户清空记录）。
     static let maxAttempts = 3
     /// 失败后的冷却时间。
@@ -874,17 +890,18 @@ final class SnsInteractionScheduler {
                     )
                 }
             }
+            // 演练模式：真实已处理的候选同样跳过（确实没事可做），并额外合并演练专用
+            // 记录，避免同一轮检查反复生成同一条草稿。真实模式绝不读取演练记录。
+            let activeHandledKeys = configuration.dryRun
+                ? state.handledKeys.union(state.dryRunHandledKeys)
+                : state.handledKeys
             let candidates = SnsInteractionPlanner.candidates(
                 posts: snapshot.posts,
                 selfID: selfID,
                 settings: configuration.interaction,
                 targetUserIDs: configuration.targetUserIDs,
                 now: now,
-                // 演练模式：真实已处理的候选同样跳过（确实没事可做），并额外合并演练专用
-                // 记录，避免同一轮检查反复生成同一条草稿。真实模式绝不读取演练记录。
-                handledKeys: configuration.dryRun
-                    ? state.handledKeys.union(state.dryRunHandledKeys)
-                    : state.handledKeys,
+                handledKeys: activeHandledKeys,
                 myCommentIDs: state.myCommentIDs,
                 replyCounts: state.replyCounts,
                 blockedUserIDs: configuration.blockedUserIDs,
@@ -906,11 +923,22 @@ final class SnsInteractionScheduler {
                         .map(\.commentID)
                 })
                 let ledgerCommentIDs = Set(state.myCommentIDs.values.flatMap { $0 })
+                // 已被账本「已处理」键命中的评论数：修复前评论键不带动态 ID，
+                // 其它动态的同 ID 评论会被静默拦掉，这个计数能直接暴露该情况。
+                let handledComments = snapshot.posts.reduce(0) { total, post in
+                    total + post.comments.filter { comment in
+                        activeHandledKeys.contains(SnsInteractionCandidate.replyKey(
+                            postID: post.id,
+                            commentID: comment.commentID
+                        ))
+                    }.count
+                }
                 logEmptyRoundOnce(
                     scanned: snapshot.posts.count,
                     comments: visibleComments,
                     replies: replyComments,
                     myComments: selfCommentIDs.union(ledgerCommentIDs).count,
+                    handledComments: handledComments,
                     notBefore: notBefore,
                     targetCount: configuration.targetUserIDs.count
                 )
@@ -941,9 +969,7 @@ final class SnsInteractionScheduler {
                 }
             }
 
-            let maxActions = configuration.interaction.effectiveMinInterval > 0
-                ? 1
-                : Self.maxActionsPerCheck
+            let maxActions = Self.maxActionsPerCheck
             // 演练模式只读演练专用重试记录：不占用真实模式「同一目标最多 3 次」的预算。
             let attempts = configuration.dryRun ? state.dryRunAttempts : state.attempts
             var todayCount = state.todayCount
@@ -1044,8 +1070,15 @@ final class SnsInteractionScheduler {
                     processed += 1
                     logger?("朋友圈自动互动成功：\(candidate.kind.label)（\(candidate.targetDisplayName)）")
                 } catch {
-                    await recordAttempt(candidate.key, dryRun: configuration.dryRun)
                     let message = Self.message(for: error)
+                    if Self.isRateLimited(error) {
+                        // 429 是节流，不是「这条评论发失败」：不消耗 3 次失败预算 /
+                        // 10 分钟冷却，本轮结束，下一轮检查再试（bridge 最小间隔 10 秒）。
+                        summary.skippedCount += 1
+                        logOnce("朋友圈自动互动：被 bridge 限流，下一轮再试（\(message)）")
+                        break
+                    }
+                    await recordAttempt(candidate.key, dryRun: configuration.dryRun)
                     if Self.isPermanentFailure(error) {
                         await ledger.markHandled(key: candidate.key, at: Date())
                         summary.skippedCount += 1
@@ -1141,13 +1174,15 @@ final class SnsInteractionScheduler {
     }
 
     /// 「读取成功但 0 候选」每次运行只记一条：便于区分「确实没有新内容」与
-    /// 「启用时间/白名单对象/时效把候选全过滤了」，又不会每 2 分钟淹没运行日志。
-    /// 计数含义：动态数 / 时间线可见评论数 / 其中回复类评论数 / 我的评论数（可见 + 账本去重）。
+    /// 「启用时间/白名单对象/时效/已处理键把候选全过滤了」，又不会每 2 分钟淹没运行日志。
+    /// 计数含义：动态数 / 时间线可见评论数 / 其中回复类评论数 / 我的评论数（可见 + 账本去重）/
+    /// 被已处理键命中的评论数。
     private func logEmptyRoundOnce(
         scanned: Int,
         comments: Int,
         replies: Int,
         myComments: Int,
+        handledComments: Int,
         notBefore: Date,
         targetCount: Int
     ) {
@@ -1157,7 +1192,7 @@ final class SnsInteractionScheduler {
         loggedEmptyRound = true
         let watermark = notBefore.formatted(date: .numeric, time: .standard)
         logger?("朋友圈自动互动：时间线 \(scanned) 条动态（评论 \(comments) / 回复 \(replies) /"
-            + " 我的评论 \(myComments)），本轮无候选"
+            + " 我的评论 \(myComments) / 已处理评论 \(handledComments)），本轮无候选"
             + "（白名单私聊对象 \(targetCount) 人，启用时间 \(watermark)）")
     }
 
@@ -1177,6 +1212,13 @@ final class SnsInteractionScheduler {
         default:
             return false
         }
+    }
+
+    /// bridge 写频率限制（HTTP 429）：短暂节流，不应当成失败消耗重试预算。
+    private static func isRateLimited(_ error: Error) -> Bool {
+        guard let snsError = error as? SnsClientError else { return false }
+        if case .rateLimited = snsError { return true }
+        return false
     }
 
     /// 通道级失败：继续处理其它候选只会重复失败，立即结束本轮。

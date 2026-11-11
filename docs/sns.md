@@ -5,7 +5,7 @@
 > `hook/script.js` 与 `hook/versions/*.json`，**不写入本文档**（安全披露边界）。
 >
 > **目标微信版本**：macOS 微信 4.2.0.17（build 270353）与 4.2.0.12（build 270348）。
-> **发布状态**：朋友圈（Moments）与 4.2.0.17 适配自 **4.0.0** 起正式提供；下文为 4.0.1 契约。
+> **发布状态**：朋友圈（Moments）与 4.2.0.17 适配自 **4.0.0** 起正式提供；下文为 4.0.2 契约。
 > 其它版本不承诺；每个版本需要独立的 `hook/versions/<version>_mac.json`（含 SNS 锚点）。
 > 目前只有这两个版本 JSON 含 SNS 锚点；缺锚点时 SNS 读请求返回 503
 > `sns_channel_unconfigured`，写接口同样不可用（发布还会先因无样本返回 503
@@ -294,14 +294,19 @@
 - **频率**：每天最多互动次数（评论 + 回复合计）0–20，**0 = 无上限**（只受最小间隔与检查节奏约束）；
   两次互动最小间隔 0–180 分钟；每条动态当天最多回复 `maxRepliesPerPost`（0–5，**0 = 无上限**；
   评论动态不计入）；只处理最近 `maxAgeHours`（1–72）内的内容；检查间隔 60–600 秒。
-  达到每日上限/未到最小间隔时整轮跳过，不排队、不补发。
+  达到每日上限/未到最小间隔时整轮跳过，不排队、不补发。**每轮检查最多提交 1 条**：bridge 对
+  comment/like 的写入有 10 秒最小间隔，同一轮连续提交第二条会 429；429 只算本轮跳过、不消耗
+  「同一候选 3 次 / 10 分钟冷却」的失败预算，下一轮检查再试。
 - **评论句柄捕获提示**：开启自动互动且已有互动对象/动作、非演练时，设置页开关、启动检测与评论输入面板都会把
   「在微信里手动评论或点赞一次」作为捕获步骤（首次评论/回复前需要 0xD5 句柄）；评论句柄与「打开一次朋友圈」
   读取样本、发布 post 样本是三条独立通道。自动互动从不在句柄未就绪时提交请求。
-- **去重**：账本记录已处理的 `post:<id>` / `comment:<id>`；时间线里已出现自己的评论或已回复过该评论时
-  也跳过（即使账本丢失）。「好友回复我的评论」同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，
-  避免 native 回包缺少父评论时漏判。同一候选失败后 10 分钟内不重试、最多尝试 3 次；目标动态/评论
-  已不存在时标记已处理并跳过。
+- **去重**：账本记录已处理的 `post:<post_id>` / `comment:<post_id>:<comment_id>`；时间线里已出现自己的
+  评论或已回复过该评论时也跳过（即使账本丢失）。**评论键必须带动态 ID**：4.2.0.17 原生评论
+  `comment_id` 是「每条动态内」的短 ID（真机多组短 ID，不同动态会复用同一个数字），不是全局唯一
+  的服务端 ID；只按评论 ID 去重会让一条动态处理过的 `comment:3` 把其它动态的评论 ID=3 全部误判成已处理
+  （2026-11-11 修复，旧账本里的 `comment:<id>` 键不再匹配新键，30 天后自然过期）。「好友回复我的评论」
+  同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，避免 native 回包缺少父评论时漏判。同一候选
+  失败后 10 分钟内不重试、最多尝试 3 次；目标动态/评论已不存在时标记已处理并跳过。
 - **识图**：`interaction.useVision` 开启且「AI 模型 → 识图模型」已配置时，把动态内的**全部图片**
   （微信单条最多 9 张）放进同一次视觉请求，让模型按顺序描述并用一句话总结整组图片；整组请求失败
   （部分模型不支持多图/请求过大）时自动回退为逐张识别，仍覆盖全部图片。每张图片优先原图、失败回退缩略图；
@@ -489,7 +494,7 @@ hook/script.js（微信进程）
   c<id2> 生成机器人 c<id3>（reply_to=<id>、reply_to_user_id=<uid>、若干字），页面评论闭环。
   DB 32 位 `comment_id`（真机实测）因此确认可作 `reply_comment_id`；bridge 对 DB 评论带
   `comment_id_confirmed:true`（`comment64_id` 有效时也 confirmed）。`comment_id_unconfirmed` 只保留给旧
-  schema/回退，不用于 4.2.0.17 `SnsMessage_tmp3`。原生评论直接信任服务端 ID（短数字 3/35/67/99/131 正常）；
+  schema/回退，不用于 4.2.0.17 `SnsMessage_tmp3`。原生评论直接信任服务端 ID（短数字 ID 正常）；
   App 仅对 DB 评论要求 confirmed 才可自动/手动回复，未确认的只展示。边界：仅 4.2.0.17 实测、依赖 sns key
   缓存、其它版本 schema 可能不同、失败静默降级。
 - 首页/刷新（`max_id=0`）：native 模式且 hook 已捕获真实请求体时，bridge 重放该请求体（§1.1.1）；
@@ -675,7 +680,7 @@ hook/script.js（微信进程）
   确认可作 `reply_comment_id`（请求 `ReplyCommentID=<id>`、`ReplyCommentID2=0`，服务端生成 c<id1>）；
   `comment64_id` 有效时也视为 confirmed。DB 评论 JSON 带 `comment_id_confirmed:true` 与 `source:"db"`；
   `comment_id_unconfirmed` 仅保留给旧 schema/回退，不用于 4.2.0.17 的 `SnsMessage_tmp3`。App 对原生评论
-  直接信任服务端 ID（短数字 3/35/67/99/131 正常），DB 评论仅 confirmed 才可自动/手动回复；两列都为 0 时
+  直接信任服务端 ID（短数字 ID 正常），DB 评论仅 confirmed 才可自动/手动回复；两列都为 0 时
   `comment_id` 为空且不加标记。
 
 ### 4.9 `POST /sns/db/comments`（调试探针，仅 `snsProbe=true`）
@@ -989,6 +994,8 @@ hook/script.js（微信进程）
 
 | 日期 | 变更 |
 | --- | --- |
+| 2026-11-11 | **修复自动互动同轮连发评论被 429**：真机修复去重键后首轮同时命中两条待回复评论，第一条成功、第二条被 bridge 评论最小间隔（10 秒）拒绝为 429 `sns_rate_limited`，旧实现把它记成失败尝试并 10 分钟内不再重试。改为每轮检查最多提交 1 条（其余候选下一轮处理）；429 视为本轮跳过，不写失败尝试、不消耗「同一候选 3 次 / 10 分钟冷却」预算，下一轮检查直接重试。新增两条单测（无最小间隔时一轮只提交一条 / 429 后可立即重试）。契约见 §1.5 |
+| 2026-11-11 | **修复自动互动不再回复评论（评论去重键跨动态碰撞）**：真机 4.2.0.17 原生评论 `comment_id` 是每条动态内的短 ID（多组短 ID），不同动态复用同一数字；旧账本键 `comment:<comment_id>` 不带动态 ID，导致只要某条动态的评论 <id> 被处理过，其它动态所有评论 <id> 都被当成「已处理」，规划器整轮 0 候选、不报错。改为 `comment:<post_id>:<comment_id>`（`SnsInteractionCandidate.key`），并新增回归：同名 ID 跨动态分别出候选、处理过 p1 不影响 p2、旧 `comment:<id>` 键不再拦截（已回复的同帖评论仍由时间线中自己的回复兜底跳过）。真机数据核对：修复前 0 候选，修复后 2 条新评论（两条评论）恢复为候选；Swift 单测覆盖；0 候选日志新增「已处理评论 N」计数以便区分「没有新内容」与「被已处理键拦掉」。契约见 §1.5 |
 | 2026-11-09 | **sns.db 只读评论补全（P1）+ 0xd2 结论**：Mac UI 不触发 0xd2 `mmsnsobjectdetail`（Lead 本机 3 轮探针 + 静态分析），objectdetail 路线放弃；新增 `POST /sns/db/schema`（`snsProbe`/`snsDbRead`）与仅调试卷 `/sns/db/comments`；SQLCipher4 页解密 + WAL 合并到容器 tmp，只读查 schema/COUNT(*)/page_count 后删除，返回脱敏 schema、不返回 key/内容；key 仅缓存 `~/Library/Caches/WeChatAI/db-keys.json`（0600）。timeline 在 `snsEnable=true` 时按 signed `feed_id` 补 `SnsMessage_tmp3` 评论（原生优先/只补缺/count max/truncated 重算，失败静默）；`snsDbRead=true` 支持仅 DB 模式。真机初版读取到两条「好友回复机器人评论」正文；P7 端到端闭环见下条。见 §4.2/§4.8/§4.9/§8/§9 |
 | 2026-11-10 | **sns.db P1 闭环（回复目标确认）**：手动回复某好友 的 reply 时抓包请求 `ReplyCommentID=<id>`（`ReplyCommentID2=0`），服务端接受生成 c<id1>（reply_to=<id>），确认 4.2.0.17 `SnsMessage_tmp3.comment_id`（32 位）可作 `reply_comment_id`；P7 随后自动回复 c<id2> 生成 c<id3>（reply_to=<id>、reply_to_user_id=<uid>、若干字），页面评论闭环。bridge DB 评论带 `comment_id_confirmed:true`（64 位也 confirmed），`comment_id_unconfirmed` 只留旧 schema/回退；App 原生评论信任服务端 ID、DB 评论仅 confirmed 可回复，移除短数字启发式。边界：仅 4.2.0.17、依赖 sns key 缓存、其它 schema 可能不同。 |
 | 2026-11-09 | **朋友圈同步 CmdBuf 解码（P0，部分打通）**：真机定位 `CmdBuf` 为外层信封 `{1: len, 2: payload}`，bridge 先解包；cmd45（SnsObject）→ `sns_new_post` 正常，cmd46（SnsActionGroup）的 Type 1/2/3 → 点赞/评论/回复可解码，Type=11 只产 `sns_comment_hint`（不伪造正文/不写缓存），真正未知动作才计入 unsupported。评论 JSON 新增可选 `reply_to_user_id`（timeline 取 `ReplyUsername`、sync 取 `Action.ToUsername`），用于 Type 2/3 评论的回复识别；sync 评论按 `comment_id` 并入缓存、`/sns/timeline` 补缺（count 取 max、重算 truncated）。P7 每轮先 best-effort `/sns/sync` 再拉 timeline，**重启保留互动水位**（24h 时效 + 去重，关闭互动/切号清空）。**Type=11 hint：4.2.0.17 实测「好友回复机器人评论」为 Type=11，payload 无 Content/CommentID，App 仅静默刷新、无可见提示；回复正文由 sns.db 只读补全，32 位 comment_id=<id> 已确认可作 reply_comment_id，P7 自动回复已生成 c<id3>、页面闭环（Mac UI 不触发 0xd2）。** 新增 bridge `sns_sync_envelope_test.go` 与 App `reply_to_user_id` / 水位回归。契约见 §1.2/§1.5/§4.5/§5.2/§8/§9 |

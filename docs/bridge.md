@@ -26,8 +26,8 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   `script.js` 同步 `hook/script.js` 的微信版本化适配（4.1.12 / 4.1.15 / 4.2.0.5 / 4.2.0.9 /
   4.2.0.12 / 4.2.0.17，见 §5）。
 
-> **发布状态（2026-11-10）**：本文描述 **4.0.1**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
-> 下载用户见 [`install.md`](install.md) 与 [`releases/4.0.1.md`](releases/4.0.1.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.0.2**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
+> 下载用户见 [`install.md`](install.md) 与 [`releases/4.0.2.md`](releases/4.0.2.md)。
 
 ---
 
@@ -326,7 +326,7 @@ Content-Type: application/json
 - **DB 补全评论字段**：`comment` 可带可选 `comment_id_confirmed:true` 与 `source:"db"`；4.2.0.17 的
   `SnsMessage_tmp3.comment_id`（32 位，真机实测）已手动抓包确认可作 `/sns/comment` 的 `reply_comment_id`，
   `comment64_id` 有效时也 confirmed。`comment_id_unconfirmed` 只保留给旧 schema/回退；两列均为 0 时
-  comment_id 为空。原生评论直接信任服务端 ID（短数字 3/35/67/99/131 正常）。
+  comment_id 为空。原生评论直接信任服务端 ID（短数字 ID 正常）。
 - **评论/点赞句柄**：hook 的 slot13 捕获覆盖 0xD3/0xD6/0xD1/0xD5；首次评论前需用户在微信里手动点一次
   评论一次（点赞也可能），`comment_ready` 才会变 true（样本随 `sns-capture.json` 持久化，同一微信进程内可恢复）。
 - **不控制微信界面**：读取在主动发送不可用时回退 `source=passive`（用户手动打开一次朋友圈后缓存）；
@@ -347,7 +347,7 @@ Content-Type: application/json
 - **构建与测试**：从完全干净状态（删除 `bridge/onebot` 与 `/tmp/chatbot-bridge-cache`）重跑
   `scripts/build_bridge.sh` 成功：下载并校验 Go 1.25.14 与 devkit 17.8.0，编译、`-h` 自检与
   `bridge/*_test.go` 全部通过（19 个 `_test.go`、Go 312 项用例 = 180 顶层 + 132 子测试，0 失败）；
-  Swift 886 项执行（884 通过 / 2 跳过 / 0 失败，41 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
+  Swift 891 项执行（889 通过 / 2 跳过 / 0 失败，41 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
   `script.js` 的 4.1.15 / 4.1.12 模板渲染结果 `node --check` 均通过。
 - **SNS 同步 CmdBuf**：`bridge/sns_sync_envelope_test.go` 覆盖外层信封 `{1: len, 2: payload}`、cmd45 与
   cmd46 的 Type 1/2/3 解码、评论合并去重与 timeline `reply_to_user_id`；解码结构来自 2026-11-09 真机样本。

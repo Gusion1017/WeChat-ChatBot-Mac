@@ -363,6 +363,72 @@ final class SnsInteractionPlannerTests: XCTestCase {
         XCTAssertTrue(candidates.isEmpty, "已经回复过的评论不能再次自动回复")
     }
 
+    /// 回归（2026-11-11）：4.2.0.17 原生评论 ID 是「每条动态内」的短数字（3/35/67…），
+    /// 不同动态会复用同一个 ID。去重键必须带动态 ID，否则第一条动态的 comment:3
+    /// 会把其它动态的 comment:3 全部当成已处理，自动回复静默变成 0 候选。
+    func testSameCommentIDOnDifferentPostsIsNotDedupedTogether() {
+        let first = makePost(
+            id: "p1", authorID: selfID,
+            comments: [makeComment(id: "3", userID: friendID)]
+        )
+        let second = makePost(
+            id: "p2", authorID: selfID,
+            comments: [makeComment(id: "3", userID: friendID, text: "另一个动态的评论")]
+        )
+        let candidates = plannerCandidates(
+            posts: [first, second], selfID: selfID, settings: makeSettings(), now: now
+        )
+        XCTAssertEqual(candidates.count, 2)
+        XCTAssertEqual(Set(candidates.map(\.key)), ["comment:p1:3", "comment:p2:3"])
+    }
+
+    /// 去重键按动态隔离：处理过 p1 的评论 3 只跳过 p1，不影响 p2 的同 ID 评论。
+    func testHandledReplyKeyIsScopedToItsPost() {
+        let first = makePost(
+            id: "p1", authorID: selfID,
+            comments: [makeComment(id: "3", userID: friendID)]
+        )
+        let second = makePost(
+            id: "p2", authorID: selfID,
+            comments: [makeComment(id: "3", userID: friendID, text: "另一个动态的评论")]
+        )
+        let candidates = plannerCandidates(
+            posts: [first, second],
+            selfID: selfID,
+            settings: makeSettings(),
+            now: now,
+            handledKeys: ["comment:p1:3"]
+        )
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates.first?.key, "comment:p2:3")
+    }
+
+    /// 旧账本里的 `comment:<id>` 键没有动态信息（正是本次修复的碰撞来源），
+    /// 升级后不能继续把同 ID 的其它动态评论全部拦掉；已回复过的同帖评论由
+    /// 时间线里自己的回复兜底跳过，不依赖旧键。
+    func testLegacyCommentKeyDoesNotBlockSameIDOnOtherPosts() {
+        let first = makePost(
+            id: "p1", authorID: selfID,
+            comments: [makeComment(id: "3", userID: friendID)]
+        )
+        let replied = makePost(
+            id: "p2", authorID: selfID,
+            comments: [
+                makeComment(id: "35", userID: friendID),
+                makeComment(id: "67", userID: selfID, replyTo: "35")
+            ]
+        )
+        let candidates = plannerCandidates(
+            posts: [first, replied],
+            selfID: selfID,
+            settings: makeSettings(),
+            now: now,
+            handledKeys: ["comment:3", "comment:35"]
+        )
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates.first?.key, "comment:p1:3")
+    }
+
     func testRepliesToReplyOfMyCommentOnOthersPost() {
         let myComment = makeComment(id: "c-self", userID: selfID, ageSeconds: -900)
         let reply = makeComment(id: "c-reply", userID: friendID, replyTo: "c-self")
@@ -931,8 +997,9 @@ final class SnsInteractionSchedulerTests: XCTestCase {
         _ = await scheduler.performCheck()
         XCTAssertTrue(logs.contains {
             $0.contains("时间线 1 条动态") && $0.contains("评论 1 / 回复 0 / 我的评论 0")
+                && $0.contains("已处理评论 0")
                 && $0.contains("白名单私聊对象 1 人")
-        }, "0 候选日志需包含动态/评论/回复/我的评论/白名单对象计数")
+        }, "0 候选日志需包含动态/评论/回复/我的评论/已处理评论/白名单对象计数")
     }
 
     func testCommentsNewPostAndDoesNotRepeat() async {
@@ -961,6 +1028,90 @@ final class SnsInteractionSchedulerTests: XCTestCase {
         let summary = await harness.scheduler.performCheck()
         XCTAssertEqual(summary.repliedCount, 1)
         XCTAssertEqual(harness.submitted().first?.candidate.comment?.commentID, "c1")
+    }
+
+    /// bridge 对 comment 的写入有 10 秒最小间隔：即使「两次互动最小间隔」= 0，
+    /// 一轮检查也只能提交一条，否则同一轮的第二条必被 429
+    /// （2026-11-11 22:37 真机复现：第一条成功、第二条 sns_rate_limited）。
+    func testOnlyOneInteractionPerCheckEvenWithoutMinInterval() async {
+        let settings = makeSettings(minIntervalMinutes: 0)
+        let posts = [
+            makePost(id: "p1", authorID: "wxid_self",
+                     comments: [makeComment(id: "3")]),
+            makePost(id: "p2", authorID: "wxid_self",
+                     comments: [makeComment(id: "3", text: "另一条动态的评论")])
+        ]
+        let harness = makeHarness(posts: posts, interaction: settings)
+
+        let first = await harness.scheduler.performCheck()
+        XCTAssertEqual(first.repliedCount, 1)
+        XCTAssertEqual(harness.submitted().count, 1, "一轮只能提交一条，避免 bridge 429")
+
+        let second = await harness.scheduler.performCheck()
+        XCTAssertEqual(second.repliedCount, 1)
+        XCTAssertEqual(harness.submitted().count, 2)
+        XCTAssertEqual(
+            Set(harness.submitted().map { $0.candidate.key }),
+            ["comment:p1:3", "comment:p2:3"]
+        )
+    }
+
+    /// 429 是节流不是失败：不写失败尝试（不消耗 3 次预算 / 10 分钟冷却），
+    /// 下一轮检查可以立即重试。
+    func testRateLimitedIsTransientAndDoesNotConsumeAttemptBudget() async {
+        var logs: [String] = []
+        var submitCalls = 0
+        var shouldRateLimit = true
+        let ledger = SnsInteractionLedger(
+            accountID: "wxid_ratelimit_\(UUID().uuidString)",
+            defaults: defaults
+        )
+        let config = SnsInteractionScheduler.Configuration(
+            snsEnabled: true,
+            writeEnabled: true,
+            nativeSendEnabled: true,
+            dryRun: false,
+            interaction: makeSettings(),
+            targetUserIDs: ["wxid_friend"]
+        )
+        let post = makePost(id: "p-own", authorID: "wxid_self",
+                            comments: [makeComment(id: "3")])
+        let scheduler = SnsInteractionScheduler(
+            configurationProvider: { config },
+            snapshotProvider: {
+                SnsInteractionScheduler.Snapshot(
+                    selfID: "wxid_self",
+                    commentReady: true,
+                    canRefreshNatively: true,
+                    pageSource: "native",
+                    posts: [post]
+                )
+            },
+            draftProvider: { _ in SnsInteractionDraft(text: "真不错，想去看看") },
+            submitHandler: { _, _ in
+                submitCalls += 1
+                if shouldRateLimit { throw SnsClientError.rateLimited }
+                return SnsCommentResult(commentID: "c-new")
+            },
+            ledger: ledger,
+            accountProvider: { "wxid_self" },
+            logger: { logs.append($0) },
+            sessionStartedAt: Date().addingTimeInterval(-3600)
+        )
+
+        let first = await scheduler.performCheck()
+        XCTAssertEqual(first.repliedCount, 0)
+        XCTAssertEqual(first.failedCount, 0, "429 不应计入失败")
+        XCTAssertEqual(first.skippedCount, 1)
+        XCTAssertTrue(logs.contains { $0.contains("限流") })
+        let snapshot = await ledger.snapshot()
+        XCTAssertTrue(snapshot.attempts.isEmpty, "429 不应占用失败重试预算")
+
+        // 无 10 分钟冷却：下一轮检查立刻重试并成功。
+        shouldRateLimit = false
+        let second = await scheduler.performCheck()
+        XCTAssertEqual(second.repliedCount, 1)
+        XCTAssertEqual(submitCalls, 2)
     }
 
     /// 演练模式：只生成并记录演练结果，不提交、不写真实账本。
@@ -1092,9 +1243,11 @@ final class SnsInteractionSchedulerTests: XCTestCase {
     }
 
     func testFailureEntersRetryCooldown() async {
+        // 429 是节流（见 testRateLimitedIsTransientAndDoesNotConsumeAttemptBudget），
+        // 这里用普通可重试失败验证 10 分钟冷却/最多 3 次的重试预算。
         let harness = makeHarness(
             posts: [makePost(id: "p1")],
-            submitError: SnsClientError.rateLimited
+            submitError: SnsClientError.timedOut
         )
         _ = await harness.scheduler.performCheck()
         _ = await harness.scheduler.performCheck()
