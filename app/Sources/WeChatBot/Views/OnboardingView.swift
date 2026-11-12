@@ -47,7 +47,9 @@ struct OnboardingView: View {
             }
         }
         .frame(width: 720, height: 620)
-        .interactiveDismissDisabled(isInstalling)
+        // 向导必须走「跳过向导 / 完成」按钮，避免 Esc/点外部关闭后 hasCompletedOnboarding
+        // 没写入，下次启动又弹一次（也会丢掉已输入的 API Key）。
+        .interactiveDismissDisabled(true)
         .sheet(isPresented: $showRiskConfirm) {
             ConfirmSheet(
                 title: "备份并安装 Hook",
@@ -225,7 +227,10 @@ struct OnboardingView: View {
             InlineNotice(
                 kind: .warning,
                 title: "开始前的准备",
-                message: "需要已安装 arm64 官方微信（4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55）。安装 Hook 会修改微信应用包，请先完全退出微信。"
+                message: Lf(
+                    "需要已安装 arm64 官方微信（%@）。安装 Hook 会修改微信应用包，请先完全退出微信。",
+                    WeChatVersionSupport.displayList
+                )
             )
         }
     }
@@ -254,21 +259,29 @@ struct OnboardingView: View {
 
             SettingsSection(title: "检测结果") {
                 SettingsRow(title: "微信路径", symbol: "iphone", tint: Theme.accent) {
-                    Text(UIFormat.compactPath(store.settings.hook.wechatPath))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    Text(UIFormat.compactPath(
+                        store.hookStatus.wechatDetectedPath.isEmpty
+                            ? store.settings.hook.wechatPath
+                            : store.hookStatus.wechatDetectedPath
+                    ))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 }
                 SettingsDivider()
                 SettingsRow(title: "版本", symbol: "number", tint: .secondary) {
                     HStack(spacing: 6) {
-                        Text(store.hookStatus.wechatVersion.isEmpty ? L("未检测") : store.hookStatus.wechatVersion)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                        Text(
+                            WeChatStatusPresentation.versionDisplay(store.hookStatus).isEmpty
+                                ? L("未检测")
+                                : WeChatStatusPresentation.versionDisplay(store.hookStatus)
+                        )
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
                         PillLabel(
-                            text: store.hookStatus.matchedVersion ? "已匹配" : "待匹配",
-                            color: store.hookStatus.matchedVersion ? Theme.success : Theme.warning
+                            text: versionBadge.text,
+                            color: versionBadge.color
                         )
                     }
                 }
@@ -298,6 +311,35 @@ struct OnboardingView: View {
                     title: "未安装 Command Line Tools",
                     message: "安装完成后点「重新检测」，即可继续安装 Hook。"
                 )
+            }
+
+            if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
+                InlineNotice(
+                    kind: .warning,
+                    title: "微信版本未适配",
+                    message: Lf(
+                        "当前微信 %@ 不在适配列表（%@）。请换回受支持版本，或使用「设置 → Hook → 版本配置文件」指定自定义配置。",
+                        WeChatStatusPresentation.versionDisplay(store.hookStatus),
+                        WeChatVersionSupport.compactList()
+                    )
+                )
+            }
+
+            if let alternate = alternateWeChatPath {
+                VStack(alignment: .leading, spacing: 8) {
+                    InlineNotice(
+                        kind: .info,
+                        title: "检测到另一个微信",
+                        message: Lf("当前微信位于 %@，与设置路径不同；点击「使用该路径」可同步设置。", alternate)
+                    )
+                    Button(L("使用该路径")) {
+                        store.settings.hook.wechatPath = alternate
+                        store.persist()
+                        detectWeChat()
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                }
             }
 
             if isInstalling {
@@ -331,13 +373,9 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.glassProminent)
                 .tint(Theme.warning)
-                .disabled(isInstalling || isDetecting || commandLineToolsStatus?.isReady != true)
-                .help(L(commandLineToolsStatus?.isReady == true
-                        ? "备份官方微信，注入 Frida Gadget 并重新签名"
-                        : "需要安装 Xcode Command Line Tools"))
-                .accessibilityHint(commandLineToolsStatus?.isReady == true
-                        ? ""
-                        : L("需要安装 Xcode Command Line Tools"))
+                .disabled(isInstalling || store.isHookOperationInFlight || isDetecting || installDisabledReason != nil)
+                .help(L(installDisabledReason ?? "备份官方微信，注入 Frida Gadget 并重新签名"))
+                .accessibilityHint(installDisabledReason.map { L($0) } ?? "")
 
                 Spacer()
             }
@@ -438,6 +476,8 @@ struct OnboardingView: View {
                     .disabled(isTestingAI)
 
                     Button(L("打开 AI 模型页")) {
+                        // 先落草稿密钥，避免用户跳到 AI 模型页后才发现 Key 没保存。
+                        guard persistDraftAPIKey() else { return }
                         store.isOnboardingPresented = false
                         store.sidebarSelection = .ai
                     }
@@ -476,7 +516,9 @@ struct OnboardingView: View {
             SettingsSection(title: "配置检查") {
                 checklistRow(
                     title: "微信",
-                    detail: store.hookStatus.wechatVersion.isEmpty ? "未检测到版本" : "版本 \(store.hookStatus.wechatVersion)",
+                    detail: WeChatStatusPresentation.versionDisplay(store.hookStatus).isEmpty
+                        ? "未检测到版本"
+                        : "版本 \(WeChatStatusPresentation.versionDisplay(store.hookStatus))",
                     ready: !store.hookStatus.wechatVersion.isEmpty,
                     icon: "iphone"
                 )
@@ -620,8 +662,26 @@ struct OnboardingView: View {
 
     private func goNext() {
         guard step < stepTitles.count - 1 else { return }
+        // 离开 AI 步骤前把输入框里的草稿密钥落 Keychain：点「下一步」不应静默丢弃。
+        guard persistDraftAPIKey() else { return }
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
             step += 1
+        }
+    }
+
+    /// 把向导里输入的 API Key 写入 Keychain；返回 false 表示保存失败（应留在当前步骤）。
+    @discardableResult
+    private func persistDraftAPIKey() -> Bool {
+        let secret = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !secret.isEmpty, let provider = selectedProvider else { return true }
+        do {
+            try store.saveAPIKey(secret, for: provider.id)
+            apiKeyDraft = ""
+            toast.show("API Key 已存入 Keychain", tone: .success, symbol: "key.fill")
+            return true
+        } catch {
+            toast.show(Lf("保存 API Key 失败：%@", error.localizedDescription), tone: .error, symbol: "key.slash")
+            return false
         }
     }
 
@@ -639,6 +699,8 @@ struct OnboardingView: View {
     }
 
     private func finish() {
+        // 完成/立即启动前同样先保存草稿密钥，避免「已配置」但实际没写 Keychain。
+        guard persistDraftAPIKey() else { return }
         hasCompletedOnboarding = true
         store.isOnboardingPresented = false
         if shouldStartBot {
@@ -657,16 +719,51 @@ struct OnboardingView: View {
     }
 
     private func detectWeChat() {
+        guard !isDetecting else { return }
         isDetecting = true
-        store.hookStatus.wechatVersion = AppStore.installedWeChatVersion(path: store.settings.hook.wechatPath) ?? ""
         Task {
             await store.refreshStatus()
             isDetecting = false
+            let display = WeChatStatusPresentation.versionDisplay(store.hookStatus)
             toast.show(
-                store.hookStatus.wechatVersion.isEmpty ? "未检测到微信，请检查路径" : "已检测到微信 \(store.hookStatus.wechatVersion)",
-                tone: store.hookStatus.wechatVersion.isEmpty ? .warning : .success
+                display.isEmpty ? "未检测到微信，请检查路径" : "已检测到微信 \(display)",
+                tone: display.isEmpty ? .warning : .success
             )
         }
+    }
+
+    private var alternateWeChatPath: String? {
+        WeChatStatusPresentation.alternateDetectedPath(
+            status: store.hookStatus,
+            configuredPath: store.settings.hook.wechatPath
+        )
+    }
+
+    private var versionBadge: (text: String, color: Color) {
+        if store.hookStatus.wechatVersion.isEmpty {
+            return ("未检测", .secondary)
+        }
+        if !store.hookStatus.wechatVersionKnown {
+            return ("未适配", Theme.warning)
+        }
+        return (store.hookStatus.matchedVersion ? "已匹配" : "待匹配",
+                store.hookStatus.matchedVersion ? Theme.success : Theme.warning)
+    }
+
+    private var installDisabledReason: String? {
+        if commandLineToolsStatus?.isReady != true {
+            return "需要安装 Xcode Command Line Tools"
+        }
+        if isDetecting {
+            return "正在检测微信，请稍候"
+        }
+        if store.hookStatus.wechatVersion.isEmpty {
+            return "未检测到微信；请先确认微信路径"
+        }
+        if !store.hookStatus.wechatVersionKnown {
+            return "当前微信版本不在适配列表，安装会失败"
+        }
+        return nil
     }
 
     private func installHook() {

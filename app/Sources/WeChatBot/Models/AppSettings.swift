@@ -140,9 +140,9 @@ enum SleepPreventionMode: String, Codable, CaseIterable, Hashable, Identifiable 
 
 struct GeneralSettings: Codable, Hashable {
     var appearance: AppearanceMode = .system
+    /// 登录项偏好镜像。真实状态以 LaunchAtLoginService 为准；关闭开关/系统登录项变化后
+    /// Settings 页会把这里同步成实际值。
     var launchAtLogin: Bool = false
-    var notificationsEnabled: Bool = true
-    var soundEnabled: Bool = false
     var confirmBeforeQuit: Bool = true
     var language: String = "system"
     var sleepPrevention: SleepPreventionMode = .never
@@ -160,8 +160,6 @@ extension GeneralSettings {
     private enum CodingKeys: String, CodingKey {
         case appearance
         case launchAtLogin
-        case notificationsEnabled
-        case soundEnabled
         case confirmBeforeQuit
         case language
         case sleepPrevention
@@ -176,9 +174,6 @@ extension GeneralSettings {
         let appearanceRaw = try container.decodeIfPresent(String.self, forKey: .appearance)
         appearance = appearanceRaw.flatMap { AppearanceMode(rawValue: $0) } ?? defaults.appearance
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? defaults.launchAtLogin
-        notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled)
-            ?? defaults.notificationsEnabled
-        soundEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? defaults.soundEnabled
         confirmBeforeQuit = try container.decodeIfPresent(Bool.self, forKey: .confirmBeforeQuit)
             ?? defaults.confirmBeforeQuit
         language = try container.decodeIfPresent(String.self, forKey: .language) ?? defaults.language
@@ -191,8 +186,6 @@ extension GeneralSettings {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(appearance.rawValue, forKey: .appearance)
         try container.encode(launchAtLogin, forKey: .launchAtLogin)
-        try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
-        try container.encode(soundEnabled, forKey: .soundEnabled)
         try container.encode(confirmBeforeQuit, forKey: .confirmBeforeQuit)
         try container.encode(language, forKey: .language)
         try container.encode(sleepPrevention.rawValue, forKey: .sleepPrevention)
@@ -202,7 +195,6 @@ extension GeneralSettings {
 struct HookSettings: Codable, Hashable {
     var wechatPath: String = "/Applications/WeChat.app"
     var gadgetPort: Int = 27042
-    var autoLaunchWeChat: Bool = true
     var autoStartBridge: Bool = true
     var versionConfigPath: String = ""
     var lastBackupPath: String = ""
@@ -212,7 +204,7 @@ struct HookSettings: Codable, Hashable {
     var enableNativeSend: Bool = true
 
     private enum CodingKeys: String, CodingKey {
-        case wechatPath, gadgetPort, autoLaunchWeChat, autoStartBridge
+        case wechatPath, gadgetPort, autoStartBridge
         case versionConfigPath, lastBackupPath, didInstallGadget, enableNativeSend
     }
 
@@ -223,7 +215,6 @@ struct HookSettings: Codable, Hashable {
         let defaults = HookSettings()
         wechatPath = try container.decodeIfPresent(String.self, forKey: .wechatPath) ?? defaults.wechatPath
         gadgetPort = try container.decodeIfPresent(Int.self, forKey: .gadgetPort) ?? defaults.gadgetPort
-        autoLaunchWeChat = try container.decodeIfPresent(Bool.self, forKey: .autoLaunchWeChat) ?? defaults.autoLaunchWeChat
         autoStartBridge = try container.decodeIfPresent(Bool.self, forKey: .autoStartBridge) ?? defaults.autoStartBridge
         versionConfigPath = try container.decodeIfPresent(String.self, forKey: .versionConfigPath) ?? defaults.versionConfigPath
         lastBackupPath = try container.decodeIfPresent(String.self, forKey: .lastBackupPath) ?? defaults.lastBackupPath
@@ -238,17 +229,17 @@ struct OneBotSettings: Codable, Hashable {
     /// OneBot HTTP 鉴权 Token。默认留空：首次启动机器人时由 App 生成随机值并持久化，
     /// 避免所有部署共用公开的固定默认值。本地 Mock 可手动填 `wechatai-local-token`。
     var token: String = ""
-    var connType: String = "websocket"
-    var bridgePath: String = ""
+    /// 旧版自定义 bridge/连接类型：运行期固定使用内置 bridge + WebSocket，字段已移除；
+    /// 旧配置中的同名键按未知键忽略。
     var imagePath: String = ""
 }
 
 extension OneBotSettings {
     private enum CodingKeys: String, CodingKey {
-        case host, port, token, connType, bridgePath, imagePath
+        case host, port, token, imagePath
     }
 
-    /// 逐键解码：旧配置缺 `connType` / `bridgePath` / `imagePath` 时不能整段回退，
+    /// 逐键解码：旧配置缺 `imagePath` 时不能整段回退，
     /// 否则随机生成的 OneBot token 会被重置，外部 bridge 直接连不上。
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -256,10 +247,6 @@ extension OneBotSettings {
         host = (try? container.decodeIfPresent(String.self, forKey: .host)) ?? defaults.host
         port = (try? container.decodeIfPresent(Int.self, forKey: .port)) ?? defaults.port
         token = (try? container.decodeIfPresent(String.self, forKey: .token)) ?? defaults.token
-        connType = (try? container.decodeIfPresent(String.self, forKey: .connType))
-            ?? defaults.connType
-        bridgePath = (try? container.decodeIfPresent(String.self, forKey: .bridgePath))
-            ?? defaults.bridgePath
         imagePath = (try? container.decodeIfPresent(String.self, forKey: .imagePath))
             ?? defaults.imagePath
     }
@@ -304,23 +291,71 @@ struct AISettings: Codable, Hashable {
     var streamReplies: Bool = true
     /// 失败后的**额外**重试次数（0 = 不重试），实际最多请求 `retryCount + 1` 次。
     var retryCount: Int = 1
-    /// 按模型名（如 `deepseek-chat`）单独配置的温度。
-    /// `nil` 表示尚未迁移；字典中缺失某个模型时，请求不发送 temperature，
-    /// 由模型自身使用默认温度。
+    /// 旧版“按模型温度”表：仅用于迁移到各通道的 `temperatureOverride` 与旧版本回滚；
+    /// 新版本请求不再读取它。`nil` 表示旧配置尚未迁移（或新安装）。
     var modelTemperatures: [String: Double]?
+    /// 是否已完成「按模型温度 → 按通道温度」迁移。避免旧表在每次启动时重复覆盖通道配置。
+    var temperaturesMovedToChannels: Bool = false
     /// 识图模型设置；nil 表示未配置（旧配置/默认关闭）。
     var vision: VisionSettings?
-    /// 当前模型生效的自定义温度；未配置返回 `nil`（模型默认）。
+
+    /// 旧版按模型温度查询（迁移/回滚兼容）；新请求请读 `AIProvider.requestTemperature`。
+    /// 未配置返回 `nil`（模型默认）。
     func temperature(forModel model: String) -> Double? {
         let key = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, let value = modelTemperatures?[key] else { return nil }
         return min(max(value, 0), 2)
     }
+
+    /// 旧版按通道温度 → 按模型温度（v1.3 迁移表）。
+    ///
+    /// 旧字段默认值 `AIProvider.legacyDefaultTemperature`（0.7）不代表用户主动选择：
+    /// 一律视为「未配置」，让模型使用自身默认温度。只有真正改过（≠ 0.7）的值才迁移；
+    /// 同一模型被多个通道使用且值不同时保留第一个（与请求实际使用的通道顺序一致）。
+    static func migratedLegacyTemperatures(providers: [AIProvider]) -> [String: Double]? {
+        var seeded: [String: Double] = [:]
+        for provider in providers {
+            let model = AIClient.effectiveModel(for: provider)
+            guard !model.isEmpty, seeded[model] == nil else { continue }
+            let value = min(max(provider.temperature, 0), 2)
+            guard abs(value - AIProvider.legacyDefaultTemperature) > 0.0001 else { continue }
+            seeded[model] = value
+        }
+        return seeded.isEmpty ? nil : seeded
+    }
+
+    /// v1.4 迁移：把旧「按模型温度」表（或更早的按通道温度）迁移到各通道的
+    /// `temperatureOverride`。迁移后旧表只保留用于回滚，不再影响请求。
+    ///
+    /// - 新字段已有值时不覆盖（显式配置优先）；
+    /// - 多个通道共用同一模型时，各自拿到同一温度，后续可独立修改；
+    /// - 只在 `temperaturesMovedToChannels == false` 时执行一次。
+    @discardableResult
+    static func migrateTemperaturesToChannels(
+        _ settings: inout AISettings,
+        providers: inout [AIProvider]
+    ) -> Bool {
+        guard !settings.temperaturesMovedToChannels else { return false }
+        let legacyMap = settings.modelTemperatures ?? migratedLegacyTemperatures(providers: providers)
+        if let legacyMap {
+            for index in providers.indices {
+                let model = AIClient.effectiveModel(for: providers[index])
+                guard !model.isEmpty,
+                      providers[index].temperatureOverride == nil,
+                      let value = legacyMap[model]
+                else { continue }
+                providers[index].temperatureOverride = min(max(value, 0), 2)
+            }
+        }
+        settings.temperaturesMovedToChannels = true
+        return true
+    }
 }
 
 extension AISettings {
     private enum CodingKeys: String, CodingKey {
-        case defaultProviderID, streamReplies, retryCount, modelTemperatures, vision
+        case defaultProviderID, streamReplies, retryCount
+        case modelTemperatures, temperaturesMovedToChannels, vision
     }
 
     /// 旧 `config.json` 没有 `streamReplies` / `retryCount` / `vision` 时只回退这些
@@ -335,6 +370,8 @@ extension AISettings {
             ?? defaults.retryCount
         modelTemperatures = try? container.decodeIfPresent(
             [String: Double].self, forKey: .modelTemperatures)
+        temperaturesMovedToChannels = (try? container.decodeIfPresent(
+            Bool.self, forKey: .temperaturesMovedToChannels)) ?? defaults.temperaturesMovedToChannels
         vision = try? container.decodeIfPresent(VisionSettings.self, forKey: .vision)
     }
 }
@@ -576,6 +613,24 @@ extension AppSettings {
 
 // MARK: - Load / save
 
+/// 一次配置加载的降级诊断。损坏文件会先备份再回退，这里记录备份路径供 UI 提示。
+struct SettingsLoadDiagnostics: Sendable, Equatable {
+    var corruptedConfigBackup: URL?
+    var corruptedProfileBackup: URL?
+
+    var hasCorruption: Bool {
+        corruptedConfigBackup != nil || corruptedProfileBackup != nil
+    }
+
+    static let none = SettingsLoadDiagnostics()
+}
+
+struct SettingsLoadResult: Sendable {
+    var settings: AppSettings
+    var diagnostics: SettingsLoadDiagnostics = .none
+    var isDegraded: Bool { diagnostics.hasCorruption }
+}
+
 enum SettingsStore {
     /// 应用默认加载：全局 `config.json` + 当前账号 `profile.json`。
     static func load() -> AppSettings {
@@ -586,15 +641,31 @@ enum SettingsStore {
     /// 可注入加载（测试用）：先读全局 config，再用账号 profile 覆盖账号字段。
     /// `profileURL == nil` 时只读 config（旧版行为，profile 不存在也走这里）。
     static func load(configURL: URL, profileURL: URL?) -> AppSettings {
-        var settings = loadConfig(configURL: configURL)
+        loadWithDiagnostics(configURL: configURL, profileURL: profileURL).settings
+    }
+
+    /// 与 `load` 相同，但返回损坏文件的备份路径；调用方可据此拒绝覆盖用户配置并提示。
+    static func loadWithDiagnostics(configURL: URL, profileURL: URL?) -> SettingsLoadResult {
+        var diagnostics = SettingsLoadDiagnostics()
+        var settings = loadConfig(configURL: configURL, diagnostics: &diagnostics)
         if let profileURL {
-            settings.applyProfile(loadProfile(profileURL: profileURL))
+            settings.applyProfile(
+                loadProfile(profileURL: profileURL, diagnostics: &diagnostics)
+            )
         }
-        return settings
+        return SettingsLoadResult(settings: settings, diagnostics: diagnostics)
     }
 
     /// 读取账号级 profile：缺失 → `.default`；损坏 → 备份 `profile.corrupt-<ts>.json` 后 `.default`。
     static func loadProfile(profileURL: URL) -> ProfileSettings {
+        var diagnostics = SettingsLoadDiagnostics()
+        return loadProfile(profileURL: profileURL, diagnostics: &diagnostics)
+    }
+
+    private static func loadProfile(
+        profileURL: URL,
+        diagnostics: inout SettingsLoadDiagnostics
+    ) -> ProfileSettings {
         guard let data = try? Data(contentsOf: profileURL) else { return .default }
         do {
             return try JSONDecoder().decode(ProfileSettings.self, from: data)
@@ -603,23 +674,68 @@ enum SettingsStore {
             let backup = profileURL.deletingLastPathComponent()
                 .appendingPathComponent("profile.corrupt-\(Int(Date().timeIntervalSince1970)).json")
             try? FileManager.default.copyItem(at: profileURL, to: backup)
+            if FileManager.default.fileExists(atPath: backup.path) {
+                diagnostics.corruptedProfileBackup = backup
+            }
             return .default
         }
     }
 
-    private static func loadConfig(configURL: URL) -> AppSettings {
+    private static func loadConfig(
+        configURL: URL,
+        diagnostics: inout SettingsLoadDiagnostics
+    ) -> AppSettings {
         guard let data = try? Data(contentsOf: configURL) else { return .default }
         do {
-            return try JSONDecoder().decode(AppSettings.self, from: data)
+            let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+            // `AppSettings` 的逐段解码用 `try?` 做兼容（缺键/类型错误回退默认），
+            // 因此整体 decode 可能「成功但某段已损坏」。这里再做一次严格段校验：
+            // 发现损坏时仍然使用已解码的可用字段，但记录备份，避免 `reload()` 静默覆盖。
+            if hasInvalidTopLevelSections(data) {
+                diagnostics.corruptedConfigBackup = backupCorruptedFile(
+                    configURL,
+                    prefix: "config"
+                )
+            }
+            return decoded
         } catch {
             NSLog("[WeChatAI] config decode failed: \(error)")
-            let backup = configURL.deletingLastPathComponent()
-                .appendingPathComponent("config.corrupt-\(Int(Date().timeIntervalSince1970)).json")
-            try? FileManager.default.copyItem(at: configURL, to: backup)
+            diagnostics.corruptedConfigBackup = backupCorruptedFile(configURL, prefix: "config")
             // 整体解码失败时按顶层段逐个降级解析：单个段损坏只丢该段，
             // 不让 onebot token / hook.wechatPath / providers 一起回退默认值。
             return decodeSectionsLossily(data)
         }
+    }
+
+    /// 严格校验已知顶层段；缺失的键不算损坏（旧配置兼容），类型/结构错误才算。
+    private static func hasInvalidTopLevelSections(_ data: Data) -> Bool {
+        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return true
+        }
+        let decoder = JSONDecoder()
+        func invalid<T: Decodable>(_ key: String, as type: T.Type) -> Bool {
+            guard let value = raw[key] else { return false }
+            guard JSONSerialization.isValidJSONObject(value),
+                  let section = try? JSONSerialization.data(withJSONObject: value)
+            else { return true }
+            return (try? decoder.decode(T.self, from: section)) == nil
+        }
+        return invalid("general", as: GeneralSettings.self)
+            || invalid("hook", as: HookSettings.self)
+            || invalid("onebot", as: OneBotSettings.self)
+            || invalid("ai", as: AISettings.self)
+            || invalid("bot", as: BotSettings.self)
+            || invalid("updates", as: UpdateSettings.self)
+            || invalid("providers", as: [AIProvider].self)
+            || invalid("personas", as: [Persona].self)
+            || invalid("schedules", as: [ScheduledTask].self)
+    }
+
+    private static func backupCorruptedFile(_ url: URL, prefix: String) -> URL? {
+        let backup = url.deletingLastPathComponent()
+            .appendingPathComponent("\(prefix).corrupt-\(Int(Date().timeIntervalSince1970)).json")
+        try? FileManager.default.copyItem(at: url, to: backup)
+        return FileManager.default.fileExists(atPath: backup.path) ? backup : nil
     }
 
     /// 逐段降级解析 `config.json`。

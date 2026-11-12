@@ -452,8 +452,25 @@ struct ScheduleEditorSheet: View {
             validationMessage = "请填写任务名称。"
             return
         }
+        // 重名任务在列表里难以区分；编辑时排除自身。
+        if store.schedules.contains(where: {
+            $0.id != candidate.id
+                && $0.name.caseInsensitiveCompare(candidate.name) == .orderedSame
+        }) {
+            validationMessage = "已有同名定时任务，请换一个名称。"
+            return
+        }
         guard !candidate.conversationID.isEmpty else {
             validationMessage = "请选择目标会话或填写会话 ID。"
+            return
+        }
+        if candidate.conversationID.contains(where: { $0.isWhitespace }) {
+            validationMessage = "会话 ID 不能包含空格。"
+            return
+        }
+        if candidate.conversationID.contains("@"),
+           !candidate.conversationID.hasSuffix("@chatroom") {
+            validationMessage = "群聊会话 ID 应以 @chatroom 结尾。"
             return
         }
         guard !candidate.content.isEmpty else {

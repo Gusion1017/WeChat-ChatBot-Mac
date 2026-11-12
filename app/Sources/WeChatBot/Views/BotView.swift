@@ -84,6 +84,10 @@ struct BotView: View {
                 }
                 .buttonStyle(.glassProminent)
                 .tint(store.isBotRunning ? Theme.danger : Theme.accent)
+                .disabled(store.isSwitchingAccount || store.isBotTransitioning)
+                .accessibilityHint(L(store.isSwitchingAccount
+                    ? "正在切换微信账号数据，请稍候"
+                    : (store.isBotTransitioning ? "机器人正在启停，请稍候" : "")))
             }
 
             // 分栏条不随内容滚动，始终可切换；`.id(selectedTab)` 让切换后回到顶部。
@@ -853,13 +857,23 @@ struct BotView: View {
     }
 
     private func toggleBot() {
+        guard !store.isSwitchingAccount, !store.isBotTransitioning else { return }
         Task {
             if store.isBotRunning {
                 await store.stopBot()
-                toast.show("机器人已停止", tone: .info)
+                toast.show(
+                    store.isBotRunning ? "停止请求未完成，请稍后重试" : "机器人已停止",
+                    tone: store.isBotRunning ? .warning : .info
+                )
             } else {
                 await store.startBot()
-                toast.show(store.isBotRunning ? "机器人已启动" : "启动请求已提交", tone: store.isBotRunning ? .success : .warning)
+                if store.isBotRunning {
+                    toast.show("机器人已启动", tone: .success)
+                } else if let error = store.lastStartError, !error.isEmpty {
+                    toast.show(Lf("启动失败：%@", error), tone: .error, symbol: "exclamationmark.triangle")
+                } else {
+                    toast.show("启动未完成，请查看运行日志", tone: .warning, symbol: "exclamationmark.triangle")
+                }
             }
         }
     }

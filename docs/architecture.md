@@ -5,8 +5,8 @@
 >
 > 本文件是并行开发的**唯一接口契约**。改动接口请先改这里，再改代码。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.0.2**，包含微信 4.2.0.17 适配与朋友圈（Moments）。
-> 下载用户请先看 [`install.md`](install.md) 与 [`releases/4.0.2.md`](releases/4.0.2.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含微信 4.2.0.17 适配与朋友圈（Moments）。
+> 下载用户请先看 [`install.md`](install.md) 与 [`releases/4.1.0.md`](releases/4.1.0.md)。
 
 ## 1. 进程与数据流
 
@@ -38,7 +38,7 @@
 - 消息写入 SQLite（WAL）；UI 分页加载，内存只保留已打开/预载会话的最近消息页；日志环形缓冲（App 2000 条、DB 5000 条）。
 - 防睡眠默认关闭；仅「接入电源时 / 始终」档位持有 IOKit 空闲睡眠断言，不轮询、不阻止合盖睡眠。
 - bridge 事件推送立即写出，`-send_interval` 只节流发往微信的消息（事件日志见 §3.2）。
-- Hook 发送闭环按需调度，入站去重表为 4096 条固定窗口，长时间运行不增长内存。
+- Hook 发送闭环按需调度，入站去重表为 1024 条固定窗口（`OneBotClient`），长时间运行不增长内存。
 - 启动历史修复信任 `get_login_info` 的权威 selfID，全表 appmsg/引用迁移由 `data.repairs_version` 门禁只执行一次。
 
 ### 1.1 回复与记忆数据流（v2）
@@ -258,8 +258,9 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 朋友圈事件（WS 预留）：App 的 `OneBotClient` 能识别以 `sns_` 开头的 WS 帧（`sns_new_post` /
   `sns_comment` / `sns_like`）并交给 `MomentsStore`；**当前 bridge 仍不推送该类帧**，同步以 App/P7
   轮询 `POST /sns/sync` 为准：bridge 先解 `CmdBuf` 外层信封；cmd45 新动态与 cmd46 的 Type 1/2/3
-  评论可解码并合并到 `/sns/timeline`；**4.2.0.17 实测好友回复为 Type=11、无正文，只发
-  `sns_comment_hint`，当前不能展示正文/自动回复**；真正未知动作才计入 `unsupported_cmd_count`，见
+  评论可解码并合并到 `/sns/timeline`；**4.2.0.17 实测好友回复为 Type=11、hint 本身无正文，
+  只发 `sns_comment_hint`；正文由 sns.db 只读补全后页面/P7 可展示与回复**；真正未知动作才计入
+  `unsupported_cmd_count`，见
   [`sns.md`](sns.md) §4.5、§5.3。
 
 ### 3.3 WebSocket 动作（App → bridge）
@@ -375,8 +376,8 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   历史版本 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53 的版本文件保留，安装脚本默认目标为 4.2.0.17。
 - 验证状态：4.2.0.17（2026-11-07）、4.2.0.12、4.2.0.9、4.2.0.5 均已完成真机验证（注入、入站消息、通讯录与
   R3 文本发送）；4.2.0.17 的验证范围含群聊文本 / type=49 appmsg / 自身消息入站与 R3 文本发送；语音发送、
-  图片获取与群聊 @ 未在 4.2.0.17 复测；关闭 R3（legacy StartTask 路径）时曾观察到 1 次崩溃、后续未复现，
-  默认 R3 模式稳定。任何 Hook 适配变更必须在真机验证文本收发后才能标记为可用；历史验证记录见 `CHANGELOG.md`。
+  图片获取与群聊 @ 未在 4.2.0.17 复测。任何 Hook 适配变更必须在真机验证文本收发后才能标记为可用；
+  历史验证记录见 `CHANGELOG.md`。
 - 发送附加配置（R3，仓库默认 `enableSend=false` / `req2bufSendMode=off`）：由 App 读取版本 JSON 后按
   设置合并生成运行期配置；具体键名、运行期参数与地址表只维护在 `hook/versions/*.json` 与
   `hook/script.js`，文档不展开。App 默认开启 R3（可在设置中关闭）；首次使用（或微信重启后）需在本机

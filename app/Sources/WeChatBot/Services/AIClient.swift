@@ -164,8 +164,9 @@ final class AIClient: @unchecked Sendable {
         return model.isEmpty ? provider.kind.defaultModel : model
     }
 
-    /// Builds the chat-completions body. `temperature` is omitted unless the model
-    /// has an explicit per-model value, so each model can use its own default.
+    /// Builds the chat-completions body. `temperature` is caller-supplied (typically
+    /// `AIProvider.requestTemperature`); when nil it is omitted so the model can use
+    /// its own default. Provider temperature is configured per AI channel.
     ///
     /// 带图片的 user 消息使用 OpenAI 多模态 content 数组：
     /// `[{"type":"text","text":…},{"type":"image_url","image_url":{"url":…}}]`；

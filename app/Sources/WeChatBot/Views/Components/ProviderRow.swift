@@ -72,7 +72,7 @@ struct ProviderRow: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text(hostLabel)
+                    Text(L(hostLabel))
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -90,6 +90,13 @@ struct ProviderRow: View {
                     Text(Lf("超时 %d 秒", Int(provider.timeoutSeconds)))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                    Text(
+                        provider.requestTemperature.map {
+                            Lf("温度 %@", ModelTemperature.display($0))
+                        } ?? L("温度默认")
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                     streamPill
                 }
 
@@ -134,7 +141,7 @@ struct ProviderRow: View {
                     }
                     .buttonStyle(.glass)
                     .disabled(!canDelete)
-                    .help(L(canDelete ? "删除通道" : "至少保留一个通道"))
+                    .help(L("删除通道"))
                     .accessibilityLabel(L("删除通道"))
                 }
 
@@ -218,15 +225,38 @@ struct ProviderRow: View {
                 Text(L("测试中")).font(.caption2).foregroundStyle(.secondary)
             }
         case .success(let detail):
-            Label(L("连接正常"), systemImage: "checkmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(Theme.success)
-                .help(detail)
+            HStack(spacing: 6) {
+                Label(L("连接正常"), systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.success)
+                    .help(detail)
+                retestButton
+            }
         case .failure(let detail):
-            Label(L("连接失败"), systemImage: "xmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(Theme.danger)
-                .help(detail)
+            HStack(spacing: 6) {
+                Label(L("连接失败"), systemImage: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.danger)
+                    .help(detail)
+                retestButton
+            }
         }
+    }
+
+    /// 测试成功/失败后都需要能立即重测，否则只能靠编辑保存来刷新结果。
+    private var retestButton: some View {
+        Button {
+            onTest()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.glass)
+        .controlSize(.small)
+        .help(L("重新测试"))
+        .accessibilityLabel(Lf("重新测试 %@", provider.name))
     }
 }

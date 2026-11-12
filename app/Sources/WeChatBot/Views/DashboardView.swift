@@ -36,6 +36,48 @@ struct DashboardView: View {
         } content: {
             statusGrid
 
+            if let startError = store.lastStartError, !store.isBotRunning {
+                HStack(alignment: .center, spacing: 10) {
+                    InlineNotice(
+                        kind: .danger,
+                        title: "机器人启动失败",
+                        message: startError
+                    )
+                    Button(L("打开日志")) {
+                        store.sidebarSelection = .logs
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                }
+            }
+
+            if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
+                InlineNotice(
+                    kind: .warning,
+                    title: "微信版本未适配",
+                    message: Lf(
+                        "当前微信 %@ 不在适配列表（%@）。收发可能失败，请换回受支持版本，或在「设置 → Hook → 版本配置文件」使用自定义配置。",
+                        weChatVersionDisplay,
+                        WeChatVersionSupport.compactList()
+                    )
+                )
+            }
+
+            if let notice = store.oneBotRestartNotice {
+                InlineNotice(kind: .warning, title: "配置待生效", message: notice)
+            }
+
+            if let alternate = alternateWeChatPath {
+                InlineNotice(
+                    kind: .info,
+                    title: "检测到另一个微信",
+                    message: Lf(
+                        "运行中的微信位于 %@，与设置路径不同；Hook 状态按运行中的微信检测。可在「设置 → Hook」应用检测路径。",
+                        alternate
+                    )
+                )
+            }
+
             if let notice = store.accountSwitchNotice, !notice.isEmpty {
                 HStack(alignment: .center, spacing: 10) {
                     InlineNotice(kind: .info, title: "微信账号已切换", message: notice)
@@ -55,6 +97,13 @@ struct DashboardView: View {
                     title: "正在安装 Hook",
                     detail: installMessage ?? "备份、注入与重签名中，请勿打开微信…",
                     progress: installProgress
+                )
+            } else if store.isHookOperationInFlight {
+                // 在设置页发起、切回总览时：本地进度已丢失，但操作仍在进行，至少要说明并继续禁用入口。
+                InlineNotice(
+                    kind: .info,
+                    title: "正在处理微信 Hook",
+                    message: "安装或还原仍在进行，请等待当前操作完成；期间不要重复点击安装/还原。"
                 )
             }
 
@@ -76,8 +125,8 @@ struct DashboardView: View {
                             title: store.hookStatus.gadgetInstalled ? "Hook 已安装" : "安装 Hook",
                             symbol: "wrench.and.screwdriver.fill",
                             tint: Theme.warning,
-                            isBusy: isInstallingHook,
-                            isEnabled: !store.hookStatus.gadgetInstalled
+                            isBusy: isInstallingHook || store.isHookOperationInFlight,
+                            isEnabled: !store.hookStatus.gadgetInstalled && !store.isHookOperationInFlight
                         ) {
                             showHookConfirm = true
                         }
@@ -149,8 +198,8 @@ struct DashboardView: View {
         HStack(alignment: .center, spacing: 12) {
             StatusCard(
                 title: "微信",
-                value: store.hookStatus.wechatVersion.isEmpty ? L("未检测") : Lf("微信 %@", store.hookStatus.wechatVersion),
-                detail: URL(fileURLWithPath: store.settings.hook.wechatPath).lastPathComponent,
+                value: store.hookStatus.wechatVersion.isEmpty ? L("未检测") : Lf("微信 %@", weChatVersionDisplay),
+                detail: weChatPathLabel,
                 symbol: "iphone",
                 tint: Theme.accent,
                 statusText: store.hookStatus.wechatRunning ? "运行中" : "未运行",
@@ -190,7 +239,37 @@ struct DashboardView: View {
 
     private var hookStatusText: String? {
         guard store.hookStatus.gadgetInstalled else { return nil }
+        if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
+            return "版本未适配"
+        }
         return store.hookStatus.matchedVersion ? "版本匹配" : "待匹配"
+    }
+
+    /// 版本号与 build 的组合展示。
+    private var weChatVersionDisplay: String {
+        WeChatStatusPresentation.versionDisplay(store.hookStatus)
+    }
+
+    /// 状态卡副标题：优先显示实际检测到的 App；与设置路径不同则标注。
+    private var weChatPathLabel: String {
+        let detected = store.hookStatus.wechatDetectedPath
+        let path = detected.isEmpty ? store.settings.hook.wechatPath : detected
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let base = name.isEmpty ? L("未设置路径") : name
+        if WeChatStatusPresentation.alternateDetectedPath(
+            status: store.hookStatus,
+            configuredPath: store.settings.hook.wechatPath
+        ) != nil {
+            return Lf("%@ · 非设置路径", base)
+        }
+        return base
+    }
+
+    private var alternateWeChatPath: String? {
+        WeChatStatusPresentation.alternateDetectedPath(
+            status: store.hookStatus,
+            configuredPath: store.settings.hook.wechatPath
+        )
     }
 
     private var hookDetail: String {
@@ -202,6 +281,11 @@ struct DashboardView: View {
             parts.append(L(store.hookStatus.r3Seeded ? "R3 发送句柄已就绪" : "R3 发送句柄未就绪"))
         }
         if !store.hookStatus.detail.isEmpty { parts.append(L(store.hookStatus.detail)) }
+        if !store.hookStatus.wechatVersion.isEmpty {
+            if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
+            parts.append(Lf("适配列表 %@", WeChatVersionSupport.compactList()))
+        }
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -243,11 +327,13 @@ struct DashboardView: View {
                 toast.show("机器人已停止", tone: .info, symbol: "stop.circle.fill")
             } else {
                 await store.startBot()
-                toast.show(
-                    store.isBotRunning ? "机器人已启动" : "启动失败，请查看运行日志",
-                    tone: store.isBotRunning ? .success : .warning,
-                    symbol: "play.circle.fill"
-                )
+                if store.isBotRunning {
+                    toast.show("机器人已启动", tone: .success, symbol: "play.circle.fill")
+                } else if let error = store.lastStartError, !error.isEmpty {
+                    toast.show(Lf("启动失败：%@", error), tone: .error, symbol: "exclamationmark.triangle")
+                } else {
+                    toast.show("启动未完成，请查看运行日志", tone: .warning, symbol: "exclamationmark.triangle")
+                }
             }
         }
     }
@@ -302,7 +388,12 @@ struct DashboardView: View {
         Task {
             await store.refreshStatus()
             isRefreshing = false
-            toast.show("状态已刷新", tone: .info, symbol: "arrow.clockwise")
+            // 刷新可能检测出异常/未安装，不要一律提示成成功。
+            toast.show(
+                Lf("状态已刷新：%@", store.hookStatus.state.label),
+                tone: .info,
+                symbol: "arrow.clockwise"
+            )
         }
     }
 
@@ -317,7 +408,15 @@ struct DashboardView: View {
         case 14..<18: greeting = L("下午好")
         default: greeting = L("晚上好")
         }
-        let date = Date().formatted(.dateTime.month().day().weekday(.wide))
+        // 日期必须跟随 App 语言，而不是系统 Locale（英文界面 + 中文系统时曾显示中文星期）。
+        let locale = Locale(identifier: L10n.language == "en" ? "en_US" : "zh_Hans")
+        let date = Date().formatted(
+            Date.FormatStyle()
+                .locale(locale)
+                .month()
+                .day()
+                .weekday(.wide)
+        )
         return "\(greeting) · \(date)"
     }
 }

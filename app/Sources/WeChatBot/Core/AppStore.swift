@@ -7,6 +7,10 @@ import Observation
 @MainActor
 @Observable
 final class AppStore {
+    /// 最近创建的 store 的弱引用。仅给 AppKit 层（退出确认、登录项等）读取运行状态，
+    /// 不参与持有关系；测试/多实例时始终指向最后一次构造的 store。
+    static weak var shared: AppStore?
+
     // Persisted state
     var settings: AppSettings
     var providers: [AIProvider]
@@ -44,9 +48,20 @@ final class AppStore {
     /// 发出两次 `startRuntime`（会拉起两个 bridge、两个 OneBotClient，旧连接事件被丢弃）。
     var isBotTransitioning = false
     var isBusy = false
+    /// Hook 安装/还原是否进行中（跨页面单一来源，防止设置页与总览同时触发两个脚本）。
+    var isHookOperationInFlight = false
+    /// 运行期连接/Hook 启动参数被修改、需要重启机器人后生效；nil 表示无需重启。
+    var oneBotRestartNotice: String?
     var isOnboardingPresented = false
     var gatewayConnected = false
     var lastError: String?
+    /// 最近一次启动机器人的失败原因（仅供启动按钮/总览显示；成功启动或停止后清空）。
+    /// 与通用 lastError 分开，避免把发送失败、配置读取失败等误标成「启动失败」。
+    var lastStartError: String?
+    /// 最近一次设置写盘失败的原因（设置页常驻提示）。成功写入后清空。
+    var lastPersistError: String?
+    /// 启动/重新加载时检测到的配置损坏（已自动备份原文件）；非 nil 时不应把内存默认值写回。
+    var lastLoadDiagnostics: SettingsLoadDiagnostics?
 
     /// 语音发送运行时状态（bridge /voice_status；登录稳定倒计时/句柄）。
     /// 由 Runtime 刷新；「机器人 → 语音」与句柄捕获引导只读展示，语音回复决策用它拦截未就绪状态。
@@ -180,7 +195,19 @@ final class AppStore {
         if managesProfiles {
             AccountProfile.preparePaths()
         }
-        let loaded = settings ?? SettingsStore.load()
+        let loaded: AppSettings
+        var loadDiagnostics: SettingsLoadDiagnostics?
+        if let settings {
+            loaded = settings
+        } else {
+            AppPaths.ensureDirectories()
+            let result = SettingsStore.loadWithDiagnostics(
+                configURL: AppPaths.configFile,
+                profileURL: AppPaths.profileFile
+            )
+            loaded = result.settings
+            loadDiagnostics = result.diagnostics
+        }
         self.voiceSynthesis = VoiceSynthesisService()
         self.voicePreview = VoicePreviewController()
         self.settings = loaded
@@ -193,6 +220,7 @@ final class AppStore {
         self.savedWeChatAccounts = AccountProfile.savedAccounts()
         L10n.apply(loaded.general.language)
         self.hookStatus.versionConfigFile = loaded.hook.versionConfigPath
+        self.lastLoadDiagnostics = (loadDiagnostics?.hasCorruption == true) ? loadDiagnostics : nil
         // 朋友圈演练草稿：按账号目录加载（只读本机 JSON，不发网络请求）。
         self.snsOutbox.load(accountID: activeAccountID)
         // 朋友圈功能默认关闭；这里只同步配置镜像，不发起网络请求。
@@ -209,6 +237,7 @@ final class AppStore {
         // It is filled in off-main by the runtime bootstrap instead (`AppStore+Runtime`),
         // which also refreshes the full hook status shortly after.
         RuntimeBootstrap.scheduleRuntime(for: self)
+        Self.shared = self
     }
 
     // MARK: Derived
@@ -245,15 +274,40 @@ final class AppStore {
         // 不会把 A 账号的机器人配置写进 B 账号。
         let profileURL = AppPaths.profileFile
         // Encoding/atomic write happens on SettingsPersistence's actor, never on MainActor.
+        // 写盘失败不能静默：设置页常驻提示并写日志，避免磁盘/权限问题导致配置悄悄丢失。
         Task {
-            try? await SettingsPersistence.shared.save(snapshot, profileURL: profileURL)
+            do {
+                _ = try await SettingsPersistence.shared.save(snapshot, profileURL: profileURL)
+                if lastPersistError != nil { lastPersistError = nil }
+            } catch {
+                let message = error.localizedDescription
+                lastPersistError = message
+                appendLog(.error, "Settings", "配置保存失败：\(message)（修改可能只在当前运行中生效）")
+            }
         }
         RuntimeRegistry.existing(for: self)?.settingsDidChange()
     }
 
-    func reload() {
-        applyLoadedSettings(SettingsStore.load())
+    /// 重新读取磁盘配置。
+    ///
+    /// 检测到损坏时**拒绝应用**降级结果并返回诊断（原文件已备份）：否则下一次 persist
+    /// 会把默认值写回，覆盖用户仍可修复的配置。无损坏时一并让运行时重新同步设置。
+    @discardableResult
+    func reload() -> SettingsLoadDiagnostics? {
+        let result = SettingsStore.loadWithDiagnostics(
+            configURL: AppPaths.configFile,
+            profileURL: AppPaths.profileFile
+        )
+        guard !result.isDegraded else {
+            lastLoadDiagnostics = result.diagnostics
+            lastError = "配置文件损坏，已保留当前设置；原始文件已备份"
+            return result.diagnostics
+        }
+        lastLoadDiagnostics = nil
+        applyLoadedSettings(result.settings)
         refreshAccountObservables()
+        RuntimeRegistry.existing(for: self)?.settingsDidChange()
+        return nil
     }
 
     /// 把磁盘上（全局 config.json + 当前账号 profile.json）的设置整体应用回内存。

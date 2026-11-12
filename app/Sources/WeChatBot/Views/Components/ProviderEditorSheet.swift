@@ -12,6 +12,8 @@ struct ProviderEditorSheet: View {
     /// 全局流式总开关。关闭时通道级开关暂不生效，表单会明确提示而不是假装可用。
     let globalStreamingEnabled: Bool
     let onDeleteKey: (() -> Void)?
+    /// 名称唯一性校验（编辑现有通道时排除自身）；默认不校验，便于旧调用方/测试。
+    let isNameAvailable: (String) -> Bool
     let onSave: (AIProvider, String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -35,12 +37,14 @@ struct ProviderEditorSheet: View {
         isNew: Bool,
         globalStreamingEnabled: Bool = true,
         onDeleteKey: (() -> Void)? = nil,
+        isNameAvailable: @escaping (String) -> Bool = { _ in true },
         onSave: @escaping (AIProvider, String?) -> Void
     ) {
         self.provider = provider
         self.isNew = isNew
         self.globalStreamingEnabled = globalStreamingEnabled
         self.onDeleteKey = onDeleteKey
+        self.isNameAvailable = isNameAvailable
         self.onSave = onSave
         _draft = State(initialValue: provider)
     }
@@ -58,8 +62,9 @@ struct ProviderEditorSheet: View {
                 .padding(20)
             }
 
-            if let validationMessage {
-                InlineNotice(kind: .danger, title: "无法保存", message: validationMessage)
+            if validationMessage != nil {
+                // 具体原因已经显示在对应输入框下方，这里只给「下一步」提示，避免同一句话出现两次。
+                InlineNotice(kind: .danger, title: "无法保存", message: "请检查标记的字段。")
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
             }
@@ -103,7 +108,7 @@ struct ProviderEditorSheet: View {
                         )
                     }
                 }
-                Text(L("OpenAI 兼容接口 · 密钥只保存在本机"))
+                Text(L("OpenAI 兼容接口"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -159,10 +164,10 @@ struct ProviderEditorSheet: View {
             HStack(alignment: .bottom, spacing: 10) {
                 FormField(
                     label: "类型",
-                    hint: "切换类型会自动填入默认地址与模型，不覆盖手改值。"
+                    hint: "新通道仅支持 DeepSeek 与自定义兼容；切换类型会自动填入默认地址与模型，不覆盖手改值。"
                 ) {
                     Picker(L("类型"), selection: $draft.kind) {
-                        ForEach(ProviderKind.allCases) { kind in
+                        ForEach(AIProviderKindSelection.options(current: draft.kind)) { kind in
                             Text(kind.label).tag(kind)
                         }
                     }
@@ -177,6 +182,16 @@ struct ProviderEditorSheet: View {
                 .buttonStyle(.glass)
                 .controlSize(.small)
                 .help(L("恢复所选类型的默认地址与模型"))
+            }
+
+            if AIProviderKindSelection.isLegacy(draft.kind) {
+                Label(
+                    L("OpenAI / Ollama 为历史通道类型，不再新增；可继续编辑，或改为「自定义兼容」后填写兼容地址与模型。"),
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(Theme.warning)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             FormField(label: "Base URL", hint: baseURLHint, error: fieldError(.baseURL)) {
@@ -272,8 +287,6 @@ struct ProviderEditorSheet: View {
 
     private var parametersSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(L("生成参数")).font(.subheadline.weight(.semibold))
-
             DisclosureGroup(isExpanded: $showsAdvanced) {
                 VStack(alignment: .leading, spacing: 12) {
                     FormField(
@@ -300,6 +313,34 @@ struct ProviderEditorSheet: View {
                             step: 5
                         )
                         .font(.callout)
+                    }
+
+                    FormField(
+                        label: "模型温度",
+                        hint: "未开启时请求不发送 temperature，由模型使用自身默认值。范围 0–2：越低越稳定，越高越随机。"
+                    ) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Toggle(L("自定义温度"), isOn: customTemperatureBinding)
+                                .toggleStyle(.switch)
+                                .font(.callout)
+                            if let value = draft.temperatureOverride {
+                                HStack(spacing: 8) {
+                                    Slider(
+                                        value: temperatureBinding,
+                                        in: ModelTemperature.range,
+                                        step: ModelTemperature.step
+                                    )
+                                    .tint(Theme.accent)
+                                    .frame(width: 220)
+                                    .accessibilityLabel(L("模型温度"))
+                                    .accessibilityValue(String(format: "%.1f", value))
+                                    Text(ModelTemperature.display(value))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 30, alignment: .trailing)
+                                }
+                            }
+                        }
                     }
 
                     Toggle(L("流式返回（逐字输出）"), isOn: $draft.stream)
@@ -330,6 +371,11 @@ struct ProviderEditorSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            Text(L("温度只作用于该通道的文本请求；识图请求不发送温度。未开启自定义温度时由模型使用自身默认值。"))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -344,11 +390,31 @@ struct ProviderEditorSheet: View {
     }
 
     private var advancedSummary: String {
-        Lf(
-            "%d tokens · 超时 %d 秒 · %@",
+        let temperature = draft.requestTemperature.map(ModelTemperature.display) ?? L("温度默认")
+        return Lf(
+            "%d tokens · 超时 %d 秒 · %@ · %@",
             draft.maxTokens,
             Int(draft.timeoutSeconds),
+            temperature,
             draft.stream ? L("流式") : L("非流式")
+        )
+    }
+
+    private var customTemperatureBinding: Binding<Bool> {
+        Binding(
+            get: { draft.temperatureOverride != nil },
+            set: { enabled in
+                draft.temperatureOverride = enabled
+                    ? ModelTemperature.rounded(draft.temperatureOverride ?? ModelTemperature.initialValue)
+                    : nil
+            }
+        )
+    }
+
+    private var temperatureBinding: Binding<Double> {
+        Binding(
+            get: { ModelTemperature.clamp(draft.temperatureOverride ?? ModelTemperature.initialValue) },
+            set: { draft.temperatureOverride = ModelTemperature.rounded($0) }
         )
     }
 
@@ -437,9 +503,15 @@ struct ProviderEditorSheet: View {
         if !trimmedSecret.isEmpty {
             candidate.apiKeyReference = candidate.apiKeyReference.isEmpty ? candidate.id : candidate.apiKeyReference
         }
+        // 温度按 0.1 对齐并入 0...2；旧/手改配置里的越界值不应原样保存。
+        candidate.temperatureOverride = candidate.temperatureOverride.map(ModelTemperature.rounded)
 
         guard !candidate.name.isEmpty else {
             fail(.name, "请填写通道名称。")
+            return
+        }
+        guard isNameAvailable(candidate.name) else {
+            fail(.name, "通道名称已被使用，请换一个名称。")
             return
         }
         guard isValidBaseURL(candidate.baseURL) else {

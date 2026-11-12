@@ -3180,7 +3180,7 @@ final class SnsPublishRunTests: XCTestCase {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
         let ledger = SnsPublishLedger(accountID: "wxid_test", defaults: defaults)
-        var settings = makeSettings(targetIDs: ["wxid_a", "wxid_b"])
+        let settings = makeSettings(targetIDs: ["wxid_a", "wxid_b"])
         let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 10, hour: 9))!
         // a 的当日额度已满（times 容量 2），b 仍可发。
         await ledger.record(targetID: "wxid_a", at: now, calendar: cal)

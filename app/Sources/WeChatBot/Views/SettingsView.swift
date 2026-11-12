@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 设置：通用 / 外观 / 通知 / 更新 / Hook / OneBot / 数据与备份 / 关于。
+/// 设置：通用 / 外观 / 更新 / Hook / OneBot / 数据与备份 / 关于。
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @Environment(ToastCenter.self) private var toast
@@ -19,11 +19,16 @@ struct SettingsView: View {
     @State private var updateCenter = UpdateCenter.shared
     /// Hook 安装所需的 Xcode Command Line Tools 状态（值由环境检查卡回填）。
     @State private var commandLineToolsStatus: CommandLineToolsStatus?
+    /// 登录项真实状态（从 LaunchAgent + launchd 读取，而不是只信配置里的偏好）。
+    @State private var launchAtLoginStatus: LaunchAtLoginStatus?
+    @State private var isUpdatingLaunchAtLogin = false
+    @State private var launchAtLoginError: String?
+    /// 导出配置前确认：默认隐藏 OneBot Token，避免误分享。
+    @State private var isConfirmingConfigExport = false
 
     enum SettingsCategory: String, CaseIterable, Identifiable {
         case general
         case appearance
-        case notifications
         case updates
         case hook
         case onebot
@@ -36,7 +41,6 @@ struct SettingsView: View {
             switch self {
             case .general: "通用"
             case .appearance: "外观"
-            case .notifications: "通知"
             case .updates: "更新"
             case .hook: "Hook"
             case .onebot: "OneBot"
@@ -49,7 +53,6 @@ struct SettingsView: View {
             switch self {
             case .general: "gearshape"
             case .appearance: "paintbrush"
-            case .notifications: "bell"
             case .updates: "arrow.triangle.2.circlepath"
             case .hook: "link"
             case .onebot: "network"
@@ -62,7 +65,6 @@ struct SettingsView: View {
             switch self {
             case .general: .secondary
             case .appearance: Theme.violet
-            case .notifications: Theme.warning
             case .updates: Theme.success
             case .hook: Theme.info
             case .onebot: Theme.accent
@@ -82,6 +84,16 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             GlassToolbar(title: "设置", subtitle: Lf("WeChat AI %@ · 配置保存在本机", appVersion)) { EmptyView() }
+
+            if let persistError = store.lastPersistError {
+                InlineNotice(
+                    kind: .danger,
+                    title: "设置未能保存",
+                    message: Lf("%@。修改可能只在当前运行中生效，请检查磁盘空间与目录权限。", persistError)
+                )
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 8)
+            }
 
             HStack(spacing: 0) {
                 categorySidebar
@@ -107,10 +119,21 @@ struct SettingsView: View {
             if updateCenter.consumeUpdatePageFocus() {
                 category = .updates
             }
+            Task { await refreshLaunchAtLoginState() }
         }
         .onChange(of: updateCenter.wantsUpdatePageFocus) { _, wantsFocus in
             guard wantsFocus, updateCenter.consumeUpdatePageFocus() else { return }
             category = .updates
+        }
+        .confirmationDialog(
+            "导出配置",
+            isPresented: $isConfirmingConfigExport
+        ) {
+            Button(L("导出并隐藏 Token")) { exportConfiguration(includeToken: false) }
+            Button(L("导出（含 Token）")) { exportConfiguration(includeToken: true) }
+            Button(L("取消"), role: .cancel) {}
+        } message: {
+            Text(L("配置文件包含通道与 OneBot 连接信息；分享给他人时请隐藏 Token。"))
         }
         .sheet(item: $hookAction) { action in
             switch action {
@@ -149,7 +172,7 @@ struct SettingsView: View {
 
     private var categorySidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sidebarGroup("应用", items: [.general, .appearance, .notifications, .updates])
+            sidebarGroup("应用", items: [.general, .appearance, .updates])
             sidebarGroup("集成", items: [.hook, .onebot])
             sidebarGroup("数据", items: [.data, .about])
             Spacer()
@@ -218,7 +241,6 @@ struct SettingsView: View {
         switch category {
         case .general: generalSettings
         case .appearance: appearanceSettings
-        case .notifications: notificationSettings
         case .updates: SettingsUpdateSection()
         case .hook: hookSettings
         case .onebot: oneBotSettings
@@ -237,19 +259,45 @@ struct SettingsView: View {
             ) {
                 SettingsRow(
                     title: "登录时启动",
-                    subtitle: "开机后自动启动（登录项尚未接入）",
+                    subtitle: launchAtLoginSubtitle,
                     symbol: "power",
-                    tint: .secondary
+                    tint: launchAtLoginError == nil ? .secondary : Theme.warning
                 ) {
-                    Toggle(L("登录时启动"), isOn: bind(\.general.launchAtLogin))
+                    if isUpdatingLaunchAtLogin {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Toggle(
+                            L("登录时启动"),
+                            isOn: Binding(
+                                get: {
+                                    launchAtLoginStatus?.isEnabled
+                                        ?? store.settings.general.launchAtLogin
+                                },
+                                set: { setLaunchAtLogin($0) }
+                            )
+                        )
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.small)
+                        .disabled(!(launchAtLoginStatus?.isSupported ?? false))
+                        .help(L("登录项由系统管理，可在「系统设置 → 通用 → 登录项」中关闭。"))
+                    }
+                }
+                if let launchAtLoginError {
+                    InlineNotice(kind: .warning, title: "登录项设置失败", message: launchAtLoginError)
+                        .padding(12)
+                } else if launchAtLoginStatus?.isStale == true {
+                    InlineNotice(
+                        kind: .info,
+                        title: "登录项指向旧位置",
+                        message: "App 已移动或重新安装。重新开启「登录时启动」即可更新路径。"
+                    )
+                    .padding(12)
                 }
                 SettingsDivider()
                 SettingsRow(
                     title: "退出前确认",
-                    subtitle: "机器人运行中退出时提醒（尚未接入）",
+                    subtitle: "机器人或 bridge 运行中退出时先确认",
                     symbol: "exclamationmark.circle",
                     tint: Theme.warning
                 ) {
@@ -329,6 +377,9 @@ struct SettingsView: View {
                     tint: Theme.accent
                 ) {
                     Button(L("打开向导")) {
+                        // Settings 是独立 scene，向导 sheet 挂在主窗口 RootView 上：
+                        // 先唤回/打开主窗口，再置位，避免点了按钮却什么都不发生。
+                        MainWindowRegistry.showOrOpen()
                         store.isOnboardingPresented = true
                     }
                     .buttonStyle(.glass)
@@ -340,6 +391,55 @@ struct SettingsView: View {
             // Re-assert the persisted preference when the page appears (launch already
             // did this, but the settings window can outlive external config edits).
             sleepCenter.apply(mode: store.settings.general.sleepPrevention)
+        }
+    }
+
+    // MARK: Launch at login
+
+    private var launchAtLoginSubtitle: String {
+        guard let status = launchAtLoginStatus else { return L("正在检测登录项…") }
+        if !status.isSupported { return L("仅安装后的 App 支持；源码运行不可用") }
+        if status.isStale { return L("登录项指向旧位置；重新开启可修复") }
+        if status.isDisabled { return L("已在系统设置中关闭；重新开启可恢复") }
+        if status.isEnabled { return L("登录后自动启动；可在系统设置 → 通用 → 登录项中关闭") }
+        return L("登录后不会自动启动")
+    }
+
+    private func refreshLaunchAtLoginState() async {
+        let status = await LaunchAtLoginService.status()
+        guard !Task.isCancelled else { return }
+        launchAtLoginStatus = status
+        launchAtLoginError = nil
+        // 配置里的偏好跟随真实状态，避免系统设置里关闭后界面仍显示开启。
+        if status.isSupported, store.settings.general.launchAtLogin != status.isEnabled {
+            store.settings.general.launchAtLogin = status.isEnabled
+            store.persist()
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        guard !isUpdatingLaunchAtLogin else { return }
+        isUpdatingLaunchAtLogin = true
+        launchAtLoginError = nil
+        Task {
+            do {
+                let status = try await LaunchAtLoginService.setEnabled(enabled)
+                launchAtLoginStatus = status
+                store.settings.general.launchAtLogin = status.isEnabled
+                store.persist()
+                if status.isEnabled {
+                    toast.show("已开启登录时启动", tone: .success, symbol: "power")
+                } else if enabled {
+                    launchAtLoginError = L("登录项已写入，但系统尚未启用。请到「系统设置 → 通用 → 登录项」允许 WeChat AI 在后台运行。")
+                } else {
+                    toast.show("已关闭登录时启动", tone: .info, symbol: "power")
+                }
+            } catch {
+                launchAtLoginStatus = await LaunchAtLoginService.status()
+                launchAtLoginError = error.localizedDescription
+                toast.show(Lf("登录项设置失败：%@", error.localizedDescription), tone: .error, symbol: "power")
+            }
+            isUpdatingLaunchAtLogin = false
         }
     }
 
@@ -543,51 +643,23 @@ struct SettingsView: View {
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    // MARK: Notifications
-
-    private var notificationSettings: some View {
-        VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-            SettingsSection(title: "通知") {
-                SettingsRow(
-                    title: "启用通知",
-                    subtitle: "开启后接收新消息与机器人异常提醒",
-                    symbol: "bell.badge",
-                    tint: Theme.warning
-                ) {
-                    Toggle(L("启用通知"), isOn: bind(\.general.notificationsEnabled))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                }
-                SettingsDivider()
-                SettingsRow(
-                    title: "通知声音",
-                    subtitle: "发送通知时播放系统提示音",
-                    symbol: "speaker.wave.2",
-                    tint: Theme.info
-                ) {
-                    Toggle(L("通知声音"), isOn: bind(\.general.soundEnabled))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .disabled(!store.settings.general.notificationsEnabled)
-                }
-            }
-
-            InlineNotice(
-                kind: .info,
-                title: "通知说明",
-                message: "系统通知尚未接入，开关只保存偏好；新消息与异常请在会话页和运行日志查看。"
-            )
-        }
-    }
-
     // MARK: Hook
 
     private var hookSettings: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
             SettingsSection(title: "微信与 Hook 状态") {
-                hookStatusRow("微信版本", value: versionText, symbol: "iphone")
+                hookStatusRow("微信版本", value: weChatVersionText, symbol: "iphone")
+                if let alternate = alternateWeChatPath {
+                    SettingsDivider()
+                    SettingsRow(title: "检测路径", symbol: "folder", tint: Theme.info) {
+                        Text(UIFormat.compactPath(alternate))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 320, alignment: .trailing)
+                    }
+                }
                 SettingsDivider()
                 hookStatusRow(
                     "微信进程",
@@ -648,11 +720,37 @@ struct SettingsView: View {
                 }
             }
 
+            if let warning = versionSupportWarning {
+                InlineNotice(kind: .warning, title: "微信版本未适配", message: warning)
+            }
+
+            if let alternate = alternateWeChatPath {
+                VStack(alignment: .leading, spacing: 8) {
+                    InlineNotice(
+                        kind: .info,
+                        title: "检测到另一个微信",
+                        message: Lf("当前运行/检测到的微信位于 %@，与设置路径不同。Hook 状态按这个 App 判断。", alternate)
+                    )
+                    Button(L("使用检测路径")) {
+                        applyDetectedWeChatPath(alternate)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .padding(.leading, 2)
+                }
+            }
+
             if isWorking {
                 ProgressPanel(
                     title: "正在处理微信 Hook",
                     detail: progressMessage ?? "备份、注入与重签中…",
                     progress: progress
+                )
+            } else if store.isHookOperationInFlight {
+                InlineNotice(
+                    kind: .info,
+                    title: "正在处理微信 Hook",
+                    message: "安装或还原在其它页面发起，仍在进行；完成后状态会自动刷新。"
                 )
             }
 
@@ -668,7 +766,7 @@ struct SettingsView: View {
                             Label(L("刷新状态"), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.glass)
-                        .disabled(isWorking)
+                        .disabled(isWorking || store.isHookOperationInFlight)
 
                         Button {
                             hookAction = .install
@@ -677,10 +775,8 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.glassProminent)
                         .tint(Theme.warning)
-                        .disabled(isWorking || commandLineToolsStatus?.isReady != true)
-                        .help(L(commandLineToolsStatus?.isReady == true
-                                ? "安装 Hook"
-                                : "需要安装 Command Line Tools"))
+                        .disabled(isWorking || store.isHookOperationInFlight || installDisabledReason != nil)
+                        .help(L(installDisabledReason ?? "备份当前微信并注入 Frida Gadget"))
 
                         Button {
                             hookAction = .restore
@@ -689,10 +785,16 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.glass)
                         .tint(Theme.danger)
-                        .disabled(isWorking)
+                        .disabled(isWorking || store.isHookOperationInFlight)
                         Spacer()
                     }
 
+                    if let reason = installDisabledReason {
+                        Label(L(reason), systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(Theme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Text(L("安装前请退出微信。"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -738,13 +840,6 @@ struct SettingsView: View {
                             .frame(width: 106)
                     }
                     SettingsDivider()
-                    SettingsRow(title: "自动启动微信", subtitle: "机器人启动时若微信未运行则自动打开（尚未接入，请手动打开微信）", symbol: "play.circle", tint: .secondary) {
-                        Toggle(L("自动启动微信"), isOn: bind(\.hook.autoLaunchWeChat))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                    }
-                    SettingsDivider()
                     SettingsRow(title: "自动启动 bridge", subtitle: "机器人启动时自动拉起 OneBot bridge 进程", symbol: "arrow.triangle.branch", tint: .secondary) {
                         Toggle(L("自动启动 bridge"), isOn: bind(\.hook.autoStartBridge))
                             .labelsHidden()
@@ -759,10 +854,21 @@ struct SettingsView: View {
                         tint: .secondary,
                         help: "支持微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55。捕获后排队消息会自动重发；仅支持文本。"
                     ) {
-                        Toggle(L("R3 原生发送"), isOn: bind(\.hook.enableNativeSend))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
+                        HStack(spacing: 8) {
+                            Button(L("查看捕获步骤…")) {
+                                // 设置是独立 scene；先唤回主窗口再弹统一捕获弹窗。
+                                MainWindowRegistry.showOrOpen()
+                                store.presentCaptureSetupPrompt()
+                            }
+                            .buttonStyle(.glass)
                             .controlSize(.small)
+                            .help(L("查看文字/语音/朋友圈发送句柄的捕获步骤"))
+
+                            Toggle(L("R3 原生发送"), isOn: bind(\.hook.enableNativeSend))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
                     }
                     SettingsDivider()
                     PathRow(label: "最近备份", path: store.settings.hook.lastBackupPath, revealInFinder: true)
@@ -781,17 +887,97 @@ struct SettingsView: View {
         }
     }
 
-    private var versionText: String {
-        store.hookStatus.wechatVersion.isEmpty ? "未检测" : "微信 \(store.hookStatus.wechatVersion)"
+    private var weChatVersionText: String {
+        let display = WeChatStatusPresentation.versionDisplay(store.hookStatus)
+        return display.isEmpty ? "未检测" : "微信 \(display)"
+    }
+
+    private var alternateWeChatPath: String? {
+        WeChatStatusPresentation.alternateDetectedPath(
+            status: store.hookStatus,
+            configuredPath: store.settings.hook.wechatPath
+        )
+    }
+
+    /// 版本/build 不在已知适配列表时的说明（含受支持版本）。
+    private var versionSupportWarning: String? {
+        guard !store.hookStatus.wechatVersion.isEmpty,
+              !store.hookStatus.wechatVersionKnown
+        else { return nil }
+        return Lf(
+            "当前微信 %@ 不在适配列表（%@）。安装/启动可能失败，请换回受支持版本，或使用下方「版本配置文件」指定自定义配置。",
+            WeChatStatusPresentation.versionDisplay(store.hookStatus),
+            WeChatVersionSupport.compactList()
+        )
+    }
+
+    /// 安装按钮不可用的原因；nil 表示可安装。
+    private var installDisabledReason: String? {
+        if commandLineToolsStatus?.isReady != true {
+            return "需要安装 Command Line Tools"
+        }
+        if store.hookStatus.wechatVersion.isEmpty {
+            return "未检测到微信版本；请先确认微信路径并刷新状态"
+        }
+        if !store.hookStatus.wechatVersionKnown {
+            return "当前微信版本不在适配列表，安装会失败"
+        }
+        return nil
+    }
+
+    /// 把检测到的微信路径写回设置并重新检测，解决「装在其它目录/换了副本」的错配。
+    private func applyDetectedWeChatPath(_ path: String) {
+        store.settings.hook.wechatPath = path
+        store.persist()
+        Task {
+            await store.refreshStatus()
+            toast.show("已应用检测到的微信路径", tone: .success, symbol: "checkmark.circle.fill")
+        }
     }
 
     // MARK: OneBot
 
+    /// bridge 默认只应监听回环地址；改成局域网地址时明确提示风险，而不是继续写「仅监听本机」。
+    private var oneBotHostIssue: String? {
+        let host = store.settings.onebot.host
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if host.isEmpty {
+            return L("Host 不能为空；bridge 需要监听地址。")
+        }
+        let loopback = ["127.0.0.1", "localhost", "::1"]
+        guard !loopback.contains(host) else { return nil }
+        return Lf(
+            "当前 Host 为 %@，bridge 会监听非回环地址，同一局域网内可访问。请只在可信网络使用，并保留 Token 鉴权。",
+            host
+        )
+    }
+
+    private var oneBotPortIssue: String? {
+        (1...65_535).contains(store.settings.onebot.port)
+            ? nil
+            : L("端口必须在 1–65535 之间，否则 bridge 无法启动。")
+    }
+
+    /// 端口输入即时夹到合法范围，避免持久化一个启动必失败的配置。
+    private var oneBotPortBinding: Binding<Int> {
+        Binding(
+            get: { store.settings.onebot.port },
+            set: { newValue in
+                store.settings.onebot.port = min(max(newValue, 1), 65_535)
+                store.persist()
+            }
+        )
+    }
+
     private var oneBotSettings: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+            if let notice = store.oneBotRestartNotice {
+                InlineNotice(kind: .warning, title: "配置待生效", message: notice)
+            }
             SettingsSection(
                 title: "连接参数",
-                footer: "仅监听本机；启动机器人后自动连接。Token 只保存在本机配置中。"
+                footer: "默认仅监听 127.0.0.1；修改 Host 会改变监听范围。启动机器人后自动连接，Token 只保存在本机配置中。"
             ) {
                 VStack(alignment: .leading, spacing: 11) {
                     HStack(spacing: 12) {
@@ -802,23 +988,19 @@ struct SettingsView: View {
                                 .frame(width: 150)
                         }
                         FormField(label: "Port") {
-                            TextField("58080", value: bind(\.onebot.port), format: .number)
+                            TextField("58080", value: oneBotPortBinding, format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.caption, design: .monospaced))
                                 .frame(width: 100)
                         }
-                        FormField(
-                            label: "连接类型",
-                            hint: "当前版本固定使用 WebSocket 连接；此选项仅保存偏好，不会改变运行期行为。"
-                        ) {
-                            Picker(L("连接类型"), selection: bind(\.onebot.connType)) {
-                                Text("WebSocket").tag("websocket")
-                                Text("HTTP").tag("http")
-                            }
-                            .labelsHidden()
-                            .frame(width: 130)
-                        }
                         Spacer()
+                    }
+
+                    if let issue = oneBotHostIssue {
+                        InlineNotice(kind: .warning, title: "监听地址", message: issue)
+                    }
+                    if let issue = oneBotPortIssue {
+                        InlineNotice(kind: .warning, title: "端口无效", message: issue)
                     }
 
                     FormField(label: "Token") {
@@ -846,14 +1028,6 @@ struct SettingsView: View {
                         }
                     }
 
-                    FormField(
-                        label: "bridge 可执行文件",
-                        hint: "当前版本固定使用 App 内置 bridge；此字段仅保存偏好，不会在运行期生效。"
-                    ) {
-                        TextField(L("内置 bridge"), text: bind(\.onebot.bridgePath))
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.caption, design: .monospaced))
-                    }
 
                     FormField(
                         label: "图片临时目录",
@@ -898,6 +1072,14 @@ struct SettingsView: View {
 
     private var dataSettings: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+            if let diagnostics = store.lastLoadDiagnostics {
+                InlineNotice(
+                    kind: .warning,
+                    title: "配置文件损坏",
+                    message: loadDiagnosticsMessage(diagnostics)
+                )
+            }
+
             SettingsSection(
                 title: "当前微信账号",
                 help: "账号 ID 由微信登录数据识别，界面只显示脱敏结果；配置、记忆与日志都保存在本机。"
@@ -1010,8 +1192,7 @@ struct SettingsView: View {
                         .buttonStyle(.glass)
 
                         Button {
-                            store.reload()
-                            toast.show("已重新加载配置文件", tone: .success)
+                            reloadConfiguration()
                         } label: {
                             Label(L("重新加载配置"), systemImage: "arrow.clockwise")
                         }
@@ -1123,7 +1304,7 @@ struct SettingsView: View {
                 TechLinkRow(
                     title: "OpenAI 兼容接口（DeepSeek / OpenAI / Ollama）",
                     symbol: "sparkles",
-                    subtitle: "AI 回复生成：SSE 流式、按模型温度/超时、多通道与人格覆盖",
+                    subtitle: "AI 回复生成：SSE 流式、按通道温度/超时、多通道与人格覆盖",
                     repo: "github.com/openai/openai-openapi",
                     license: "MIT",
                     urlString: "https://github.com/openai/openai-openapi",
@@ -1310,13 +1491,16 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.prompt = "选择微信"
-        panel.message = "选择 /Applications/WeChat.app"
+        panel.prompt = L("选择微信")
+        panel.message = L("选择 /Applications/WeChat.app")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         store.settings.hook.wechatPath = url.path
-        store.hookStatus.wechatVersion = AppStore.installedWeChatVersion(path: url.path) ?? ""
         store.persist()
-        toast.show("已更新微信路径", tone: .success)
+        // 立即重新检测：版本/build、Gadget、版本文件与运行状态都要按新路径刷新。
+        Task {
+            await store.refreshStatus()
+            toast.show("已更新微信路径", tone: .success)
+        }
     }
 
     private func chooseVersionConfig() {
@@ -1324,11 +1508,14 @@ struct SettingsView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.json]
-        panel.prompt = "选择版本配置"
+        panel.prompt = L("选择版本配置")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         store.settings.hook.versionConfigPath = url.path
         store.persist()
-        toast.show("已更新版本配置路径", tone: .success)
+        Task {
+            await store.refreshStatus()
+            toast.show("已更新版本配置路径", tone: .success)
+        }
     }
 
     private func installHook() {
@@ -1373,22 +1560,73 @@ struct SettingsView: View {
         }
     }
 
+    /// 配置损坏时的可行动说明（备份路径 + 不覆盖当前设置）。
+    private func loadDiagnosticsMessage(_ diagnostics: SettingsLoadDiagnostics) -> String {
+        var files: [String] = []
+        if let backup = diagnostics.corruptedConfigBackup {
+            files.append(Lf("全局配置（备份 %@）", backup.lastPathComponent))
+        }
+        if let backup = diagnostics.corruptedProfileBackup {
+            files.append(Lf("当前账号配置（备份 %@）", backup.lastPathComponent))
+        }
+        let detail = files.joined(separator: L10n.listSeparator)
+        return Lf(
+            "以下配置无法解析：%@。App 已保留当前设置，不会把默认值写回；请修复原文件或从备份恢复后点「重新加载配置」。",
+            detail
+        )
+    }
+
+    /// 重新加载配置：损坏时拒绝应用降级结果并提示备份路径，避免默认值覆盖原文件。
+    private func reloadConfiguration() {
+        guard let diagnostics = store.reload() else {
+            toast.show("已重新加载配置文件", tone: .success)
+            return
+        }
+        var files: [String] = []
+        if let backup = diagnostics.corruptedConfigBackup {
+            files.append(Lf("全局配置（备份 %@）", backup.lastPathComponent))
+        }
+        if let backup = diagnostics.corruptedProfileBackup {
+            files.append(Lf("当前账号配置（备份 %@）", backup.lastPathComponent))
+        }
+        let detail = files.joined(separator: L10n.listSeparator)
+        toast.show(
+            detail.isEmpty
+                ? "配置损坏，未应用降级结果；当前设置保持不变"
+                : Lf("配置损坏，未应用降级结果：%@；当前设置保持不变", detail),
+            tone: .error,
+            symbol: "exclamationmark.triangle"
+        )
+    }
+
     private func exportConfiguration() {
+        isConfirmingConfigExport = true
+    }
+
+    private func exportConfiguration(includeToken: Bool) {
+        var snapshot = store.settings
+        if !includeToken {
+            snapshot.onebot.token = ""
+        }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "wechatai-config-\(UIFormat.fileDate.string(from: Date())).json"
-        panel.title = "导出配置"
+        panel.title = L("导出配置")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(store.settings)
+            let data = try encoder.encode(snapshot)
             try data.write(to: url, options: .atomic)
-            toast.show("配置已导出", tone: .success, symbol: "square.and.arrow.up")
+            toast.show(
+                includeToken ? "配置已导出（含 Token）" : "配置已导出（已隐藏 Token）",
+                tone: .success,
+                symbol: "square.and.arrow.up"
+            )
         } catch {
-            toast.show("导出失败：\(error.localizedDescription)", tone: .error)
+            toast.show(Lf("导出失败：%@", error.localizedDescription), tone: .error)
         }
     }
 
@@ -1573,6 +1811,7 @@ private struct TechLinkRow: View {
 private struct LogBufferMaintenanceRow: View {
     @Environment(AppStore.self) private var store
     @Environment(ToastCenter.self) private var toast
+    @State private var isConfirmingClear = false
 
     var body: some View {
         SettingsRow(
@@ -1582,12 +1821,23 @@ private struct LogBufferMaintenanceRow: View {
             tint: Theme.info
         ) {
             Button(L("清空日志")) {
-                store.clearLogs()
-                toast.show("日志已清空", tone: .info, symbol: "trash")
+                isConfirmingClear = true
             }
             .buttonStyle(.glass)
             .controlSize(.small)
             .disabled(store.logs.isEmpty)
+            .confirmationDialog(
+                "清空运行日志",
+                isPresented: $isConfirmingClear
+            ) {
+                Button(L("清空"), role: .destructive) {
+                    store.clearLogs()
+                    toast.show("日志已清空", tone: .info, symbol: "trash")
+                }
+                Button(L("取消"), role: .cancel) {}
+            } message: {
+                Text(L("只清空内存与当前界面的日志缓冲；磁盘历史日志文件不受影响。"))
+            }
         }
     }
 }

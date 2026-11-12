@@ -101,6 +101,8 @@ enum L10n {
         ("^删除密钥失败：(.*)$", "Failed to delete key: $1"),
         ("^通道已保存，但密钥写入失败：(.*)$", "Channel saved, but failed to write API key: $1"),
         ("^AI 连接失败：(.*)$", "AI connection failed: $1"),
+        // AI 模型：通道启用反馈（温度已改为通道编辑器内配置，不再有独立温度页反馈）。
+        ("^已启用通道 (.*)$", "Enabled channel $1"),
         // 应用内更新（2026-11）：动态状态、发布信息与安装失败原因。
         // 先具体后宽泛：「已下载 X / Y」必须排在「已下载 X」之前。
         ("^发现新版本 (.*)，可在设置 → 更新中安装$", "Version $1 is available. Install it in Settings → Update."),

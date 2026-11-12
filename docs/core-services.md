@@ -4,8 +4,8 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.0.2**，包含朋友圈（Moments）与 4.2.0.17 适配；
-> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.0.2.md`](releases/4.0.2.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含朋友圈（Moments）与 4.2.0.17 适配；
+> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.1.0.md`](releases/4.1.0.md)。
 
 ## 1. 文件清单
 
@@ -162,7 +162,12 @@ RuntimeCoordinator.startRuntime
   profile 路径变化（切号）时强制写，返回任一文件是否变化。旧 `save(_:)` 等价于只写 config；应用 `persist()`
   显式传当前账号 profile 路径。
 - `AppStore.persist()` 调用时捕获 `AppPaths.profileFile` 再交给 SettingsPersistence，切号后延迟执行的旧快照仍写回
-  旧账号 profile，不会串号。
+  旧账号 profile，不会串号。写盘失败不再静默：`AppStore.lastPersistError` 保存原因，设置页顶部常驻
+  danger `InlineNotice` 并写 `Settings` 日志；成功写入后自动清除。
+- **重新加载配置**：`SettingsStore.loadWithDiagnostics` 同时返回 `SettingsLoadDiagnostics`（config/profile 的
+  `*.corrupt-<ts>.json` 备份路径）。`AppStore.reload()` 检测到任一损坏时**拒绝应用降级结果**并返回诊断，
+  当前内存设置保持不变；否则应用新配置并让运行时重新同步。启动时同样记录诊断并跳过首次默认值回写，
+  避免把默认值覆盖用户仍可修复的配置。
 - `AppPaths` 委托 `AccountProfile`：`databaseFile` / `profileFile` / `mediaDirectory` / `logsDirectory` 都指向当前
   账号；`ensureDirectories()` 不再把新媒体写入根 `media/`。
 
@@ -386,8 +391,10 @@ id != active 或 active == _unassigned
 - Endpoint：`baseURL` 去尾 `/`，若不以 `/chat/completions` 结尾则追加；空 baseURL 用 provider kind 默认值；
   非法 URL → `AIError.invalidBaseURL`。
 - 鉴权：`apiKeyReference` → Keychain；DeepSeek/OpenAI 必须有 Key；Ollama/自定义允许无 Key（本地服务）。
-- 请求体：`model, messages, max_tokens, stream`；`temperature` 仅在 `ai.modelTemperatures[model]` 有配置时发送
-  （0...2），否则省略、由模型使用自身默认值；不包含任何 Key 字段。
+- 请求体：`model, messages, max_tokens, stream`；`temperature` 由调用方传入（来自
+  `AIProvider.requestTemperature`，即该通道的 `temperatureOverride` 且 clamp 0...2），未配置时省略并由模型
+  使用自身默认值；不包含任何 Key 字段。旧 `ai.modelTemperatures[model]` 仅在启动时一次性迁移到通道，
+  不再参与新请求。
 - 响应：非流式解析 `choices[0].message.content`（兼容 `reasoning_content` 与 content parts 数组）；流式逐行解析
   `data:` SSE，处理 `[DONE]`、`usage`、`finish_reason`。
 - 超时：请求 `timeoutInterval = provider.timeoutSeconds`；流式另有总时长看门狗（`TaskGroup` 竞速），超时抛
@@ -492,12 +499,25 @@ id != active 或 active == _unassigned
 
 ### 5.7 HookManager / ProcessRunner
 
-- 检测：`Contents/Info.plist` 读版本/build；`NSRunningApplication` + `NSWorkspace` 判断微信运行；
-  `Contents/Frameworks/FridaGadget.dylib` 存在**且**主可执行文件链接了它才视为已注入；另调用
-  `tools/manage_wechat.sh status` 合并签名/备份路径等详情（失败不致命）。
+- 检测（2026-11 起）：`WeChatAppDetector` 解析「设置路径 / 运行进程 / LaunchServices 已安装位置」，按
+  **运行中的微信 > 设置路径 > 系统发现路径** 选出实际生效的 App；`Contents/Info.plist` 读版本/build
+  （兼容字符串/数字，缺 build 按版本命中），`NSRunningApplication` 按 bundle id、App 路径或「名称+可执行文件」
+  三重匹配，避免把「WeChat AI」误判成微信。`Contents/Frameworks/FridaGadget.dylib` 存在**且**主可执行文件链接了它
+  才视为已注入；另对**实际生效的 App** 调用 `tools/manage_wechat.sh status` 合并签名/备份路径等详情（失败不致命）。
+  `HookStatus.wechatDetectedPath` 记录实际路径，`wechatVersionKnown` 标记是否在
+  `WeChatVersionSupport`（与 `KNOWN_VERSION_PAIRS` 一致）列表内；运行/检测路径与设置不同时界面提示，可一键
+  「使用检测路径」写回 `hook.wechatPath`。安装/还原/启动 bridge 都使用实际生效路径，路径写错不会再直接失败。
+- 版本文件：`refresh` 用**用户设置的** `hook.versionConfigPath` 解析版本配置，绝不复用 `status.versionConfigFile`
+  （bridge 启动后它可能指向 `Application Support/WeChatAI/runtime` 生成的合并配置，升级微信后会把旧版本误判为匹配）。
+- 实时同步：`HookManager.startMonitoring()` 监听 `NSWorkspace` 的 App 启动/退出与系统唤醒；微信退出走轻量
+  `refreshProcessState()`（只查进程，不跑 otool/脚本），微信启动与唤醒走完整 `refresh()`（含版本/build/Gadget）。
+  App 重新激活时 Runtime 也会核对一次，侧边栏、总览与菜单栏不再显示过期状态。
 - 状态映射：未安装/未注入 → `notInstalled`；已注入但微信未运行 → `wechatNotRunning`；已注入且微信运行、bridge
   未启动 → `installed`；bridge 启动中 → `bridgeStarting`；OneBot WS 连接成功 → `connected`；脚本/进程失败 →
-  `failed`。
+  `failed`。微信退出时立即把 `gatewayConnected` 置 false 并给出「微信已退出」；微信重新启动后 bridge 仍运行但
+  未连接时给「等待 bridge 重连」。
+- 微信版本不在已知列表：不阻断启动（用户可能用 `--force` 自行安装），但界面给 warning 并禁用 App 内安装；
+  `WeChatVersionSupport`（6 个版本对）是 UI/脚本的共同事实源，新增版本时同时更新版本 JSON 与两个 shell 脚本。
 - 安装：`tools/install_gadget.sh --wechat-path … --gadget … --config … --backup-dir … --json`，逐行解析 stdout 的
   `{"progress":0..1,"stage":"…"}`（兼容 `[stage]0.52|…`）回调 `onProgress`；必须出现 `OK` 且退出码 0，否则抛
   `HookError.installFailed`。前置校验：微信存在且未运行、Gadget dylib/config 存在、Hook 版本配置就绪，缺失均给
@@ -512,12 +532,37 @@ id != active 或 active == _unassigned
   （见 architecture.md §3.1）。
 - stdout/stderr 行流式打日志（token 自动脱敏），进程退出更新 `bridgeRunning/bridgePID`；非 0 退出 → `failed`。
   App 终止通知会停止 bridge/OneBot/Scheduler 并 flush 日志统计。
+- **R3 发送句柄状态（2026-11-12 修复）**：日志解析同时识别实际格式
+  `[capture] slot13 newsendmsg 闭包 …`、`R3 发送句柄已持久化 …`、`[+] R3: 发送句柄已提交持久化 …`
+  （旧实现只认 `R3: 捕获 newsendmsg 闭包`，导致句柄已就绪仍显示等待）；`/voice_status` 的
+  `hook.textSeed` 是权威实时状态，启动捕获检测、语音面板/手动刷新、以及**用户手动发消息后的短轮询**
+  （1.5s/5s/10s，成功后停止）都会调用 `HookManager.syncR3SeedFromBridge(textSeed:)` 校准。日志漏读或
+  bridge 重启时不再需要重新手动发消息才能让界面变绿；微信重启后的 stale 行仍会正确清状态。
 - **进程生命周期安全**：`Process.terminationStatus` 只在 `Process.terminationHandler` 内读取，
   `onTermination` 只请求 SIGTERM、不读状态；事件流由 `NSLock` 状态机保证「两个 pipe reader 均 EOF +
   terminationHandler 已触发」后只 finish 一次；取消发生在启动前/后均安全，启动失败会关闭写端且不启动 reader 线程。
 - 资源定位顺序：`Bundle.main.resourceURL` → `WECHATAI_ROOT` → bundle/可执行文件/工作目录的上层目录
-  （`swift run` 开发态可找到仓库根）→ 源码 `#filePath` 祖先；全部失败返回 nil，调用方给出「未找到应用资源目录」
-  错误而不是崩溃。
+  （`swift run` 开发态可找到仓库根）；不再使用 `#filePath`（会泄露编译机绝对路径）。全部失败返回 nil，
+  调用方给出「未找到应用资源目录」错误而不是崩溃。
+
+### 5.7.1 登录项与退出确认（LaunchAtLoginService / QuitConfirmation）
+
+- **登录项**：`LaunchAtLoginService` + `LaunchAgentInstaller` 管理
+  `~/Library/LaunchAgents/com.gusionw.wechatai.loginitem.plist`（Label 同名，`ProgramArguments = /usr/bin/open <app>`，
+  `RunAtLoad`，`LimitLoadToSessionType=Aqua`，0644）。选择用户级 LaunchAgent 而不是 `SMAppService.mainApp`：
+  本项目默认安装在 `~/Applications`，LaunchAgent 对安装位置不敏感，且便于用注入目录做单测。
+- **真实状态**：开关以「plist 是否存在 + `launchctl print-disabled gui/<uid>` 是否标记 disabled + plist 记录的
+  App 路径是否等于当前运行路径」为准，不只看 `settings.general.launchAtLogin`。App 移动后显示「登录项指向旧位置」，
+  重新开启即重写路径；源码 `swift run`（非 .app）时开关禁用并说明原因。开启/关闭会 best-effort 调用
+  `launchctl enable/bootout`，失败不阻断（下次登录仍以 plist/disabled 记录为准）。
+- **运行期待生效提示**：`settingsDidChange` 比较启动快照与当前 OneBot host/port/token、Gadget 端口、
+  自动启动 bridge、R3 原生发送开关；有差异时写 `AppStore.oneBotRestartNotice`，设置页 OneBot 卡与总览显示
+  「配置待生效，重启机器人后生效」。停止机器人时清空。
+- **退出确认**：`QuitConfirmation.shouldConfirm(confirmBeforeQuit:isBotRunning:bridgeRunning:)` 纯决策；
+  `AppDelegate.applicationShouldTerminate` 在机器人或 bridge 运行且开关开启时弹 `NSAlert`（默认按钮「取消」，
+  「退出」标危险色）。更新助手安装前的 `NSApp.terminate` 在停止机器人后触发，不额外弹确认。
+- **通知设置已移除**：`GeneralSettings.notificationsEnabled/soundEnabled` 与设置页「通知」分类删除；旧
+  `config.json` 中的同名键按未知键忽略，避免显示不生效的开关。旧 `hook.autoLaunchWeChat` 同样移除（未实现且会误导）。
 
 ### 5.8 SleepPreventionCenter（通用防睡眠）
 
@@ -767,7 +812,8 @@ id != active 或 active == _unassigned
 | 旧版迁移失败 | 不写 `account-state.json`；旧库/旧媒体保持原样，下次启动重试；日志记录原因 |
 | 账号切换失败 | 运行时已先停止；保持停止并提示重试，不把两个账号的数据写进同一库 |
 | 登录账号 ID 非法 | 记 warning 并忽略，不创建账号目录（防止路径穿越） |
-| 配置写失败 | `SettingsPersistence` 抛错，UI 触发方可通过日志看到；不产生半截文件 |
+| 配置写失败 | `AppStore.persist` 捕获后在设置页顶部常驻 danger 提示并写日志；不产生半截文件 |
+| 配置加载损坏 | 备份 `config.corrupt-<ts>.json` / `profile.corrupt-<ts>.json` 后降级；`reload()` 拒绝覆盖当前设置并提示备份路径 |
 | Keychain 失败 | 明确 `KeychainError`；启动时缺 Key 直接阻止机器人启动 |
 | AI 超时/5xx/429 | 标记可重试，ChatEngine 按 retryCount 退避重试；最终失败计入 `failedToday` 并写日志 |
 | AI 鉴权/404 | 不可重试，日志指出检查 Key/地址 |
@@ -834,7 +880,7 @@ swift test --scratch-path .build-verify
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 891 项执行（889 通过 / 2 项按环境跳过，0 失败；41 个测试文件）；Go 312 项用例（180 顶层
+当前实测基线：Swift 933 项执行（931 通过 / 2 项按环境跳过，0 失败；49 个测试文件）；Go 312 项用例（180 顶层
 + 132 子测试，0 失败；19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。

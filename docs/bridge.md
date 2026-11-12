@@ -26,8 +26,8 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   `script.js` 同步 `hook/script.js` 的微信版本化适配（4.1.12 / 4.1.15 / 4.2.0.5 / 4.2.0.9 /
   4.2.0.12 / 4.2.0.17，见 §5）。
 
-> **发布状态（2026-11-10）**：本文描述 **4.0.2**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
-> 下载用户见 [`install.md`](install.md) 与 [`releases/4.0.2.md`](releases/4.0.2.md)。
+> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
+> 下载用户见 [`install.md`](install.md) 与 [`releases/4.1.0.md`](releases/4.1.0.md)。
 
 ---
 
@@ -219,8 +219,8 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
 - 上游通过 `json.Marshal(WechatMessage)` 发送紧凑 JSON；`message` 为数组；
   `sender`、`group_id`、`raw_message` 等在 protobuf 解析路径上通常存在。实际字段集合比
   契约示例多 `post_type`、`msgsource`、`show_content`；解析方应忽略未知字段。
-- **`time` 的单位是毫秒**（`time.Now().UnixMilli()`，13 位），不是契约示例中的
-  10 位秒级时间戳；App 解析时需按毫秒处理或按位数兼容。
+- **`time` 的单位是毫秒**（`time.Now().UnixMilli()`，13 位），不是上游旧示例中的
+  10 位秒级时间戳；App 解析时需按毫秒处理或按位数兼容（[architecture.md](architecture.md) §3.1 示例即 13 位）。
 - `message[]` 类型：`text`（`data.text`）、`image`（`data.url` 为 `file://...`，
   `data.text` 保留微信 XML）、`record`/`voice`、`video`、`file`、`face`。
   legacy `HandleMsg` 路径的媒体事件在推送前会同步下载/落盘，失败时整条事件可能被丢弃（见 §6）。
@@ -347,7 +347,7 @@ Content-Type: application/json
 - **构建与测试**：从完全干净状态（删除 `bridge/onebot` 与 `/tmp/chatbot-bridge-cache`）重跑
   `scripts/build_bridge.sh` 成功：下载并校验 Go 1.25.14 与 devkit 17.8.0，编译、`-h` 自检与
   `bridge/*_test.go` 全部通过（19 个 `_test.go`、Go 312 项用例 = 180 顶层 + 132 子测试，0 失败）；
-  Swift 891 项执行（889 通过 / 2 跳过 / 0 失败，41 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
+  Swift 933 项执行（931 通过 / 2 跳过 / 0 失败，49 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
   `script.js` 的 4.1.15 / 4.1.12 模板渲染结果 `node --check` 均通过。
 - **SNS 同步 CmdBuf**：`bridge/sns_sync_envelope_test.go` 覆盖外层信封 `{1: len, 2: payload}`、cmd45 与
   cmd46 的 Type 1/2/3 解码、评论合并去重与 timeline `reply_to_user_id`；解码结构来自 2026-11-09 真机样本。
@@ -401,7 +401,7 @@ Content-Type: application/json
 3. **`image_path` 启动时不校验**：上游只在媒体写入/下载时用到它，`os.MkdirAll`
    可能自动建目录；若目录不可写/沙箱不允许，媒体相关事件会失败。`run_bridge.sh`
    会提前检查目录存在，App 侧也应探测/创建。
-4. **`time` 为毫秒**（见 §3.1），与架构示例的秒级值不同。
+4. **`time` 为毫秒**（UnixMilli，13 位；见 §3.1 与 [architecture.md](architecture.md) §3.1 示例）。
 5. **WS 单连接**：断线期间事件丢失；重连会替换连接。WS `send_*` 无 echo，
    发送结果不可靠，App 应使用 HTTP。
 6. **HTTP `Authorization` 解析宽松**：无 `Bearer ` 前缀但等于 token 也会通过。

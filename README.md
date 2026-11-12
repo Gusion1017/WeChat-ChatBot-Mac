@@ -24,8 +24,8 @@ memory, voice and image understanding.
 
 - **聊天自动回复**：私聊直接回复；群聊支持 @ / 关键词 / 拍一拍 / 引用机器人；
   可按会话覆盖黑白名单、冷却、限流与工作时段。
-- **模型与人格**：DeepSeek、OpenAI、Ollama 或任意 OpenAI 兼容端点；
-  按会话选择人格、通道与模型。
+- **模型与人格**：新增通道支持 DeepSeek 与任意 OpenAI 兼容端点（历史 OpenAI / Ollama 通道继续可用）；
+  按会话选择人格、通道与模型，温度按通道单独配置。
 - **长期记忆**：每个会话一张记忆卡，自动提取事实 / 决策 / 待办 / 经验，支持全局共享记忆、
   搜索编辑与 Markdown / JSON 导出。详见 [`docs/memory.md`](docs/memory.md)。
 - **语音与识图**：本地语音转写 + Qwen3-TTS 语音回复（需自行安装模型，App 不内置音色）；
@@ -36,7 +36,7 @@ memory, voice and image understanding.
 - **朋友圈（Moments）**：浏览时间线、评论 / 点赞与图片；可在 App 内评论 / 回复，支持 AI 自动互动
   与按计划发布文字动态，并可选把好友动态写入记忆。功能与写操作默认关闭，仅 4.2.0.12 / 4.2.0.17 可用。
   详见 [`docs/sns.md`](docs/sns.md)。
-- **自动化与风控**：拟人化延迟、定时消息、防睡眠、实时会话看板与运行日志。
+- **自动化与风控**：微信运行状态与版本实时检测、拟人化延迟、定时消息、防睡眠、实时会话看板与运行日志。
 - **原生体验**：菜单栏常驻，左键开合状态面板；中 / 英双语、原生 SwiftUI，无 WebView / Electron。
 - **应用内更新**：自动检查 GitHub Releases，校验 SHA256 与签名，失败自动回滚。
   详见 [`docs/updates.md`](docs/updates.md)。
@@ -76,8 +76,8 @@ AI 走 OpenAI 兼容接口，消息、记忆与日志只存本机（调用 AI �
 ### 快速开始
 
 - **普通用户**：下载
-  [`WeChat-AI-4.0.2.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.2/WeChat-AI-4.0.2.zip)
-  （约 70 MB / 66 MiB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.2/WeChat-AI-4.0.2.zip.sha256)），
+  [`WeChat-AI-4.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.1.0/WeChat-AI-4.1.0.zip)
+  （约 70 MB / 66 MiB，[SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.1.0/WeChat-AI-4.1.0.zip.sha256)），
   历史发布说明见 [`docs/releases/`](docs/releases/)。
   1. 解压下载的 zip 得到 `WeChat AI.app`，拖入 `~/Applications`（当前用户，无需管理员）或
      `/Applications`（所有用户）。App 未公证，首次启动会被 Gatekeeper 拦截（macOS 15 起无法再
@@ -120,7 +120,7 @@ bash scripts/build_bridge.sh        # Go 构建 + 测试
 make release                        # 构建 → 打包 → 签名校验 → sha256
 ```
 
-Swift 891 项执行（889 通过 / 2 项按环境跳过 / 0 失败，41 个测试文件）与 Go 312 项用例
+Swift 933 项执行（931 通过 / 2 项按环境跳过 / 0 失败，49 个测试文件）与 Go 312 项用例
 （180 顶层 + 132 子测试，0 失败，19 个 `_test.go`）当前全部通过；发布产物在
 `dist/`（zip + `.sha256`）。修改 `hook/script.js` 后需运行 `bash scripts/sync_hook_script.sh`；
 接口或行为变更先改 `docs/` 再改代码。
@@ -165,8 +165,9 @@ OneBot 桥接为上游项目的 GPL-3.0 衍生，改动清单见 [`bridge/NOTICE
 
 - **Chat replies**: automatic private-chat replies; group triggers for @ / keyword / pat-pat / quote,
   with per-conversation allow/block lists, cooldown, rate limit and working hours.
-- **Models & personas**: DeepSeek, OpenAI, Ollama or any OpenAI-compatible endpoint;
-  per-conversation persona, channel and model selection.
+- **Models & personas**: new channels support DeepSeek and any OpenAI-compatible endpoint
+  (existing OpenAI / Ollama channels keep working); per-conversation persona, channel and model
+  selection, with temperature configured per channel.
 - **Long-term memory**: one memory card per conversation that extracts facts / decisions / todos /
   lessons, plus global shared memory, search/edit and Markdown / JSON export.
   See [`docs/memory.md`](docs/memory.md).
@@ -179,8 +180,8 @@ OneBot 桥接为上游项目的 GPL-3.0 衍生，改动清单见 [`bridge/NOTICE
 - **Moments**: browse the timeline, comments/likes and images; comment or reply in-app, with optional
   AI auto-engagement, scheduled text posts and friends' posts written into memory. Off by default;
   available on 4.2.0.12 / 4.2.0.17. See [`docs/sns.md`](docs/sns.md).
-- **Automation & safety**: human-like delay, scheduled messages, sleep prevention,
-  live conversation board and runtime logs.
+- **Automation & safety**: live WeChat process/version detection, human-like delay,
+  scheduled messages, sleep prevention, live conversation board and runtime logs.
 - **Native experience**: menu-bar app with a left-click status panel, Chinese/English UI,
   native SwiftUI, no WebView or Electron.
 - **In-app updates**: checks GitHub Releases, verifies SHA256 and signature, rolls back on failure.
@@ -195,10 +196,6 @@ OneBot 桥接为上游项目的 GPL-3.0 衍生，改动清单见 [`bridge/NOTICE
 | 4.2.0.9 (270345) / 4.2.0.5 (270341) | ✅ text send/receive and main inbound features |
 | 4.1.15.55 (270135) | ✅ text send/receive (R3) |
 | 4.1.12.53 (269365) | ✅ text send/receive (legacy) |
-
-> 4.2.0.17 caveat: one WeChat crash was observed in send-disabled mode (`enableSend=false`, legacy
-> StartTask path) right after a send; it did not reproduce in 4+ subsequent captures. The default R3
-> mode is stable — keep it on.
 
 Voice sending and some media features have not been retested on every version; see
 [`docs/install.md`](docs/install.md) for details.
@@ -231,8 +228,8 @@ install and restore), `devtools/` (local mocks), `assets/` (icon sources), `LICE
 ### Quick Start
 
 - **Regular users**: download
-  [`WeChat-AI-4.0.2.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.2/WeChat-AI-4.0.2.zip)
-  (~70 MB (66 MiB), [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.0.2/WeChat-AI-4.0.2.zip.sha256));
+  [`WeChat-AI-4.1.0.zip`](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.1.0/WeChat-AI-4.1.0.zip)
+  (~70 MB (66 MiB), [SHA256](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/download/v4.1.0/WeChat-AI-4.1.0.zip.sha256));
   older release notes are in [`docs/releases/`](docs/releases/).
   1. Unzip the downloaded zip to get `WeChat AI.app`, then drag it to `~/Applications` (current
      user, no admin) or `/Applications` (all users). The app is not notarized, so Gatekeeper
@@ -280,7 +277,7 @@ bash scripts/build_bridge.sh        # Go build + tests
 make release                        # build → package → signature check → sha256
 ```
 
-891 Swift tests (889 passed / 2 environment-gated skips / 0 failures, 41 test files) and
+933 Swift tests (931 passed / 2 environment-gated skips / 0 failures, 49 test files) and
 312 Go test cases (180 top-level + 132 subtests, 0 failures, 19 `_test.go` files) pass;
 release artifacts live in `dist/` (zip + `.sha256`). After editing `hook/script.js`, run
 `bash scripts/sync_hook_script.sh`; change `docs/` before code for interface or behaviour changes.

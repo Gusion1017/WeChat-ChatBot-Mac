@@ -219,7 +219,7 @@ struct PersonaEditorSheet: View {
 
                     FormField(
                         label: "覆盖模型",
-                        hint: "留空跟随通道；温度在「AI 模型 → 模型温度」中统一配置"
+                        hint: "留空跟随通道；温度在「AI 模型 → 编辑通道 → 高级参数」中配置"
                     ) {
                         TextField(
                             "例如 deepseek-chat",

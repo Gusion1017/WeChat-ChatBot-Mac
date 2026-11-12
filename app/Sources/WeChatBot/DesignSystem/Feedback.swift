@@ -224,6 +224,8 @@ final class ToastCenter {
         withAnimation(.snappy(duration: 0.22)) {
             current = ToastMessage(text: text, tone: tone, symbol: symbol ?? tone.symbol)
         }
+        // VoiceOver 不会自动朗读视觉 Toast；主动发一次 announcement，读屏用户才能确认保存/失败结果。
+        AccessibilityNotification.Announcement(L10n.text(text)).post()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_600_000_000)
             guard !Task.isCancelled else { return }

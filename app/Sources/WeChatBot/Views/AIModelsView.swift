@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// AI 模型：多通道管理、Keychain 密钥、连接测试、默认通道与请求策略。
+/// AI 模型：多通道管理、Keychain 密钥、连接测试、默认通道、请求策略；
+/// 模型温度在「编辑通道 → 高级参数」中按通道配置。
 struct AIModelsView: View {
     @Environment(AppStore.self) private var store
     @Environment(ToastCenter.self) private var toast
@@ -8,6 +9,7 @@ struct AIModelsView: View {
     @State private var editingProvider: AIProvider?
     @State private var isEditingNew = false
     @State private var testStates: [String: ProviderTestState] = [:]
+    @State private var testTracker = ProviderTestTracker()
     @State private var pendingDelete: AIProvider?
 
     var body: some View {
@@ -15,7 +17,7 @@ struct AIModelsView: View {
             Button {
                 addProvider()
             } label: {
-                Label(L("添加通道"), systemImage: "plus")
+                Label(L("添加通道…"), systemImage: "plus")
             }
             .buttonStyle(.glassProminent)
             .tint(Theme.accent)
@@ -25,8 +27,11 @@ struct AIModelsView: View {
                     EmptyState(
                         symbol: "sparkles",
                         title: "还没有 AI 通道",
-                        message: "添加一个 OpenAI 兼容通道后，机器人才会生成回复。"
-                    )
+                        message: "添加一个 DeepSeek 或自定义兼容通道后，机器人才会生成回复。",
+                        actionTitle: "添加通道…"
+                    ) {
+                        addProvider()
+                    }
                 }
             } else {
                 VStack(spacing: 9) {
@@ -53,7 +58,6 @@ struct AIModelsView: View {
 
             requestPolicyCard
             visionCard
-            temperatureCard
             securityCard
         }
         .sheet(item: $editingProvider) { provider in
@@ -63,6 +67,12 @@ struct AIModelsView: View {
                 globalStreamingEnabled: store.settings.ai.streamReplies,
                 onDeleteKey: {
                     deleteKey(for: provider)
+                },
+                isNameAvailable: { name in
+                    !store.providers.contains {
+                        $0.id != provider.id
+                            && $0.name.caseInsensitiveCompare(name) == .orderedSame
+                    }
                 }
             ) { updated, secret in
                 save(updated, secret: secret)
@@ -109,18 +119,6 @@ struct AIModelsView: View {
         store.settings.provider(id: store.settings.ai.defaultProviderID)?.id == provider.id
     }
 
-    /// 默认通道失效时给出可直接行动的原因（停用 / 缺少 Key），而不是让回复静默失败。
-    private var defaultChannelWarning: String? {
-        guard let provider = store.defaultProvider else { return nil }
-        if !provider.enabled {
-            return "默认通道已停用；请在通道列表启用，或更换默认通道。"
-        }
-        if !provider.hasUsableCredential {
-            return "默认通道缺少 API Key；请编辑该通道填写密钥。"
-        }
-        return nil
-    }
-
     // MARK: Default channel
 
     private var defaultChannelCard: some View {
@@ -138,7 +136,7 @@ struct AIModelsView: View {
                 ) {
                     Picker(L("默认通道"), selection: defaultProviderBinding) {
                         ForEach(store.providers) { provider in
-                            Text(provider.name).tag(provider.id)
+                            Text(providerPickerLabel(provider)).tag(provider.id)
                         }
                     }
                     .labelsHidden()
@@ -146,19 +144,62 @@ struct AIModelsView: View {
                     .frame(width: 200)
                 }
 
-                if let warning = defaultChannelWarning {
-                    SettingsDivider()
-                    Label(L(warning), systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(Theme.warning)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .fixedSize(horizontal: false, vertical: true)
+                if let provider = store.defaultProvider {
+                    defaultChannelIssueIfNeeded(provider)
                 }
             }
             .padding(.vertical, -4)
         }
+    }
+
+    /// 停用的通道仍可选择（不改变当前值），但必须就地标注，避免用户以为它还能回复。
+    private func providerPickerLabel(_ provider: AIProvider) -> String {
+        provider.enabled ? provider.name : provider.name + L("（已停用）")
+    }
+
+    @ViewBuilder
+    private func defaultChannelIssueIfNeeded(_ provider: AIProvider) -> some View {
+        let diagnosis = DefaultChannelDiagnosis.evaluate(provider: provider)
+        if !diagnosis.isUsable {
+            SettingsDivider()
+            VStack(alignment: .leading, spacing: 8) {
+                Label(L(defaultChannelIssueMessage(diagnosis)), systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    if diagnosis.needsEnable {
+                        Button(L("启用通道")) {
+                            setEnabled(provider, true)
+                            toast.show(Lf("已启用通道 %@", provider.name), tone: .success, symbol: "power")
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                    }
+                    if diagnosis.needsCredential {
+                        Button(L("编辑通道")) {
+                            isEditingNew = false
+                            editingProvider = provider
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private func defaultChannelIssueMessage(_ diagnosis: DefaultChannelDiagnosis) -> String {
+        if diagnosis.needsEnable && diagnosis.needsCredential {
+            return "默认通道已停用且缺少 API Key；启用并填写密钥后才能生成回复。"
+        }
+        if diagnosis.needsEnable {
+            return "默认通道已停用；启用后才会用于自动回复。"
+        }
+        return "默认通道缺少 API Key；填写后才能生成回复。"
     }
 
     // MARK: Request policy
@@ -166,7 +207,7 @@ struct AIModelsView: View {
     private var requestPolicyCard: some View {
         SectionCard(
             title: "请求策略",
-            subtitle: "对所有通道生效的流式与重试策略",
+            subtitle: "对所有通道生效的流式与重试策略；温度在通道「高级参数」中配置",
             symbol: "slider.horizontal.3",
             tint: Theme.violet
         ) {
@@ -211,7 +252,7 @@ struct AIModelsView: View {
             subtitle: "可选：先描述图片，再把描述交给回复模型参考",
             symbol: "eye.fill",
             tint: Theme.info,
-            help: "识图结果只保存在本机，并作为后续回复的上下文；建议选择支持图片输入的多模态模型。"
+            help: "识图结果只保存在本机，并作为后续回复的上下文；建议选择支持图片输入的多模态模型。识图请求不发送温度；通道温度只作用于自动回复等文本请求。"
         ) {
             VStack(spacing: 0) {
                 if store.providers.isEmpty {
@@ -223,7 +264,7 @@ struct AIModelsView: View {
                 } else {
                     SettingsRow(
                         title: "启用识图",
-                        subtitle: "关闭后只显示图片占位，下方设置不可用。",
+                        subtitle: "关闭后不发起识图请求，只保留图片占位。",
                         symbol: "eye.fill",
                         tint: Theme.info
                     ) {
@@ -253,7 +294,7 @@ struct AIModelsView: View {
                     SettingsDivider()
                     SettingsRow(
                         title: "识图模型覆盖",
-                        subtitle: "留空跟随所选通道的模型；需支持 image_url 输入。",
+                        subtitle: "留空跟随所选通道的模型；填写则覆盖，需支持图片输入。",
                         symbol: "cpu",
                         tint: Theme.info
                     ) {
@@ -276,141 +317,20 @@ struct AIModelsView: View {
                             }
                         }
                     }
+                    if !store.settings.isVisionEnabled {
+                        SettingsDivider()
+                        Label(L("识图已关闭，以上通道与模型设置暂不生效。"), systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.vertical, -4)
         }
-    }
-
-    // MARK: Model temperature
-
-    private var temperatureCard: some View {
-        SectionCard(
-            title: "模型温度",
-            subtitle: "按模型单独配置；未设置时不发送 temperature",
-            symbol: "thermometer.medium",
-            tint: Theme.warning,
-            help: "温度范围 0–2：越低越稳定，越高越随机。列表包含通道与人格中实际使用的模型。",
-            trailing: {
-                if hasCustomTemperatures {
-                    Button(L("全部恢复默认")) {
-                        store.settings.ai.modelTemperatures = [:]
-                        store.persist()
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                }
-            },
-            content: {
-                VStack(spacing: 0) {
-                    if knownModels.isEmpty {
-                        Text(L("添加通道并填写模型后可按模型设置温度。"))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                    } else {
-                        ForEach(Array(knownModels.enumerated()), id: \.element) { index, model in
-                            if index > 0 { SettingsDivider() }
-                            modelTemperatureRow(model)
-                        }
-                    }
-                }
-                .padding(.vertical, -4)
-            }
-        )
-    }
-
-    /// 所有在通道或人格中实际使用的模型名（去重并保持顺序）。
-    private var knownModels: [String] {
-        var seen = Set<String>()
-        var models: [String] = []
-        func add(_ raw: String?) {
-            guard let raw else { return }
-            let model = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !model.isEmpty, seen.insert(model).inserted else { return }
-            models.append(model)
-        }
-        for provider in store.providers {
-            add(AIClient.effectiveModel(for: provider))
-        }
-        for persona in store.personas {
-            add(persona.model)
-        }
-        // 旧配置/已移除模型仍可能留下自定义温度；列出它们才能看到并恢复，
-        // 否则「全部恢复默认」按钮会出现在没有任何可见自定义行的页面上。
-        for model in (store.settings.ai.modelTemperatures ?? [:]).keys.sorted() {
-            add(model)
-        }
-        return models
-    }
-
-    private var hasCustomTemperatures: Bool {
-        !(store.settings.ai.modelTemperatures?.isEmpty ?? true)
-    }
-
-    private func modelTemperatureRow(_ model: String) -> some View {
-        SettingsRow(
-            title: model,
-            subtitle: modelTemperature(for: model) == nil ? "使用模型默认值" : "自定义温度",
-            symbol: "cpu",
-            tint: Theme.warning
-        ) {
-            HStack(spacing: 8) {
-                if let temperature = modelTemperature(for: model) {
-                    Slider(value: temperatureBinding(for: model), in: 0...2, step: 0.1)
-                        .tint(Theme.accent)
-                        .frame(width: 150)
-                        .accessibilityLabel(Lf("%@ 温度", model))
-                        .accessibilityValue(String(format: "%.1f", temperature))
-                    Text(String(format: "%.1f", temperature))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26, alignment: .trailing)
-                    Button {
-                        clearModelTemperature(model)
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                    .help(L("恢复模型默认温度"))
-                    .accessibilityLabel(Lf("恢复 %@ 默认温度", model))
-                } else {
-                    Button(L("设置温度")) {
-                        setModelTemperature(0.7, for: model)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                    .help(Lf("为 %@ 设置自定义温度", model))
-                }
-            }
-        }
-    }
-
-    private func modelTemperature(for model: String) -> Double? {
-        store.settings.ai.temperature(forModel: model)
-    }
-
-    private func temperatureBinding(for model: String) -> Binding<Double> {
-        Binding(
-            get: { store.settings.ai.temperature(forModel: model) ?? 0.7 },
-            set: { setModelTemperature($0, for: model) }
-        )
-    }
-
-    private func setModelTemperature(_ value: Double, for model: String) {
-        var map = store.settings.ai.modelTemperatures ?? [:]
-        map[model] = min(max(value, 0), 2)
-        store.settings.ai.modelTemperatures = map
-        store.persist()
-    }
-
-    private func clearModelTemperature(_ model: String) {
-        var map = store.settings.ai.modelTemperatures ?? [:]
-        map.removeValue(forKey: model)
-        store.settings.ai.modelTemperatures = map
-        store.persist()
     }
 
     // MARK: Security
@@ -563,6 +483,11 @@ struct AIModelsView: View {
         }
         store.persist()
 
+        // 通道配置已经变化：旧的连接测试结果不再对应当前配置，必须清除；
+        // 令仍在途的测试结果失效，避免它稍后把过期结果写回来。
+        testTracker.invalidate(updated.id)
+        testStates[updated.id] = nil
+
         if updated.requiresAPIKey && !updated.hasAPIKey {
             toast.show("通道已保存，尚未填写 API Key", tone: .warning, symbol: "key.slash")
         } else {
@@ -616,7 +541,14 @@ struct AIModelsView: View {
         }
 
         store.providers.removeAll { $0.id == provider.id }
+        testTracker.invalidate(provider.id)
         testStates[provider.id] = nil
+
+        // 识图通道被删除后回到「跟随默认通道」，避免选择器选中一个不存在的通道。
+        if var vision = store.settings.ai.vision, vision.providerID == provider.id {
+            vision.providerID = nil
+            store.settings.ai.vision = vision
+        }
 
         if wasDefault {
             if let next = store.providers.first {
@@ -640,9 +572,12 @@ struct AIModelsView: View {
     }
 
     private func test(_ provider: AIProvider) {
+        let generation = testTracker.begin(provider.id)
         testStates[provider.id] = .testing
-        Task {
+        Task { @MainActor in
             let result = await store.testProvider(provider)
+            // 编辑保存/删除通道后，在途结果直接丢弃，不再显示过期状态。
+            guard testTracker.isCurrent(generation, for: provider.id) else { return }
             switch result {
             case .success(let message):
                 testStates[provider.id] = .success(message)

@@ -32,10 +32,10 @@ final class SleepPreventionTests: XCTestCase {
         XCTAssertEqual(settings.sleepPrevention, .never)
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertTrue(settings.launchAtLogin)
-        XCTAssertFalse(settings.notificationsEnabled)
-        XCTAssertTrue(settings.soundEnabled)
         XCTAssertFalse(settings.confirmBeforeQuit)
         XCTAssertEqual(settings.language, "en")
+        // 通知/通知声音设置已移除：旧配置里的 notificationsEnabled/soundEnabled
+        // 属于未知键，解码时被忽略且不影响其余字段（见上方其余断言）。
     }
 
     func testRemovedWindowPreferenceKeysAreIgnored() throws {

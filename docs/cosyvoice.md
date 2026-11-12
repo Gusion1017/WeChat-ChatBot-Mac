@@ -213,7 +213,7 @@ RTF 口径：`duration = samples / sample_rate`，`rtf = processing_time_seconds
 
 ## 11. 测试与验证状态
 
-- `swift test` **891 项（889 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
+- `swift test` **933 项（931 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
   与真实 GPU E2E 通过；`test_server.py` **72 项通过**（设备解析/auto、health、合成、x-vector
   fallback、headers 等）；完整真实下载/安装在早期版本已跑通。
 - 真实 GPU `/tts` 24k WAV、RTF≈0.54–0.78；`--device auto/gpu`、`--wait-health`、`bash -n`、

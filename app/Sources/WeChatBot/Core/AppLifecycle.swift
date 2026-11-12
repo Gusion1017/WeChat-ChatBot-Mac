@@ -161,6 +161,19 @@ private final class WindowAttachView: NSView {
     }
 }
 
+// MARK: - Quit confirmation
+
+/// 「退出前确认」的纯决策，便于单测；真正的弹窗在 AppDelegate 中。
+enum QuitConfirmation {
+    static func shouldConfirm(
+        confirmBeforeQuit: Bool,
+        isBotRunning: Bool,
+        bridgeRunning: Bool
+    ) -> Bool {
+        confirmBeforeQuit && (isBotRunning || bridgeRunning)
+    }
+}
+
 // MARK: - App delegate
 
 /// Launch-time activation policy (Dock icon), close-to-hide behaviour and the
@@ -269,6 +282,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// active (e.g. activating from the menu bar); re-assert the window-derived policy.
     func applicationDidBecomeActive(_ notification: Notification) {
         ActivationPolicyController.reapplyCurrent()
+        // 用户从微信切回来时顺手核对一次微信进程状态：覆盖 App 启动前就已退出/启动，
+        // 或通知被系统合并的场景。轻量检查，不读 Info.plist。
+        if let store = AppStore.shared {
+            Task { @MainActor in
+                await store.refreshWeChatProcessState()
+            }
+        }
+    }
+
+    /// 机器人或 bridge 仍在运行时，按设置先确认再退出，避免误触 ⌥⌘Q / 菜单栏退出。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let store = AppStore.shared,
+              QuitConfirmation.shouldConfirm(
+                confirmBeforeQuit: store.settings.general.confirmBeforeQuit,
+                isBotRunning: store.isBotRunning,
+                bridgeRunning: store.hookStatus.bridgeRunning
+              )
+        else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L("退出 WeChat AI？")
+        alert.informativeText = store.isBotRunning
+            ? L("机器人正在运行。退出后将停止接收与自动回复，排队消息不会发送。")
+            : L("bridge 仍在运行。退出后将停止本地 OneBot 服务。")
+        alert.addButton(withTitle: L("取消"))
+        alert.addButton(withTitle: L("退出"))
+        alert.buttons.last?.hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {

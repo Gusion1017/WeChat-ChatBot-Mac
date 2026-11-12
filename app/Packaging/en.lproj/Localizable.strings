@@ -275,6 +275,7 @@
 "新建任务" = "New Schedule";
 "无主窗口" = "No main window";
 "无法保存" = "Unable to Save";
+"请检查标记的字段。" = "Check the highlighted fields.";
 "日志目录" = "Logs directory";
 "日志缓冲" = "Log buffer";
 "时段来源" = "Hours Source";
@@ -1029,7 +1030,7 @@
 "微信更新后需要重新安装；部分功能（如小程序、更新）可能受影响。" = "Reinstalling is required after WeChat updates. Some features (such as Mini Programs and updates) may be affected.";
 "留空时使用 App 内置 bridge；开发环境可指定绝对路径" = "Leave empty to use the bridge bundled with the app; specify an absolute path during development";
 " × 使用强化(1 + 0.02 × 召回次数，最多 +40%)" = " × Usage boost (1 + 0.02 × recall count, up to +40%)";
-"AI 回复生成：SSE 流式、按模型温度/超时、多通道与人格覆盖" = "AI reply generation: SSE streaming, per-model temperature and timeout, channels with persona overrides";
+"AI 回复生成：SSE 流式、按通道温度/超时、多通道与人格覆盖" = "AI reply generation: SSE streaming, per-channel temperature and timeout, channels with persona overrides";
 "Ollama 本地通道无需密钥，默认地址为 127.0.0.1。" = "Local Ollama channels need no key; the default address is 127.0.0.1.";
 "wechat-mac-hook（macOS 4.x 集成与运维）" = "wechat-mac-hook (macOS 4.x integration and maintenance)";
 "之后在「机器人 → 工作时间」修改全局设置时，此会话会同步生效。" = "Later changes to the global setting in Bot → Working Hours also apply here.";
@@ -1037,7 +1038,7 @@
 "只读消息钩子替代旧回调；接收与发送链路解耦，发送失败不影响接收。" = "A read-only message hook replaces the old callback; receive and send paths are decoupled, so send failures don't affect receiving.";
 "将使用安装 Hook 时创建的完整备份替换当前微信，并重新签名。" = "Replaces the current WeChat with the full backup created when installing the Hook, then re-signs it.";
 "核心之间也按综合权重排序；保存会刷新更新时间，时间衰减从头计算。" = "Core memories are ranked by overall weight; saving refreshes the update time, so time decay restarts.";
-"留空跟随通道；温度在「AI 模型 → 模型温度」中按模型统一配置" = "Leave empty to use the channel; temperature is set per model in AI Model → Model Temperature";
+"留空跟随通道；温度在「AI 模型 → 编辑通道 → 高级参数」中配置" = "Leave empty to follow the channel; temperature is set in AI Models → Edit Channel → Advanced.";
 "R3 等待信号：微信重启后请在本机微信手动发一条消息以捕获发送句柄" = "R3 awaiting signal: after restarting WeChat, send a message manually in WeChat on this Mac to capture the send handle";
 "删除本地 SQLite 中保存的聊天记录。微信端的消息不会受影响。" = "Deletes chat history stored in local SQLite. Messages in WeChat are not affected.";
 "暂时不安装也可以继续；之后可在「设置 → Hook」中备份并安装。" = "You can continue without installing; back up and install later in Settings → Hook.";
@@ -1077,7 +1078,7 @@
 "将清空 App 内存中的日志缓冲（最多 2000 条）。已落盘的日志文件不受影响。" = "Clears the in-memory log buffer (up to 2000 entries). Log files already on disk are not affected.";
 "未找到 bridge 资源目录（onebot 从当前目录读取 script.js）" = "Bridge resource directory not found (onebot reads script.js from the current directory)";
 "正在监听微信消息；符合触发条件时会按人设与上下文自动回复。可在页面顶部停止机器人。" = "Listening for WeChat messages. Messages that match your triggers get automatic replies based on the persona and context. Stop the bot at the top of the page.";
-"温度不随通道设置，改在「模型温度」中按模型单独配置；未配置时由模型使用自身默认值。" = "Temperature is not set per channel; set it per model in Model Temperature. Models use their own default when unset.";
+"温度只作用于该通道的文本请求；识图请求不发送温度。未开启自定义温度时由模型使用自身默认值。" = "Temperature applies to this channel's text requests; vision requests don't send temperature. When custom temperature is off, the model's own default applies.";
 "读取所需密钥只在本机内存与受限缓存中，不写日志、不下发 App；仅用于自己的账号。" = "Keys needed for reading stay in local memory and a restricted cache, are never logged, and aren't exposed to the app; they're used only for your own account.";
 "你在 macOS 微信客户端上以真人身份聊天，回复要简短自然，不要暴露自己是 AI。" = "You're chatting as a real person in the macOS WeChat client. Keep replies short and natural, and never reveal that you're an AI.";
 "你是一个友好、自然、简洁的中文微信聊天助手。回答要像真人聊天，避免长篇大论和机械感。" = "You are a friendly, natural, concise Chinese WeChat chat assistant. Reply like a real person would, and avoid long-winded or robotic answers.";
@@ -1325,7 +1326,7 @@
 "自动回复默认使用此通道" = "Default channel for automatic replies";
 "自动回复使用此通道；停用或缺少密钥时无法生成回复。" = "Automatic replies use this channel; a disabled channel or missing key blocks replies.";
 "请求策略" = "Request Policy";
-"对所有通道生效的流式与重试策略" = "Streaming and retry policy for all channels";
+"对所有通道生效的流式与重试策略；温度在通道「高级参数」中配置" = "Streaming and retry policy for all channels; temperature is configured per channel under Advanced.";
 "关闭后所有通道都等待完整回复；开启时由各通道的「流式返回」决定。" = "Off waits for complete replies on every channel; on lets each channel decide.";
 "一次回复失败后额外重试的次数（0 = 不重试）。" = "Extra retries after a failed reply (0 = no retry).";
 "可选：先让视觉模型描述图片，再把描述交给回复模型参考" = "Optional: describe images with a vision model and pass the description to the reply model";
@@ -1344,6 +1345,7 @@
 "清除密钥" = "Delete Key";
 "清除后该通道将无法调用需要鉴权的服务；可重新填写并保存。" = "The channel cannot call authenticated services until a new key is saved.";
 "OpenAI 兼容接口 · 密钥只保存在本机" = "OpenAI-compatible endpoint · key stays on this Mac";
+"OpenAI 兼容接口" = "OpenAI-compatible endpoint";
 "待保存新密钥" = "New key pending";
 "密钥已保存" = "Key saved";
 "无需密钥" = "No key needed";
@@ -3072,7 +3074,7 @@
 "本地优先" = "Local first";
 "配置、记忆卡与日志保存在本机；API Key 存入 Keychain。" = "Settings, memory cards, and logs stay on this Mac; API keys go in Keychain.";
 "支持 DeepSeek、OpenAI、Ollama 等通道。" = "Works with channels such as DeepSeek, OpenAI, and Ollama.";
-"需要已安装 arm64 官方微信（4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55）。安装 Hook 会修改微信应用包，请先完全退出微信。" = "Requires official WeChat for arm64 (4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55). Installing the Hook modifies the WeChat app bundle, so quit WeChat completely first.";
+"需要已安装 arm64 官方微信（%@）。安装 Hook 会修改微信应用包，请先完全退出微信。" = "Requires official WeChat for arm64 (%@). Installing the Hook modifies the WeChat app bundle, so quit WeChat completely first.";
 "先确认微信已完全退出，再备份并安装 Hook。" = "Make sure WeChat is fully quit before backing up and installing the Hook.";
 "App 通过 Frida Gadget 注入官方微信，再经本地 OneBot bridge 收发消息。安装会修改微信应用包并重新签名。" = "The app injects Frida Gadget into official WeChat, then sends and receives messages through the local OneBot bridge. Installation modifies and re-signs the WeChat app bundle.";
 "未安装 Command Line Tools" = "Command Line Tools not installed";
@@ -3312,3 +3314,146 @@
 "白名单私聊好友发新动态时，AI 写一条简短评论" = "When a direct-chat friend on the allowlist posts, AI writes a short comment";
 "自己的动态下有白名单私聊好友的评论时，AI 回复" = "When a direct-chat friend on the allowlist comments on my post, AI replies";
 "别人动态下，白名单私聊好友回复我的评论时，AI 再回复" = "When a direct-chat friend on the allowlist replies to my comment on someone else's post, AI replies again";
+/* AI 模型页（2026-11）：模型温度来源、默认通道操作与连接测试反馈。 */
+"添加通道…" = "Add Channel…";
+"（已停用）" = " (disabled)";
+"启用通道" = "Enable Channel";
+"编辑通道" = "Edit Channel";
+"默认通道已停用且缺少 API Key；启用并填写密钥后才能生成回复。" = "The default channel is disabled and has no API key. Enable it and add a key before replies can be generated.";
+"默认通道已停用；启用后才会用于自动回复。" = "The default channel is disabled. Enable it to use it for automatic replies.";
+"默认通道缺少 API Key；填写后才能生成回复。" = "The default channel has no API key. Add one before replies can be generated.";
+"温度范围 0–2：越低越稳定，越高越随机。列表包含通道与人格使用的模型，以及仅保留历史温度设置的模型。" = "Range 0–2: lower is more stable, higher is more random. The list includes models used by channels and personas, plus models that only keep a legacy temperature setting.";
+"使用模型默认温度 · %@" = "Model default · %@";
+"自定义温度 · %@" = "Custom temperature · %@";
+"默认通道「%@」" = "Default channel “%@”";
+"默认通道「%@」（已停用）" = "Default channel “%@” (disabled)";
+"通道「%@」" = "Channel “%@”";
+"通道「%@」（已停用）" = "Channel “%@” (disabled)";
+"人格「%@」" = "Persona “%@”";
+"历史温度设置（没有通道或人格使用）" = "Legacy temperature (no channel or persona uses this model)";
+"这个模型已不在任何通道或人格中使用，只保留了之前的温度设置；点「恢复默认」即可移除。" = "This model is no longer used by any channel or persona; only its previous temperature setting remains. Reset to remove it.";
+"全部恢复默认温度" = "Reset All Model Temperatures";
+"将清除 %d 个模型的自定义温度，改为使用模型自身默认温度；可随时重新设置。" = "This clears custom temperatures for %d models and uses each model's default. You can set them again anytime.";
+"已恢复全部模型默认温度" = "Restored all model default temperatures";
+"重新测试" = "Test Again";
+"重新测试 %@" = "Test %@ again";
+"关闭后不发起识图请求，只保留图片占位。" = "When off, no vision requests are made; images stay as placeholders.";
+"留空跟随所选通道的模型；填写则覆盖，需支持图片输入。" = "Blank follows the selected channel's model; otherwise it overrides. The model must accept image input.";
+"识图已关闭，以上通道与模型设置暂不生效。" = "Vision is off, so these channel and model settings have no effect.";
+"识图结果只保存在本机，并作为后续回复的上下文；建议选择支持图片输入的多模态模型。识图请求不发送温度；通道温度只作用于自动回复等文本请求。" = "Vision results stay on this Mac and become context for replies; choose a multimodal model that accepts image input. Vision requests don't send temperature; channel temperature applies to text requests such as automatic replies.";
+/* 2026-11 微信检测与登录项（Lead 增量）：检测路径、版本适配与登录时启动。 */
+"%@ · 非设置路径" = "%@ · not the configured path";
+"App 已移动或重新安装。重新开启「登录时启动」即可更新路径。" = "The app moved or was reinstalled. Turn “Launch at login” back on to update the path.";
+"bridge 仍在运行。退出后将停止本地 OneBot 服务。" = "The bridge is still running. Quitting will stop the local OneBot service.";
+"仅安装后的 App 支持；源码运行不可用" = "Available only in the installed app; unavailable when running from source";
+"使用检测路径" = "Use detected path";
+"使用该路径" = "Use this path";
+"只有安装后的 App 才能设置登录时启动。请从 .app 运行，而不是源码可执行文件。" = "Launch at login requires the installed app. Run the .app bundle instead of the source executable.";
+"备份当前微信并注入 Frida Gadget" = "Back up WeChat and inject the Frida Gadget";
+"已关闭登录时启动" = "Launch at login disabled";
+"已在系统设置中关闭；重新开启可恢复" = "Turned off in System Settings; switch it back on to restore";
+"已应用检测到的微信路径" = "Applied the detected WeChat path";
+"已开启登录时启动" = "Launch at login enabled";
+"当前微信 %@ 不在适配列表（%@）。安装/启动可能失败，请换回受支持版本，或使用下方「版本配置文件」指定自定义配置。" = "WeChat %@ is not in the supported list (%@). Installation or startup may fail; use a supported version or specify a custom version config file below.";
+"当前微信 %@ 不在适配列表（%@）。收发可能失败，请换回受支持版本，或在「设置 → Hook → 版本配置文件」使用自定义配置。" = "WeChat %@ is not in the supported list (%@). Sending and receiving may fail; use a supported version or a custom version config in Settings → Hook.";
+"当前微信 %@ 不在适配列表（%@）。请换回受支持版本，或使用「设置 → Hook → 版本配置文件」指定自定义配置。" = "WeChat %@ is not in the supported list (%@). Use a supported version or set a custom version config in Settings → Hook.";
+"当前微信位于 %@，与设置路径不同；点击「使用该路径」可同步设置。" = "WeChat is running from %@, which differs from the configured path. Choose “Use this path” to update the setting.";
+"当前微信版本不在适配列表，安装会失败" = "This WeChat version is not supported, so installation will fail";
+"当前运行/检测到的微信位于 %@，与设置路径不同。Hook 状态按这个 App 判断。" = "The running/detected WeChat is at %@, which differs from the configured path. Hook status is based on this app.";
+"微信已启动，等待 bridge 重连" = "WeChat started; waiting for the bridge to reconnect";
+"微信已退出；重新打开微信并重启机器人后再试" = "WeChat quit; reopen WeChat and restart the bot before trying again";
+"微信未运行，事件连接已断开" = "WeChat isn't running, so the event connection closed";
+"微信版本不在已知适配列表" = "This WeChat version is not in the supported list";
+"微信版本未适配" = "Unsupported WeChat version";
+"无法写入登录项：%@" = "Can't write the login item: %@";
+"无法设置登录时启动：%@ 不是有效的 App。" = "Can't enable launch at login: %@ is not a valid app.";
+"未检测到微信版本；请先确认微信路径并刷新状态" = "WeChat version not detected. Check the WeChat path and refresh the status.";
+"未检测到微信；请先确认微信路径" = "WeChat not detected. Check the WeChat path first.";
+"未设置路径" = "No path configured";
+"未适配" = "Unsupported";
+"机器人或 bridge 运行中退出时先确认" = "Confirm before quitting while the bot or bridge is running";
+"机器人正在运行。退出后将停止接收与自动回复，排队消息不会发送。" = "The bot is running. Quitting stops receiving and automatic replies, and queued messages will not be sent.";
+"检测到另一个微信" = "Another WeChat detected";
+"检测路径" = "Detected path";
+"正在检测微信，请稍候" = "Checking WeChat…";
+"正在检测登录项…" = "Checking the login item…";
+"版本未适配" = "Unsupported version";
+"登录后不会自动启动" = "Won't launch at login";
+"登录后自动启动；可在系统设置 → 通用 → 登录项中关闭" = "Launches at login; turn it off in System Settings → General → Login Items";
+"登录项已写入，但系统尚未启用。请到「系统设置 → 通用 → 登录项」允许 WeChat AI 在后台运行。" = "The login item was written but isn't enabled yet. Allow WeChat AI to run in the background in System Settings → General → Login Items.";
+"登录项指向旧位置" = "Login item points to an old location";
+"登录项指向旧位置；重新开启可修复" = "Login item points to an old location; turn it back on to fix it";
+"登录项由系统管理，可在「系统设置 → 通用 → 登录项」中关闭。" = "Login items are managed by macOS; turn this off in System Settings → General → Login Items.";
+"登录项设置失败" = "Login item update failed";
+"登录项设置失败：%@" = "Login item update failed: %@";
+"运行中的微信位于 %@，与设置路径不同；Hook 状态按运行中的微信检测。可在「设置 → Hook」应用检测路径。" = "The running WeChat is at %@, which differs from the configured path. Hook status follows the running WeChat; apply the detected path in Settings → Hook.";
+"退出 WeChat AI？" = "Quit WeChat AI?";
+"适配列表 %@" = "Supported: %@";
+
+
+
+"设置未能保存" = "Settings not saved";
+"%@。修改可能只在当前运行中生效，请检查磁盘空间与目录权限。" = "%@. Changes may only apply to the current session; check disk space and folder permissions.";
+"配置文件损坏" = "Configuration file corrupted";
+"以下配置无法解析：%@。App 已保留当前设置，不会把默认值写回；请修复原文件或从备份恢复后点「重新加载配置」。" = "Could not parse: %@. The app kept the current settings and won't write defaults back; fix the original file or restore a backup, then click Reload Configuration.";
+"全局配置（备份 %@）" = "global config (backup %@)";
+"当前账号配置（备份 %@）" = "current account config (backup %@)";
+"配置损坏，未应用降级结果；当前设置保持不变" = "The configuration is corrupted, so the fallback wasn't applied; current settings are unchanged.";
+"配置损坏，未应用降级结果：%@；当前设置保持不变" = "The configuration is corrupted, so the fallback wasn't applied: %@; current settings are unchanged.";
+"导出并隐藏 Token" = "Export without token";
+"导出（含 Token）" = "Export (include token)";
+"配置文件包含通道与 OneBot 连接信息；分享给他人时请隐藏 Token。" = "The file contains channels and OneBot connection details; hide the token before sharing.";
+"配置已导出（含 Token）" = "Configuration exported (with token)";
+"配置已导出（已隐藏 Token）" = "Configuration exported (token hidden)";
+"监听地址" = "Listen address";
+"端口无效" = "Invalid port";
+"Host 不能为空；bridge 需要监听地址。" = "Host can't be empty; the bridge needs a listen address.";
+"端口必须在 1–65535 之间，否则 bridge 无法启动。" = "The port must be between 1 and 65535, or the bridge can't start.";
+"当前 Host 为 %@，bridge 会监听非回环地址，同一局域网内可访问。请只在可信网络使用，并保留 Token 鉴权。" = "Host is %@, so the bridge listens on a non-loopback address reachable on the local network. Use it only on trusted networks and keep token auth enabled.";
+"默认仅监听 127.0.0.1；修改 Host 会改变监听范围。启动机器人后自动连接，Token 只保存在本机配置中。" = "Listens on 127.0.0.1 by default; changing Host widens the listen scope. The app connects after the bot starts, and the token stays in the local configuration.";
+"只清空内存与当前界面的日志缓冲；磁盘历史日志文件不受影响。" = "Only clears the in-memory and current view's log buffer; log files on disk are unaffected.";
+"停止请求未完成，请稍后重试" = "Stop request didn't finish; try again shortly";
+"启动未完成，请查看运行日志" = "Start didn't finish; check the runtime logs";
+"机器人正在启停，请稍候" = "The bot is starting or stopping; please wait";
+"OneBot 连接参数" = "OneBot connection settings";
+"已修改 %@；重启机器人后生效" = "Changed %@; restart the bot to apply";
+"配置文件损坏，已保留当前设置；原始文件已备份" = "Configuration is corrupted; current settings were kept and the original file was backed up";
+"正在安装或还原微信 Hook，请等待当前操作完成" = "WeChat Hook installation or restore is in progress; wait for it to finish";
+
+
+"通道名称已被使用，请换一个名称。" = "A channel with this name already exists; choose another name.";
+
+"已有同名定时任务，请换一个名称。" = "A schedule with this name already exists; choose another name.";
+"会话 ID 不能包含空格。" = "The conversation ID can't contain spaces.";
+"群聊会话 ID 应以 @chatroom 结尾。" = "A group conversation ID must end with @chatroom.";
+
+"未找到 AI 服务：%@" = "AI service not found: %@";
+"AI 服务「%@」缺少 API Key，请先配置" = "AI service “%@” has no API key; configure it first.";
+"AI 服务「%@」的 API Key 无法从钥匙串读取（OSStatus %d）。通常是 app 重新构建/重签后钥匙串授权失效：请在「钥匙串访问」删除 %@ 下的条目，再在「AI 模型」里重新填写 Key。" = "Can't read the API key for AI service “%@” from the keychain (OSStatus %d). This usually means the keychain authorization was invalidated after rebuilding or re-signing the app. Delete the entry under %@ in Keychain Access, then re-enter the key in AI Models.";
+"未找到会话：%@" = "Conversation not found: %@";
+"切换微信账号数据失败（%@），请查看日志或重启 App 后重试" = "Failed to switch WeChat account data (%@). Check the logs or restart the app and try again.";
+"正在切换微信账号数据，请稍候再启动机器人" = "WeChat account data is switching; wait before starting the bot.";
+"未找到微信账号 %@ 的图片临时目录；请先在微信里打开任意聊天图片，或在设置 → OneBot 中确认图片目录后重试" = "Couldn't find the image temp folder for WeChat account %@. Open any chat image in WeChat first, or check the image folder in Settings → OneBot and retry.";
+"启动未完成：运行时未就绪" = "Start didn't finish: the runtime isn't ready";
+
+"打开日志" = "Open logs";
+"机器人启动失败" = "Bot failed to start";
+"查看文字/语音/朋友圈发送句柄的捕获步骤" = "View how to capture send handles for text, voice, and Moments";
+"朋友圈功能或发布开关已关闭" = "Moments or publishing is turned off";
+"没有可用记忆卡内容" = "No memory card content is available";
+"生成的文案过短（%d 字）" = "Generated text is too short (%d characters)";
+"缺少可用 AI 通道" = "No usable AI channel";
+"AI 返回了空内容（%@）" = "AI returned an empty response (%@)";
+
+"安装或还原仍在进行，请等待当前操作完成；期间不要重复点击安装/还原。" = "Installation or restore is still running; wait for it to finish and don't start it again meanwhile.";
+"安装或还原在其它页面发起，仍在进行；完成后状态会自动刷新。" = "Installation or restore was started on another page and is still running; the status refreshes when it finishes.";
+"温度 %@" = "Temperature %@";
+"温度默认" = "Model default temperature";
+"%d tokens · 超时 %d 秒 · %@ · %@" = "%d tokens · timeout %d s · %@ · %@";
+"未开启时请求不发送 temperature，由模型使用自身默认值。范围 0–2：越低越稳定，越高越随机。" = "When off, no temperature is sent and the model uses its own default. Range 0–2: lower is more stable, higher is more random.";
+"新通道仅支持 DeepSeek 与自定义兼容；切换类型会自动填入默认地址与模型，不覆盖手改值。" = "New channels support DeepSeek and Custom only; switching types fills the default URL and model without overwriting manual edits.";
+"OpenAI / Ollama 为历史通道类型，不再新增；可继续编辑，或改为「自定义兼容」后填写兼容地址与模型。" = "OpenAI and Ollama are legacy channel types and can't be added anymore. You can keep editing them, or switch to Custom and enter a compatible URL and model.";
+"已启用通道 %@" = "Enabled channel %@";
+
+"添加一个 DeepSeek 或自定义兼容通道后，机器人才会生成回复。" = "Add a DeepSeek or Custom-compatible channel before the bot can generate replies.";
+"状态已刷新：%@" = "Status refreshed: %@";

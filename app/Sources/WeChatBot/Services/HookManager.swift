@@ -64,7 +64,7 @@ enum HookError: LocalizedError {
 
 // MARK: - WeChat inspection
 
-struct WeChatInstallation: Sendable {
+struct WeChatInstallation: Sendable, Equatable {
     var appURL: URL
     var exists: Bool = false
     var version: String = ""
@@ -83,12 +83,13 @@ struct WeChatInstallation: Sendable {
         let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
         if let data = try? Data(contentsOf: infoURL),
            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
-            installation.version = (plist["WeChatBundleVersion"] as? String)
-                ?? (plist["CFBundleShortVersionString"] as? String)
+            // WeChat 4.x 的 Info.plist 用 WeChatBundleVersion；部分构建只有 CFBundleShortVersionString。
+            // 个别旧包把版本号写成数字，统一转成字符串，避免界面出现 Optional(...)/数字格式差异。
+            installation.version = Self.stringValue(plist["WeChatBundleVersion"])
+                ?? Self.stringValue(plist["CFBundleShortVersionString"])
                 ?? ""
-            installation.build = String(describing: plist["CFBundleVersion"] ?? "")
-            if installation.build == "nil" { installation.build = "" }
-            let executableName = (plist["CFBundleExecutable"] as? String) ?? "WeChat"
+            installation.build = Self.stringValue(plist["CFBundleVersion"]) ?? ""
+            let executableName = Self.stringValue(plist["CFBundleExecutable"]) ?? "WeChat"
             installation.executable = appURL.appendingPathComponent("Contents/MacOS/\(executableName)")
         }
         if installation.executable == nil {
@@ -97,6 +98,32 @@ struct WeChatInstallation: Sendable {
         }
         installation.frameworkGadget = appURL.appendingPathComponent("Contents/Frameworks/FridaGadget.dylib")
         return installation
+    }
+
+    /// Info.plist 的标量值可能是 String/NSNumber/NSDate，统一成可展示字符串。
+    private static func stringValue(_ raw: Any?) -> String? {
+        switch raw {
+        case let value as String:
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        case let value as NSNumber:
+            return value.stringValue
+        case let value as Int:
+            return String(value)
+        default:
+            return nil
+        }
+    }
+
+    /// 版本号与 build 的组合展示，例如 `4.2.0.17 (270353)`。
+    var versionDisplay: String {
+        guard !version.isEmpty else { return "" }
+        return build.isEmpty ? version : "\(version) (\(build))"
+    }
+
+    /// 版本是否在仓库已知适配列表（版本或 build 命中即可，兼容缺少 build 的旧包）。
+    var isKnownVersion: Bool {
+        WeChatVersionSupport.isKnown(version: version, build: build)
     }
 
     /// Verifies both the gadget file and the `LC_LOAD_DYLIB` entry (via `otool -L`).
@@ -112,19 +139,6 @@ struct WeChatInstallation: Sendable {
     }
 }
 
-/// 支持 R3 原生发送（App 运行期配置）的微信版本。
-///
-/// 4.2.0.17 (270353) 与 4.2.0.x（4.2.0.12 / 270348、4.2.0.9 / 270345、4.2.0.5 / 270341）及
-/// 4.1.15.55 (270135) 共用同一 R3 发送链路；4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
-enum NativeSendVersionSupport {
-    static let versions: Set<String> = ["4.2.0.17", "4.2.0.12", "4.2.0.9", "4.2.0.5", "4.1.15.55"]
-    static let builds: Set<String> = ["270353", "270348", "270345", "270341", "270135"]
-
-    static func supports(version: String, build: String) -> Bool {
-        versions.contains(version) || builds.contains(build)
-    }
-}
-
 // MARK: - HookManager
 
 /// Owns WeChat/gadget detection, install/restore script execution and the bridge child process.
@@ -137,6 +151,10 @@ final class HookManager {
     private(set) var status = HookStatus()
     private(set) var lastKnownBackupPath: String?
     private var wechatPath: String
+    /// 用户在设置里显式指定的版本配置路径（空 = 自动匹配）。
+    /// 不能用 `status.versionConfigFile` 充当：startBridge 之后它可能指向
+    /// Application Support/runtime 下生成的合并配置，升级微信后会把旧版本文件误判为匹配。
+    private var configuredVersionConfigPath: String = ""
 
     private var bridgeProcess: Process?
     private var bridgeMonitorTask: Task<Void, Never>?
@@ -148,19 +166,136 @@ final class HookManager {
         self.wechatPath = wechatPath
     }
 
-    func configure(wechatPath: String) {
+    func configure(wechatPath: String, versionConfigPath: String? = nil) {
         self.wechatPath = wechatPath
+        if let versionConfigPath {
+            self.configuredVersionConfigPath = versionConfigPath
+        }
     }
 
     func currentStatus() -> HookStatus { status }
 
-    /// Reads WeChat's `Info.plist` metadata off the main actor. This is disk I/O that
-    /// used to run synchronously inside `refresh()`/`startBridge()` on the UI thread.
-    private func inspectInstallation() async -> WeChatInstallation {
-        let path = wechatPath
+    /// 解析设置路径 / 运行进程 / 系统安装位置，选出实际生效的微信。
+    ///
+    /// - 运行中的微信优先：用户可能从其它目录打开了一个未注入的副本，此时按真实进程判断状态；
+    /// - 设置路径无效时回退到 LaunchServices / 常见安装位置，避免只因为路径写错就显示「未安装」；
+    /// - Info.plist 读取在后台线程完成，主线程只取运行进程快照（NSWorkspace 很轻量）。
+    private func detectInstallation() async -> WeChatRuntimeDetection {
+        let configuredPath = wechatPath
+        let running = Self.runningWeChatApps()
+        let installedPaths = Self.discoveredWeChatPaths()
         return await Task.detached(priority: .utility) {
-            WeChatInstallation.inspect(path: path)
+            WeChatAppDetector.resolve(
+                configuredPath: configuredPath,
+                runningApps: running,
+                installedPaths: installedPaths
+            )
         }.value
+    }
+
+    // MARK: Live monitoring
+
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var pendingRefreshTask: Task<Void, Never>?
+
+    /// 监听微信启动/退出与系统唤醒，让侧边栏、总览和菜单栏的运行状态实时变化，
+    /// 不再要求用户手动点「刷新状态」。本方法幂等。
+    func startMonitoring() {
+        guard workspaceObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didWakeNotification,
+        ] {
+            workspaceObservers.append(center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                // 观察者注册在主队列，闭包内同步读取 MainActor 状态需要显式声明隔离。
+                MainActor.assumeIsolated {
+                    self?.workspaceDidChange(notification)
+                }
+            })
+        }
+    }
+
+    func stopMonitoring() {
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = nil
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
+    }
+
+    private func workspaceDidChange(_ notification: Notification) {
+        if notification.name == NSWorkspace.didWakeNotification {
+            // 唤醒后进程/连接可能已变化；延迟完整检测，避开唤醒瞬间的系统繁忙期。
+            scheduleRefresh(full: true, delay: .milliseconds(1_500))
+            return
+        }
+        guard notification.name == NSWorkspace.didLaunchApplicationNotification
+                || notification.name == NSWorkspace.didTerminateApplicationNotification,
+              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              WeChatAppMatcher.matches(RunningWeChatApp(app), configuredPath: wechatPath)
+        else { return }
+
+        if notification.name == NSWorkspace.didTerminateApplicationNotification {
+            scheduleRefresh(full: false, delay: .milliseconds(250))
+        } else {
+            // 启动时 App 包路径/版本可能变化：做一次完整检测（含版本文件与 Gadget 校验）。
+            scheduleRefresh(full: true, delay: .milliseconds(800))
+        }
+    }
+
+    private func scheduleRefresh(full: Bool, delay: Duration) {
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            if full {
+                _ = await self.refresh()
+            } else {
+                await self.refreshProcessState()
+            }
+        }
+    }
+
+    /// 轻量状态同步：只检查微信进程是否在运行，不读 Info.plist、不跑 otool/manage 脚本。
+    /// 用于微信退出/被强杀等高频事件。
+    func refreshProcessState() async {
+        let running = Self.isWeChatRunning(configuredPath: wechatPath)
+        guard running != status.wechatRunning else { return }
+        var updated = status
+        updated.wechatRunning = running
+        if running {
+            updated.detail = ""
+            if updated.bridgeRunning {
+                updated.state = updated.gatewayConnected ? .connected : .bridgeStarting
+                if !updated.gatewayConnected {
+                    updated.detail = "微信已启动，等待 bridge 重连"
+                }
+            } else if updated.gadgetInstalled {
+                updated.state = .installed
+            } else {
+                updated.state = .notInstalled
+            }
+            onLog?(.info, "检测到微信已启动")
+        } else {
+            updated.gatewayConnected = false
+            if updated.gadgetInstalled {
+                updated.state = .wechatNotRunning
+                updated.detail = "微信已退出；重新打开微信并重启机器人后再试"
+            } else {
+                updated.state = .notInstalled
+                updated.detail = "微信未运行"
+            }
+            onLog?(.warning, "检测到微信已退出")
+        }
+        publish(updated)
     }
 
     // MARK: Detection
@@ -168,11 +303,14 @@ final class HookManager {
     @discardableResult
     func refresh() async -> HookStatus {
         let commandLineTools = await CommandLineTools.status()
-        let installation = await inspectInstallation()
+        let detection = await detectInstallation()
+        let installation = detection.effective
         var updated = status
         updated.wechatVersion = installation.version
         updated.wechatBuild = installation.build
-        updated.wechatRunning = Self.isWeChatRunning()
+        updated.wechatRunning = detection.isRunning
+        updated.wechatDetectedPath = detection.effectivePath
+        updated.wechatVersionKnown = installation.isKnownVersion
 
         // CLT 缺失时 /usr/bin/otool、/usr/bin/python3 只是 xcode-select 的 shim：
         // 直接执行会触发系统安装弹窗，且 manage_wechat.sh status 也会透传失败。
@@ -184,17 +322,21 @@ final class HookManager {
             }
             updated.gadgetInstalled = gadgetInstalled
         }
+        // CLT 缺失时无法用 otool 校验，保留上一次已知的 gadget 状态，
+        // 避免把「无法检测」显示成「未安装」。状态本身已由下方 CLT 分支标为异常。
 
         let versionConfig = AppResources.versionConfig(
             version: installation.version,
-            explicitPath: status.versionConfigFile
+            explicitPath: configuredVersionConfigPath
         )
         updated.versionConfigFile = versionConfig?.path
             ?? AppResources.expectedVersionConfigPath(version: installation.version)
         updated.matchedVersion = versionConfig != nil
 
         // Optional: merge richer state from manage_wechat.sh (signature, backup path).
-        if commandLineTools.isReady, let scriptStatus = await runManageStatus() {
+        // 必须对「实际生效的微信」执行，否则设置路径失效时会误报未安装。
+        if commandLineTools.isReady,
+           let scriptStatus = await runManageStatus(appPath: detection.effectivePath) {
             lastKnownBackupPath = scriptStatus.backupPath
             if scriptStatus.gadgetInstalled { updated.gadgetInstalled = true }
             if updated.wechatVersion.isEmpty { updated.wechatVersion = scriptStatus.version }
@@ -203,13 +345,19 @@ final class HookManager {
                 updated.versionConfigFile = scriptStatus.versionConfigFile!
             }
         }
+        // 脚本可能补回版本信息；在状态判定前重新计算已知性。
+        updated.wechatVersionKnown = !updated.wechatVersion.isEmpty
+            && WeChatVersionSupport.isKnown(
+                version: updated.wechatVersion,
+                build: updated.wechatBuild
+            )
 
         if !commandLineTools.isReady {
             updated.state = .failed
             updated.detail = "需要安装 Xcode Command Line Tools 才能检测 Hook"
         } else if !installation.exists {
             updated.state = .notInstalled
-            updated.detail = "未找到微信：\(installation.appURL.path)"
+            updated.detail = "未找到微信：\(wechatPath)"
         } else if !updated.gadgetInstalled {
             updated.state = .notInstalled
             updated.detail = "尚未安装 Frida Gadget"
@@ -231,9 +379,35 @@ final class HookManager {
         }
         if commandLineTools.isReady, !updated.matchedVersion, installation.exists, updated.gadgetInstalled {
             updated.detail = "Hook 版本文件未就绪：\(updated.versionConfigFile)"
+        } else if !updated.wechatVersionKnown, !updated.wechatVersion.isEmpty, updated.detail.isEmpty {
+            // 版本/build 已在上方字段展示；detail 只给结论，避免版本号重复。
+            updated.detail = "微信版本不在已知适配列表"
         }
         publish(updated)
         return updated
+    }
+
+    /// 用 bridge 的 /voice_status 响应中的 textSeed 校准 R3 文本句柄状态。
+    ///
+    /// 日志行可能因为 bridge 重启、输出截断或行格式变化而漏掉；HTTP 状态是 hook 的
+    /// 实时快照，能避免「句柄已捕获但界面仍显示等待」。只在能确认 textSeed 为 true
+    /// 时标记就绪；变为 false 时仅修正已 active 的状态，避免旧 bridge 缺字段造成误清零。
+    func syncR3SeedFromBridge(textSeed: Bool) {
+        guard status.bridgeRunning else { return }
+        var updated = status
+        if textSeed {
+            updated.r3Active = true
+            updated.r3Seeded = true
+            updated.r3Queued = 0
+            updated.detail = "R3 发送句柄已就绪"
+        } else {
+            guard updated.r3Active, updated.r3Seeded else { return }
+            updated.r3Seeded = false
+        }
+        if updated != status {
+            publish(updated)
+            onLog?(.info, textSeed ? "R3 发送句柄已就绪（bridge 状态同步）" : "R3 发送句柄状态已失效（bridge 状态同步）")
+        }
     }
 
     /// Called by the runtime when the OneBot WebSocket connects/disconnects.
@@ -243,10 +417,13 @@ final class HookManager {
         if connected {
             updated.state = .connected
             updated.detail = detail ?? "已连接微信"
+        } else if !updated.wechatRunning {
+            updated.state = updated.gadgetInstalled ? .wechatNotRunning : .notInstalled
+            updated.detail = detail ?? "微信未运行，事件连接已断开"
         } else if updated.bridgeRunning {
             updated.state = .bridgeStarting
             updated.detail = detail ?? "事件连接已断开，bridge 仍在运行"
-        } else if updated.gadgetInstalled && updated.wechatRunning {
+        } else if updated.gadgetInstalled {
             updated.state = .installed
             updated.detail = detail ?? "事件连接已断开"
         }
@@ -258,12 +435,23 @@ final class HookManager {
         onStatusChange?(newStatus)
     }
 
-    static func isWeChatRunning() -> Bool {
-        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.tencent.xinWeChat").isEmpty {
-            return true
-        }
-        return NSWorkspace.shared.runningApplications.contains {
-            $0.localizedName == "WeChat" || $0.executableURL?.lastPathComponent == "WeChat"
+    /// 运行中的微信进程（按 bundle id / 设置路径 / 名称与可执行文件匹配）。
+    @MainActor
+    static func runningWeChatApps() -> [RunningWeChatApp] {
+        NSWorkspace.shared.runningApplications
+            .map(RunningWeChatApp.init)
+            .filter { WeChatAppMatcher.matches($0, configuredPath: "") }
+    }
+
+    @MainActor
+    static func discoveredWeChatPaths() -> [String] {
+        WeChatAppMatcher.discoveredAppPaths()
+    }
+
+    /// 兼容旧调用：不传路径时按 bundle id / 名称判断任意微信进程。
+    static func isWeChatRunning(configuredPath: String = "") -> Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            WeChatAppMatcher.matches(RunningWeChatApp($0), configuredPath: configuredPath)
         }
     }
 
@@ -288,9 +476,12 @@ final class HookManager {
         guard let script = AppResources.installScript else { throw HookError.installScriptMissing }
         guard let bridgeRoot = AppResources.root else { throw HookError.resourcesMissing }
 
-        let installation = await inspectInstallation()
-        guard installation.exists else { throw HookError.weChatNotInstalled(wechatPath) }
-        guard !Self.isWeChatRunning() else { throw HookError.weChatRunning }
+        let detection = await detectInstallation()
+        let installation = detection.effective
+        guard installation.exists else { throw HookError.weChatNotInstalled(detection.effectivePath) }
+        guard !Self.isWeChatRunning(configuredPath: installation.appURL.path) else {
+            throw HookError.weChatRunning
+        }
         guard let gadget = AppResources.gadgetDylib, let gadgetConfig = AppResources.gadgetConfig else {
             throw HookError.gadgetPayloadMissing
         }
@@ -310,6 +501,8 @@ final class HookManager {
         updated.wechatVersion = installation.version
         updated.wechatBuild = installation.build
         updated.wechatRunning = false
+        updated.wechatDetectedPath = installation.appURL.path
+        updated.wechatVersionKnown = installation.isKnownVersion
         updated.versionConfigFile = versionConfig.path
         updated.matchedVersion = true
         updated.state = .bridgeStarting
@@ -319,7 +512,8 @@ final class HookManager {
         try FileManager.default.createDirectory(at: AppPaths.backupsDirectory, withIntermediateDirectories: true)
         let arguments = [
             script.path,
-            "--wechat-path", wechatPath,
+            // 使用实际检测到的 App 路径：设置路径失效/微信装在其它目录时仍能正确安装。
+            "--wechat-path", installation.appURL.path,
             "--gadget", gadget.path,
             "--config", gadgetConfig.path,
             "--backup-dir", AppPaths.backupsDirectory.path,
@@ -386,14 +580,17 @@ final class HookManager {
             throw HookError.commandFailed("缺少 tools/manage_wechat.sh")
         }
         guard AppResources.root != nil else { throw HookError.resourcesMissing }
-        let installation = await inspectInstallation()
-        guard installation.exists else { throw HookError.weChatNotInstalled(wechatPath) }
-        guard !Self.isWeChatRunning() else { throw HookError.weChatRunning }
+        let detection = await detectInstallation()
+        let installation = detection.effective
+        guard installation.exists else { throw HookError.weChatNotInstalled(detection.effectivePath) }
+        guard !Self.isWeChatRunning(configuredPath: installation.appURL.path) else {
+            throw HookError.weChatRunning
+        }
 
         onLog?(.info, "开始从官方备份恢复微信…")
         let handle = ProcessRunner.launch(
             executable: URL(fileURLWithPath: "/bin/bash"),
-            arguments: [script.path, "restore", "--app", wechatPath,
+            arguments: [script.path, "restore", "--app", installation.appURL.path,
                         "--backup-dir", AppPaths.backupsDirectory.path],
             currentDirectory: AppResources.root
         )
@@ -461,9 +658,12 @@ final class HookManager {
         guard let bridgeDirectory = AppResources.bridgeDirectory else { throw HookError.bridgeDirectoryMissing }
         guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw HookError.missingToken }
 
-        let installation = await inspectInstallation()
-        guard installation.exists else { throw HookError.weChatNotInstalled(wechatPath) }
-        guard Self.isWeChatRunning() else { throw HookError.weChatNotRunning }
+        let detection = await detectInstallation()
+        let installation = detection.effective
+        guard installation.exists else { throw HookError.weChatNotInstalled(detection.effectivePath) }
+        guard Self.isWeChatRunning(configuredPath: installation.appURL.path) else {
+            throw HookError.weChatNotRunning
+        }
         guard await CommandLineTools.status().isReady else {
             var updated = status
             updated.state = .failed
@@ -550,6 +750,11 @@ final class HookManager {
         updated.detail = "bridge 启动中…"
         updated.versionConfigFile = versionConfig.path
         updated.matchedVersion = true
+        updated.wechatVersion = installation.version
+        updated.wechatBuild = installation.build
+        updated.wechatVersionKnown = installation.isKnownVersion
+        updated.wechatRunning = true
+        updated.wechatDetectedPath = installation.appURL.path
         publish(updated)
         onLog?(.info, "bridge 启动：PID \(updated.bridgePID)，WS \(host):\(port)，配置 \(versionConfig.lastPathComponent)")
 
@@ -607,6 +812,7 @@ final class HookManager {
     }
 
     func shutdown() {
+        stopMonitoring()
         stopBridge()
     }
 
@@ -614,7 +820,7 @@ final class HookManager {
 
     /// Small value describing the status change a bridge log line implies.
     /// Built off the main actor, applied on it — keeps per-line work off the UI thread.
-    private struct BridgeLineEffect: Sendable {
+    struct BridgeLineEffect: Sendable {
         enum DetailUpdate: Sendable {
             case set(String)
             case setIfEmpty(String)
@@ -642,7 +848,7 @@ final class HookManager {
         return kind == .stderr ? .warning : .debug
     }
 
-    nonisolated private static func bridgeLineEffect(_ line: String) -> BridgeLineEffect? {
+    nonisolated static func bridgeLineEffect(_ line: String) -> BridgeLineEffect? {
         var effect = BridgeLineEffect()
         if line.contains("HTTP 服务启动在") || line.contains("HTTP 服务") {
             effect.detail = .set("bridge HTTP 已启动，等待事件连接")
@@ -676,7 +882,16 @@ final class HookManager {
             effect.r3Seeded = false
             effect.detail = .set("R3 等待信号：微信重启后请在本机微信手动发一条消息")
         }
-        if line.contains("R3: slot13 捕获 newsendmsg 闭包") || line.contains("R3: 捕获 newsendmsg 闭包") {
+        // 实际 hook/bridge 日志格式（2026-11-12 复盘）：
+        //   [capture] slot13 newsendmsg 闭包 0x… -> clone 0x…
+        //   R3 发送句柄已持久化 pid=… seed=…
+        //   [+] R3: 发送句柄已提交持久化 (seed=…)
+        // 旧匹配只认「R3: 捕获 newsendmsg 闭包」，导致句柄已就绪但界面一直等待。
+        if line.contains("R3: slot13 捕获 newsendmsg 闭包")
+            || line.contains("R3: 捕获 newsendmsg 闭包")
+            || line.contains("slot13 newsendmsg 闭包")
+            || line.contains("R3 发送句柄已持久化")
+            || line.contains("R3: 发送句柄已提交持久化") {
             effect.r3Active = true
             effect.r3Seeded = true
             effect.r3Queued = 0
@@ -743,11 +958,13 @@ final class HookManager {
         var versionConfigFile: String?
     }
 
-    private func runManageStatus() async -> ScriptStatus? {
+    private func runManageStatus(appPath: String) async -> ScriptStatus? {
         guard let script = AppResources.manageScript, let root = AppResources.root else { return nil }
+        // 只对实际存在/运行中的微信执行；路径不存在时脚本会返回非 0，调用方保留上方检测结果。
+        let target = appPath.isEmpty ? wechatPath : appPath
         guard let result = try? await ProcessRunner.run(
             executable: URL(fileURLWithPath: "/bin/bash"),
-            arguments: [script.path, "status", "--app", wechatPath,
+            arguments: [script.path, "status", "--app", target,
                         "--backup-dir", AppPaths.backupsDirectory.path],
             currentDirectory: root
         ), result.status == 0 else { return nil }
@@ -759,6 +976,7 @@ final class HookManager {
         parsed.build = object["build"] as? String ?? ""
         parsed.gadgetInstalled = object["gadgetInstalled"] as? Bool ?? false
         parsed.backupPath = object["backupPath"] as? String
+        parsed.versionConfigFile = object["versionConfigFile"] as? String
         return parsed
     }
 

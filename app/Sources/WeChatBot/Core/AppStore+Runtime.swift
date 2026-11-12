@@ -13,25 +13,38 @@ enum RuntimeError: LocalizedError {
     case accountSwitchFailed(String)
     case accountSwitching
     case accountImagePathUnavailable(String)
+    case hookOperationInProgress
 
     var errorDescription: String? {
         switch self {
-        case .providerNotFound(let id): return "未找到 AI 服务：\(id)"
-        case .noProvider: return "尚未配置 AI 服务，请先在「AI 模型」中添加"
-        case .providerNotConfigured(let name): return "AI 服务「\(name)」缺少 API Key，请先配置"
+        case .providerNotFound(let id):
+            return Lf("未找到 AI 服务：%@", id)
+        case .noProvider:
+            return L("尚未配置 AI 服务，请先在「AI 模型」中添加")
+        case .providerNotConfigured(let name):
+            return Lf("AI 服务「%@」缺少 API Key，请先配置", name)
         case .providerCredentialUnreadable(let name, let status):
-            return "AI 服务「\(name)」的 API Key 无法从钥匙串读取（OSStatus \(status)）。"
-                + "通常是 app 重新构建/重签后钥匙串授权失效：请在「钥匙串访问」删除 "
-                + "\(AppPaths.bundleID) 下的条目，再在「AI 模型」里重新填写 Key。"
-        case .conversationNotFound(let id): return "未找到会话：\(id)"
-        case .notRunning: return "机器人未运行"
+            return Lf(
+                "AI 服务「%@」的 API Key 无法从钥匙串读取（OSStatus %d）。通常是 app 重新构建/重签后钥匙串授权失效：请在「钥匙串访问」删除 %@ 下的条目，再在「AI 模型」里重新填写 Key。",
+                name,
+                status,
+                AppPaths.bundleID
+            )
+        case .conversationNotFound(let id):
+            return Lf("未找到会话：%@", id)
+        case .notRunning:
+            return L("机器人未运行")
         case .accountSwitchFailed(let masked):
-            return "切换微信账号数据失败（\(masked)），请查看日志或重启 App 后重试"
+            return Lf("切换微信账号数据失败（%@），请查看日志或重启 App 后重试", masked)
         case .accountSwitching:
-            return "正在切换微信账号数据，请稍候再启动机器人"
+            return L("正在切换微信账号数据，请稍候再启动机器人")
         case .accountImagePathUnavailable(let masked):
-            return "未找到微信账号 \(masked) 的图片临时目录；请先在微信里打开任意聊天图片，"
-                + "或在设置 → OneBot 中确认图片目录后重试"
+            return Lf(
+                "未找到微信账号 %@ 的图片临时目录；请先在微信里打开任意聊天图片，或在设置 → OneBot 中确认图片目录后重试",
+                masked
+            )
+        case .hookOperationInProgress:
+            return L("正在安装或还原微信 Hook，请等待当前操作完成")
         }
     }
 }
@@ -141,6 +154,8 @@ final class RuntimeCoordinator {
     private var captureSetupWatchTask: Task<Void, Never>?
     /// 捕获检测任务是否仍在等待：避免 OneBot 连接回调重复启动多个 watch。
     private var captureSetupWatchRunning = false
+    /// 用户手动发消息后，短轮询 /voice_status 校准 R3 文本句柄（日志漏读时兜底）。
+    private var r3SeedSyncTask: Task<Void, Never>?
     /// 本次运行是否由 App 下发了 R3 原生发送配置；bridge 未就绪时用于判断是否值得等待文字句柄。
     private var nativeSendConfiguredForRun = false
     private var memoryMaintenanceInFlight: Set<String> = []
@@ -199,6 +214,8 @@ final class RuntimeCoordinator {
     /// 先记到 `pendingAccountSwitch`，等启动收尾后再切换。
     private var runtimeStarting = false
     private var pendingAccountSwitch: String?
+    /// 启动 bridge 时的 Hook 启动参数快照，用于判断修改后是否需要重启机器人。
+    private var startedHookRuntimeConfig: (gadgetPort: Int, autoStartBridge: Bool, enableNativeSend: Bool)?
     /// 账号数据代次：每次真正开始切号 +1。回复流水线在关键 await 之后比对代次，
     /// 避免切库前发起的生成/发送把消息或统计写进新账号的库（跨账号污染）。
     private var accountEpoch: UInt64 = 0
@@ -230,6 +247,8 @@ final class RuntimeCoordinator {
         hookManager.onLog = { [weak self] level, message in
             self?.log(level, "Hook", message)
         }
+        // 微信启动/退出/系统唤醒时实时同步运行状态（轮询只做轻量进程检查）。
+        hookManager.startMonitoring()
         chatEngine.onLog = { [weak self] level, message in
             Task { @MainActor [weak self] in
                 self?.log(level, "ChatEngine", message)
@@ -419,16 +438,16 @@ final class RuntimeCoordinator {
             }
             changed = true
         }
-        // v1.3: 温度改为按模型配置；把旧版按通道的温度一次性迁移到模型表。
-        if store.settings.ai.modelTemperatures == nil {
-            var seeded: [String: Double] = [:]
-            for provider in store.providers {
-                let model = AIClient.effectiveModel(for: provider)
-                guard !model.isEmpty, seeded[model] == nil else { continue }
-                seeded[model] = min(max(provider.temperature, 0), 2)
+        // v1.4: 温度改为按通道配置；把旧的「按模型温度」表（或更早的按通道温度）
+        // 一次性迁移到 provider.temperatureOverride。旧默认 0.7 视为未自定义。
+        do {
+            var ai = store.settings.ai
+            var providers = store.providers
+            if AISettings.migrateTemperaturesToChannels(&ai, providers: &providers) {
+                store.settings.ai = ai
+                store.providers = providers
+                changed = true
             }
-            store.settings.ai.modelTemperatures = seeded
-            changed = true
         }
         // v1.2: 群聊触发方式支持多选；旧版单选字段迁移为数组。
         if store.settings.bot.groupTriggers == nil {
@@ -458,7 +477,9 @@ final class RuntimeCoordinator {
         }
         store.settings.providers = store.providers
         store.settings.personas = store.personas
-        if changed || !FileManager.default.fileExists(atPath: AppPaths.configFile.path) {
+        // 启动时配置已损坏：只补齐内存默认值，不把降级结果写回磁盘，保留原文件与备份供修复。
+        if (changed || !FileManager.default.fileExists(atPath: AppPaths.configFile.path)),
+           store.lastLoadDiagnostics == nil {
             store.persist()
         }
     }
@@ -771,8 +792,24 @@ final class RuntimeCoordinator {
 
     // MARK: Status
 
+    /// 仅同步微信进程状态（微信启动/退出、系统唤醒、App 重新激活时调用）。
+    /// 不读写 Info.plist、不执行 otool/manage 脚本，避免状态刷新影响 UI。
+    func refreshWeChatProcessState() async {
+        hookManager.configure(
+            wechatPath: store.settings.hook.wechatPath,
+            versionConfigPath: store.settings.hook.versionConfigPath
+        )
+        await hookManager.refreshProcessState()
+        if store.hookStatus != hookManager.currentStatus() {
+            store.hookStatus = hookManager.currentStatus()
+        }
+    }
+
     func refreshStatus() async {
-        hookManager.configure(wechatPath: store.settings.hook.wechatPath)
+        hookManager.configure(
+            wechatPath: store.settings.hook.wechatPath,
+            versionConfigPath: store.settings.hook.versionConfigPath
+        )
         let status = await hookManager.refresh()
         // Guard every assignment: re-assigning an equal value still invalidates
         // `@Observable` readers (Dashboard/Settings) and causes needless layout.
@@ -795,7 +832,12 @@ final class RuntimeCoordinator {
            store.settings.hook.versionConfigPath != status.versionConfigFile {
             store.settings.hook.versionConfigPath = status.versionConfigFile
         }
-        log(.debug, "Hook", "状态 \(status.state.label)：\(status.detail)")
+        // 手动刷新 Hook 状态时顺带查询 bridge 的实时 textSeed：
+        // 日志漏读后用户点刷新即可恢复「R3 发送句柄已就绪」，不必等下一次手动发消息。
+        if status.bridgeRunning, oneBotClient != nil {
+            await refreshVoiceStatus()
+        }
+        log(.debug, "Hook", "状态 \(store.hookStatus.state.label)：\(store.hookStatus.detail)")
     }
 
     // MARK: System vitals (battery + DeepSeek balance)
@@ -918,7 +960,13 @@ final class RuntimeCoordinator {
             return
         }
         do {
-            store.voiceRuntimeStatus = try await client.fetchVoiceStatus()
+            let status = try await client.fetchVoiceStatus()
+            store.voiceRuntimeStatus = status
+            // /voice_status 的 hook.textSeed 是 R3 文本句柄的权威实时状态；
+            // 日志行可能漏读，这里同步回 HookStatus，避免界面一直显示「等待信号」。
+            if status.available {
+                hookManager.syncR3SeedFromBridge(textSeed: status.textSeed)
+            }
         } catch {
             var unavailable = VoiceRuntimeStatus.unavailable
             unavailable.error = error.localizedDescription
@@ -1039,6 +1087,28 @@ final class RuntimeCoordinator {
         guard !Task.isCancelled, isRuntimeRunning() else { return .done }
         presentCaptureSetupPrompt(reason: reasons.isEmpty ? "捕获样本缺失" : reasons.joined(separator: "、"))
         return .done
+    }
+
+    /// 自消息后短轮询 bridge 的 /voice_status，校准 R3 文本句柄。
+    ///
+    /// 只在「尚未 seeded + 开启 R3 + bridge 运行」时执行；捕获需要几秒，分三次探测，
+    /// 成功后立即停止。正常日志匹配会先一步更新，这里只是漏读兜底。
+    private func scheduleR3SeedSyncIfNeeded() {
+        guard !store.hookStatus.r3Seeded,
+              store.settings.hook.enableNativeSend,
+              store.hookStatus.bridgeRunning,
+              oneBotClient != nil
+        else { return }
+        r3SeedSyncTask?.cancel()
+        r3SeedSyncTask = Task { [weak self] in
+            guard let self else { return }
+            for delay in [Duration.milliseconds(1_500), .seconds(5), .seconds(10)] {
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+                await self.refreshVoiceStatus()
+                if self.store.hookStatus.r3Seeded { return }
+            }
+        }
     }
 
     /// 弹出统一捕获弹窗；同一次机器人运行内只提示一次。
@@ -1193,6 +1263,11 @@ final class RuntimeCoordinator {
             ? Self.snsRuntimeSignature(store.settings)
             : nil
         store.snsBridgeConfigStale = false
+        startedHookRuntimeConfig = (
+            gadgetPort: store.settings.hook.gadgetPort,
+            autoStartBridge: store.settings.hook.autoStartBridge,
+            enableNativeSend: store.settings.hook.enableNativeSend
+        )
 
         let configuration = OneBotClient.Configuration(
             host: store.settings.onebot.host,
@@ -1739,7 +1814,8 @@ final class RuntimeCoordinator {
             let result = try await aiClient.complete(
                 messages: messages,
                 provider: requestProvider,
-                temperature: 0.85,
+                // 通道显式温度优先；未配置时保留朋友圈互动原有的创意默认值。
+                temperature: requestProvider.requestTemperature ?? 0.85,
                 forceStream: false,
                 thinking: VisionSupport.thinkingMode(for: requestProvider)
             )
@@ -2039,7 +2115,8 @@ final class RuntimeCoordinator {
                 let result = try await aiClient.complete(
                     messages: [.system(systemPrompt), .user(userPrompt)],
                     provider: requestProvider,
-                    temperature: 0.8,
+                    // 通道显式温度优先；未配置时保留自动发布原有的创意默认值。
+                    temperature: requestProvider.requestTemperature ?? 0.8,
                     forceStream: false,
                     thinking: thinking
                 )
@@ -2098,6 +2175,8 @@ final class RuntimeCoordinator {
         captureSetupWatchTask?.cancel()
         captureSetupWatchTask = nil
         captureSetupWatchRunning = false
+        r3SeedSyncTask?.cancel()
+        r3SeedSyncTask = nil
         oneBotClient?.stop()
         oneBotClient = nil
         startedOneBotConfiguration = nil
@@ -2129,6 +2208,8 @@ final class RuntimeCoordinator {
         if store.settings.hook.autoStartBridge {
             hookManager.stopBridge()
         }
+        startedHookRuntimeConfig = nil
+        store.oneBotRestartNotice = nil
         // 停止机器人后不再需要防睡眠（偏好保留，下次启动机器人时恢复）。
         SleepPreventionCenter.shared.setRuntimeActive(false)
         log(.info, "Bot", "机器人运行时已停止")
@@ -2341,6 +2422,8 @@ final class RuntimeCoordinator {
         captureSetupWatchTask?.cancel()
         captureSetupWatchTask = nil
         captureSetupWatchRunning = false
+        r3SeedSyncTask?.cancel()
+        r3SeedSyncTask = nil
         inFlightConversations.removeAll()
         visionAttempted.removeAll()
         pendingImageFetchIDs.removeAll()
@@ -2561,6 +2644,12 @@ final class RuntimeCoordinator {
 
         let preview = chatMessage.text.isEmpty ? "[\(chatMessage.kind.rawValue)]" : String(chatMessage.text.prefix(80))
         log(.debug, "Bot", "\(event.isSelf ? "发出" : "收到") \(conversation.kind.label)消息（\(conversation.displayTitle)）：\(preview)")
+
+        // 用户在微信里手动发消息会触发 R3 句柄捕获；日志行可能因 bridge 重启/截断漏读，
+        // 这里在自消息后短轮询 /voice_status，确保界面及时从「等待信号」切到「已就绪」。
+        if event.isSelf {
+            scheduleR3SeedSyncIfNeeded()
+        }
 
         // 历史回放会把很旧的消息重新投递（例如打开聊天时加载历史）。
         // 这些消息仍入库供检索，但既不应触发「现在」的自动回复，也不应把
@@ -4537,7 +4626,10 @@ final class RuntimeCoordinator {
     /// Called by `AppStore.persist()` after UI mutations.
     func settingsDidChange() {
         guard bootstrapped || bootstrapping else { return }
-        hookManager.configure(wechatPath: store.settings.hook.wechatPath)
+        hookManager.configure(
+            wechatPath: store.settings.hook.wechatPath,
+            versionConfigPath: store.settings.hook.versionConfigPath
+        )
         // 本地语音引擎设置变更后把服务地址同步给客户端（引擎切换由设置页负责停/启服务）。
         let voice = store.settings.bot.voiceSettings
         Task { @MainActor [weak self] in
@@ -4565,13 +4657,37 @@ final class RuntimeCoordinator {
                     await self.scheduler.update(tasks: self.store.schedules)
                 }
             }
+            var changed: [String] = []
             if let started = startedOneBotConfiguration {
                 if started.host != store.settings.onebot.host
                     || started.port != store.settings.onebot.port
                     || started.token != store.settings.onebot.token {
+                    changed.append(L("OneBot 连接参数"))
                     log(.warning, "OneBot", "连接配置已修改，重启机器人后生效")
                 }
             }
+            if let started = startedHookRuntimeConfig {
+                if started.gadgetPort != store.settings.hook.gadgetPort {
+                    changed.append(L("Gadget 端口"))
+                }
+                if started.autoStartBridge != store.settings.hook.autoStartBridge {
+                    changed.append(L("自动启动 bridge"))
+                }
+                if started.enableNativeSend != store.settings.hook.enableNativeSend {
+                    changed.append(L("R3 原生发送"))
+                }
+            }
+            let notice = changed.isEmpty
+                ? nil
+                : Lf(
+                    "已修改 %@；重启机器人后生效",
+                    changed.joined(separator: L10n.listSeparator)
+                )
+            if store.oneBotRestartNotice != notice {
+                store.oneBotRestartNotice = notice
+            }
+        } else if store.oneBotRestartNotice != nil {
+            store.oneBotRestartNotice = nil
         }
 
         // 朋友圈：自动发布调度器按签名重建；bridge 侧开关改动标记「重启后生效」。
@@ -4618,11 +4734,10 @@ final class RuntimeCoordinator {
     func testProvider(_ provider: AIProvider) async -> Result<String, Error> {
         await bootstrapIfNeeded()
         do {
-            let model = AIClient.effectiveModel(for: provider)
             let result = try await aiClient.complete(
                 messages: [.user("这是一次连接测试，请只回复：pong")],
                 provider: provider,
-                temperature: store.settings.ai.temperature(forModel: model),
+                temperature: provider.requestTemperature,
                 forceStream: false
             )
             let summary = "\(result.model) · \(Int(result.latencyMs)) ms · \(result.usage.totalTokens) tokens"
@@ -4636,7 +4751,10 @@ final class RuntimeCoordinator {
 
     func installHook(onProgress: ((Double, String) -> Void)?) async throws -> HookStatus {
         await bootstrapIfNeeded()
-        hookManager.configure(wechatPath: store.settings.hook.wechatPath)
+        hookManager.configure(
+            wechatPath: store.settings.hook.wechatPath,
+            versionConfigPath: store.settings.hook.versionConfigPath
+        )
         let status = try await hookManager.installGadget(
             explicitVersionConfigPath: store.settings.hook.versionConfigPath,
             onProgress: onProgress
@@ -4657,7 +4775,10 @@ final class RuntimeCoordinator {
 
     func restoreBackup() async throws -> HookStatus {
         await bootstrapIfNeeded()
-        hookManager.configure(wechatPath: store.settings.hook.wechatPath)
+        hookManager.configure(
+            wechatPath: store.settings.hook.wechatPath,
+            versionConfigPath: store.settings.hook.versionConfigPath
+        )
         let status = try await hookManager.restoreBackup()
         store.hookStatus = status
         store.settings.hook.didInstallGadget = status.gadgetInstalled
@@ -5557,11 +5678,13 @@ extension AppStore {
     func startBot() async {
         guard !isSwitchingAccount else {
             lastError = RuntimeError.accountSwitching.localizedDescription
+            lastStartError = lastError
             return
         }
         // `isBotRunning` 在整个启动过程中都是 false（bridge/HTTP 建好后才置 true），
         // 只靠它挡不住重入：双击会起两次 startRuntime。
         guard !isBotRunning, !isBotTransitioning else { return }
+        lastStartError = nil
         isBotTransitioning = true
         defer { isBotTransitioning = false }
         isBusy = true
@@ -5576,6 +5699,7 @@ extension AppStore {
             guard coordinator.isRuntimeRunning() else {
                 isBotRunning = false
                 settings.bot.enabled = false
+                lastStartError = L("启动未完成：运行时未就绪")
                 persist()
                 return
             }
@@ -5591,6 +5715,7 @@ extension AppStore {
             settings.bot.enabled = false
             accountSwitchPending = false
             lastError = error.localizedDescription
+            lastStartError = error.localizedDescription
             coordinator.log(.error, "Bot", "启动失败：\(error.localizedDescription)")
         }
     }
@@ -5605,6 +5730,7 @@ extension AppStore {
         await coordinator.stopRuntime()
         isBotRunning = false
         settings.bot.enabled = false
+        lastStartError = nil
         persist()
         appendLog(.info, "Bot", "机器人已停止")
     }
@@ -5766,6 +5892,13 @@ extension AppStore {
         await coordinator.refreshStatus()
     }
 
+    /// 轻量同步微信进程状态（不触发完整 Hook 检测）。
+    func refreshWeChatProcessState() async {
+        let coordinator = RuntimeRegistry.coordinator(for: self)
+        await coordinator.bootstrapIfNeeded()
+        await coordinator.refreshWeChatProcessState()
+    }
+
     /// 总览「设备与账户」卡：立即重读电量并重查 DeepSeek 余额。
     func refreshSystemVitals() async {
         let coordinator = RuntimeRegistry.coordinator(for: self)
@@ -5773,6 +5906,9 @@ extension AppStore {
     }
 
     func installHook(onProgress: ((Double, String) -> Void)? = nil) async throws {
+        guard !isHookOperationInFlight else { throw RuntimeError.hookOperationInProgress }
+        isHookOperationInFlight = true
+        defer { isHookOperationInFlight = false }
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
         isBusy = true
@@ -5788,6 +5924,9 @@ extension AppStore {
     }
 
     func restoreWeChatBackup() async throws {
+        guard !isHookOperationInFlight else { throw RuntimeError.hookOperationInProgress }
+        isHookOperationInFlight = true
+        defer { isHookOperationInFlight = false }
         if isBotRunning { await stopBot() }
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()

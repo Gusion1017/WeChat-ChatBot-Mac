@@ -1524,14 +1524,15 @@ final class CoreServicesTests: XCTestCase {
         XCTAssertEqual(object?["model"] as? String, provider.model)
         XCTAssertNil(object?["api_key"])
         XCTAssertNil(object?["apiKey"])
-        // 未配置模型温度时不发送 temperature，由模型使用自身默认值。
+        // 通道未配置温度时不发送 temperature，由模型使用自身默认值。
         XCTAssertNil(object?["temperature"])
 
-        // 配置了模型温度时才发送。
+        // 配置了通道温度（requestTemperature）时才发送。
+        provider.temperatureOverride = 0.3
         let customBody = try AIClient.requestBody(
             messages: [.system("s"), .user("u")],
             provider: provider,
-            temperature: 0.3,
+            temperature: provider.requestTemperature,
             stream: true
         )
         let custom = try JSONSerialization.jsonObject(with: customBody) as? [String: Any]
@@ -1559,17 +1560,26 @@ final class CoreServicesTests: XCTestCase {
         XCTAssertEqual(minimal, "非流式")
     }
 
-    func testModelTemperatureConfiguration() {
+    func testChannelTemperatureConfiguration() {
+        var provider = AppSettings.makeDefaultProvider()
+        XCTAssertNil(provider.requestTemperature, "未配置时由模型使用自身默认值")
+        provider.temperatureOverride = 1.2
+        XCTAssertEqual(provider.requestTemperature, 1.2)
+        // 超界值会被收敛到 0...2。
+        provider.temperatureOverride = 3.0
+        XCTAssertEqual(provider.requestTemperature, 2.0)
+        provider.temperatureOverride = -1
+        XCTAssertEqual(provider.requestTemperature, 0)
+    }
+
+    /// 旧「按模型温度」访问器只用于迁移/回滚兼容，新请求不再经过它。
+    func testLegacyModelTemperatureAccessorRemainsForRollback() {
         var settings = AppSettings.default
         XCTAssertNil(settings.ai.temperature(forModel: "deepseek-chat"))
         settings.ai.modelTemperatures = ["deepseek-chat": 1.2]
         XCTAssertEqual(settings.ai.temperature(forModel: "deepseek-chat"), 1.2)
-        XCTAssertNil(settings.ai.temperature(forModel: "gpt-4o-mini"))
-        // 超界值会被收敛到 0...2。
         settings.ai.modelTemperatures = ["deepseek-chat": 3.0]
         XCTAssertEqual(settings.ai.temperature(forModel: "deepseek-chat"), 2.0)
-        // 空白模型名视为未配置。
-        settings.ai.modelTemperatures = ["": 1.0]
         XCTAssertNil(settings.ai.temperature(forModel: " "))
     }
 

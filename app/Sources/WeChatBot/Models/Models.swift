@@ -625,9 +625,23 @@ struct AIProvider: Identifiable, Codable, Hashable {
     var baseURL: String
     var model: String
     var apiKeyReference: String = ""   // Keychain account name; secret never stored in JSON
-    /// 旧版“按通道”温度：仅用于升级时迁移到 `AISettings.modelTemperatures`，
-    /// 不再参与请求生成，也不在 UI 中展示。
-    var temperature: Double = 0.7
+    /// 旧版“按通道”温度（v1.3 前）：只用于一次性迁移，当前请求不再读取。
+    /// 保留字段是为了能解码旧 config.json，迁移完成后不再展示/写回。
+    var temperature: Double = AIProvider.legacyDefaultTemperature
+
+    /// 当前通道显式温度；`nil` = 未配置，请求不发送 `temperature`，使用模型自身默认值。
+    /// 温度按通道配置（每个通道通常对应一个模型），不再使用全局“按模型温度”表。
+    var temperatureOverride: Double?
+
+    /// 旧版按通道温度的默认值。迁移时视为「用户未自定义」，不写入通道温度；
+    /// 否则新安装/升级后会凭空出现一条「自定义温度 0.7」，与「未配置即模型默认」矛盾。
+    static let legacyDefaultTemperature: Double = 0.7
+
+    /// 请求实际发送的温度：显式值 clamp 到 0...2；未配置返回 `nil`（省略 temperature）。
+    var requestTemperature: Double? {
+        guard let temperatureOverride else { return nil }
+        return min(max(temperatureOverride, 0), 2)
+    }
     var maxTokens: Int = 800
     var timeoutSeconds: Double = 60
     var stream: Bool = true
@@ -871,6 +885,11 @@ struct HookStatus: Codable, Hashable {
     var state: HookState = .unknown
     var wechatVersion: String = ""
     var wechatBuild: String = ""
+    /// 实际用于检测 / 启动 bridge 的微信 App 路径。运行中的微信优先于设置路径；
+    /// 与设置不同时界面提示「检测到另一个微信」，避免用户以为设置路径已生效。
+    var wechatDetectedPath: String = ""
+    /// 微信 version/build 是否在仓库已知适配列表（WeChatVersionSupport）。
+    var wechatVersionKnown: Bool = false
     var wechatRunning: Bool = false
     var gadgetInstalled: Bool = false
     var bridgeRunning: Bool = false

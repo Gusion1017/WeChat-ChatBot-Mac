@@ -139,8 +139,8 @@ final class ChatEngine: @unchecked Sendable {
             memoryPrompt: context.memoryPrompt,
             speakerIdentity: context.speakerIdentity
         )
-        let temperature = settings.ai.temperature(
-            forModel: AIClient.effectiveModel(for: context.provider))
+        // 温度按通道配置；provider 可能已被会话/人格覆盖模型，但仍沿用该通道的温度。
+        let temperature = context.provider.requestTemperature
         let result = try await aiClient.complete(
             messages: promptMessages,
             provider: context.provider,
@@ -922,7 +922,7 @@ final class ChatEngine: @unchecked Sendable {
                 .user(promptPair.user)
             ]
             do {
-                let temperature = settings.ai.temperature(forModel: AIClient.effectiveModel(for: provider))
+                let temperature = provider.requestTemperature
                 let result = try await aiClient.complete(
                     messages: messages,
                     provider: provider,

@@ -6,6 +6,92 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-11-12
+
+### 新增
+
+- **微信运行状态实时同步（2026-11-12）**：`HookManager` 监听 `NSWorkspace` 的微信启动/退出与系统唤醒，
+  App 重新激活时做轻量核对；微信退出立即把状态切到「微信未运行」并断开网关标记，重新出现时提示等待 bridge
+  重连。侧边栏、总览、菜单栏不再需要手动刷新才更新。
+- **版本检测与路径回退（2026-11-12）**：新增 `WeChatAppDetector`：按「运行中的微信 > 设置路径 >
+  LaunchServices/常见安装位置」选出实际生效的 App；版本同时显示 build（如 `4.2.0.17 (270353)`），
+  按 `WeChatVersionSupport`（与 `KNOWN_VERSION_PAIRS` 一致）判断是否适配。运行路径与设置不同时提示
+  「检测到另一个微信」，可一键「使用检测路径」；安装/还原/bridge 启动都使用实际检测路径。
+- **登录时启动与退出前确认（2026-11-12）**：设置 → 通用新增可用的登录项实现（用户级
+  `~/Library/LaunchAgents/com.gusionw.wechatai.loginitem.plist`，状态以 launchd disabled 记录为准，
+  源码运行/路径过期时给原因）；机器人或 bridge 运行中退出时按设置弹确认框（默认「取消」）。
+
+### 变更
+
+- **AI 通道类型与温度配置（2026-11-12）**：新建通道仅提供 **DeepSeek** 与 **自定义兼容** 两种类型；
+  OpenAI / Ollama 保留为历史类型，已有通道仍可编辑，编辑 sheet 会标注「历史通道类型，不再新增」，
+  避免旧配置失效。原「AI 模型 → 模型温度」按模型温度卡片移除，温度改为每个通道「编辑 → 高级参数 →
+  模型温度」单独配置：未开启时不发送 `temperature`（模型自身默认），开启后 0–2 步长 0.1。
+  旧「按模型温度」表（或更早的按通道温度）在启动时一次性迁移到各通道 `temperatureOverride`，
+  迁移后旧表只保留用于回滚；显式通道温度优先，不会被重复覆盖。自动回复、记忆总结、连接测试、
+  朋友圈自动互动/自动发布均使用通道温度（后两者未配置时保留原有 0.85 / 0.8 创意默认）。
+- **移除未接入/无效设置（2026-11-12）**：删除「通知 / 通知声音」分类与字段、`hook.autoLaunchWeChat`
+  开关、OneBot「连接类型」与「bridge 可执行文件」伪设置；旧 `config.json` 中的键按未知键忽略。
+- **AI 模型页温度与诊断（2026-11-12）**：温度副标题改为「未配置时使用模型自身默认温度」，help 说明列表
+  同时包含通道/人格使用过的模型与历史温度残留；每行显示来源（默认通道/通道/人格、停用标注），区分
+  「使用模型默认温度 / 自定义温度」；Slider 拖动只更新草稿，结束拖动或 700ms 防抖后一次写盘；
+  「全部恢复默认」二次确认并显示数量。默认通道停用/缺 Key 时给「启用通道/编辑通道」，Picker 标注
+  「（已停用）」；保存/删除通道清除旧测试结果并用世代号丢弃在途结果；删除通道清理悬空识图通道。
+- **旧温度迁移不再凭空播种 0.7（2026-11-12）**：`AISettings.migratedLegacyTemperatures` 只迁移真正
+  改过的旧按通道温度，旧默认 0.7 视为未配置；新安装/升级后温度行为与「未配置即模型默认」一致。
+- **OneBot 参数校验与重启提示（2026-11-12）**：Host 非回环时显示安全警告，Port 即时夹到 1–65535；
+  运行中修改 Host/Port/Token、Gadget 端口或自动启动 bridge 时，设置页与总览显示「配置待生效，重启机器人
+  后生效」。
+- **设置写盘与加载可靠性（2026-11-12）**：`AppStore.persist` 写盘失败不再静默，设置页顶部常驻 danger
+  提示并写日志；`SettingsStore.loadWithDiagnostics` 记录损坏文件的 `*.corrupt-<ts>.json` 备份，
+  「重新加载配置」在检测到损坏时拒绝应用降级结果、保留当前设置并提示备份路径；启动时同样跳过首次默认值
+  回写，避免覆盖仍可修复的配置。
+- **交互一致性（2026-11-12）**：机器人页启停按钮在切换账号/启停中禁用，失败原因进 toast；向导输入
+  API Key 后点「下一步/完成」即写 Keychain（不再只有「保存并测试」才生效）；导出配置前确认可隐藏
+  OneBot Token；清空日志二次确认；安装/还原 Hook 使用跨页面单一 in-flight 状态，避免重复触发脚本。
+
+### 修复
+
+- **R3 发送句柄已就绪但界面仍显示等待（2026-11-12）**：日志解析补上实际格式
+  `[capture] slot13 newsendmsg 闭包`、`R3 发送句柄已持久化`、`[+] R3: 发送句柄已提交持久化`；
+  同时用 `/voice_status` 的 `hook.textSeed` 作为权威状态，在启动捕获检测、手动刷新及用户手动发消息后的
+  1.5s/5s/10s 短轮询中同步，日志漏读或 bridge 重启后不再需要反复发消息才能变绿。新增
+  `HookR3LogParsingTests` 覆盖实际/旧格式、stale 与 init 日志。
+- **Hook 版本文件误判（2026-11-12）**：`refresh` 不再用 `status.versionConfigFile` 作为显式路径
+  （它可能是 `Application Support/WeChatAI/runtime` 下的合并配置），改为用户设置的
+  `hook.versionConfigPath`；微信升级后不会再把旧版本文件当成匹配。
+- **CLT 缺失时不再把已安装的 Gadget 显示成未安装**：保留上一次已知状态，同时用「异常」状态提示缺少
+  Command Line Tools。
+- **版本提示与安装门禁**：微信版本不在适配列表时禁用 App 内安装并列出支持版本；向导/设置显示 build，
+  修掉向导只列 5 个版本的旧文案。
+- 识图关闭时新增行内说明；通道编辑保存后清除过期连接测试结果。
+
+### 可访问性与错误可见性
+
+- **启动失败可见（2026-11-12）**：新增 `AppStore.lastStartError`，与通用 `lastError` 区分；总览启动失败时
+  显示原因 + 「打开日志」，机器人页/Dashboard 的失败 toast 直接带原因，成功启动/停止后自动清除。
+- **运行期 R3 待生效（2026-11-12）**：启动快照加入 R3 原生发送开关；运行中切换 R3/Gadget 端口/自动启动
+  bridge/OneBot 连接参数都会显示「配置待生效，重启机器人后生效」。
+- **可访问性（2026-11-12）**：Toast 通过 `AccessibilityNotification.Announcement` 播报；向导禁止
+  Esc/点外部静默关闭（必须走「跳过向导/完成」）；安装按钮的禁用原因改为卡内可见文字，不再只靠 tooltip。
+- **表单校验与本地化（2026-11-12）**：定时任务保存校验重名、会话 ID 空格与 `@chatroom` 结尾；通道重名
+  在编辑 sheet 内字段级报错（不丢输入）；`RuntimeError` 全部走 `L()/Lf()` 并补英文；总览日期跟随
+  App 语言（英文界面不再显示中文星期），刷新状态 toast 带实际 Hook 状态而不是恒报成功。
+- **向导密钥与关闭行为（2026-11-12）**：向导中输入的 API Key 在「下一步 / 完成 / 打开 AI 模型页」时都会
+  写入 Keychain（失败留在当前步骤）；sheet 禁止 Esc/点外部静默关闭，只能走「跳过向导」或完成。
+- **Hook 操作跨页面可见（2026-11-12）**：安装/还原的单一 in-flight 状态在总览与设置页都显示进行中提示，
+  切页后不会误以为按钮失效；进度面板仍只在发起页显示。
+
+### 文档与测试
+
+- 同步更新 `docs/ui-design.md`（AI 模型页、设置页、总览状态）、`docs/core-services.md`
+  （检测/实时同步/登录项/退出确认/持久化诊断）、`docs/install.md`（版本字段、自动检测路径、登录项
+  排障）、`docs/updates.md`、`docs/sns.md`（Type=11 由 sns.db 补全、自动发布 v2 记忆）、
+  `docs/architecture.md`、`docs/bridge.md`；测试基线更新为 Swift 933 项执行（931 通过 / 2 项环境跳过，
+  49 个测试文件）。
+- 新增 `WeChatDetectionTests`、`LaunchAtLoginTests`、`TemperatureMigrationTests` 与 AI 模型页的
+  `ModelTemperatureSettingsTests` / `AIChannelDiagnosticsTests`。
+
 ## [4.0.2] — 2026-11-11
 
 ### 修复
@@ -1344,4 +1430,4 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.0.2...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...HEAD
