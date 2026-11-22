@@ -303,13 +303,21 @@ struct BotView: View {
                         FilterChip(
                             title: mode.groupLabel,
                             isSelected: selectedGroupTriggers.contains(mode),
-                            tint: mode == .always ? Theme.warning : Theme.violet
+                            tint: mode == .always ? Theme.warning : Theme.violet,
+                            // 只剩这一种时不允许取消：直接置灰并就地说明，避免「点了没反应」。
+                            isEnabled: canDeselectGroupTrigger(mode)
                         ) {
                             toggleGroupTrigger(mode)
                         }
                         .help(mode == .quote
                               ? L("引用机器人：别人引用机器人发的消息时唤醒机器人（正文无需 @ 或关键词）")
                               : "")
+                    }
+                    if selectedGroupTriggers.count == 1 {
+                        Text(L("至少保留一种触发方式；当前这种方式不能取消。"))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -488,7 +496,7 @@ struct BotView: View {
                     InlineNotice(
                         kind: .warning,
                         title: "白名单与黑名单存在重叠",
-                        message: "以下 ID 同时出现在两个列表中，黑名单将生效：\(conflictingIDs.joined(separator: "、"))"
+                        message: "以下 ID 同时出现在两个列表中，黑名单将生效：\(conflictingIDs.joined(separator: L10n.listSeparator))"
                     )
                 }
             }
@@ -931,6 +939,12 @@ struct BotView: View {
 
     private var groupKeywordEnabled: Bool {
         selectedGroupTriggers.contains(.keyword)
+    }
+
+    /// 只剩这一种触发方式时不允许取消（「所有消息」与其它方式互斥，随时可切换）。
+    private func canDeselectGroupTrigger(_ mode: TriggerMode) -> Bool {
+        guard mode != .always, selectedGroupTriggers.contains(mode) else { return true }
+        return selectedGroupTriggers.count > 1
     }
 
     /// 「所有消息」独占，其余多选；始终至少保留一种触发方式。

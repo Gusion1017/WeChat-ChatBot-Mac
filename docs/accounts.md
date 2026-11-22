@@ -447,7 +447,8 @@ bridge `get_login_info` 确认真实账号 `<id>` 后：
 其他文件、`cosyvoice/voices`、`backups/` 与运行日志占用并显示合计。「导出数据备份…」生成 zip，根目录含
 `backup-manifest.json`（schema `wechatai.data-backup/v1`、App 版本/build、时间、包含/排除项与大小），
 包含配置、账号目录（排除 `*/logs/*`）、自定义音色与 `voice-clones/`，不包含 `cosyvoice/models`、venv、仓库
-与运行日志；导出先写 `.part` 再替换，失败清理半成品。「清理运行日志」删除 `~/Library/Logs/WeChatAI`、
+与运行日志；导出先写 `.part` 再替换，失败清理半成品。导出前自动对账号库与记忆卡执行 WAL checkpoint，
+SQLite 文件以拷贝方式进入备份包，机器人运行中也能得到一致快照（2026-11-22 修复）。「清理运行日志」删除 `~/Library/Logs/WeChatAI`、
 旧版 `logs/` 与 `accounts/*/logs/` 中的文件；「清理临时文件」删除 `updates/`、`runtime/` 下超过 24 小时的
 条目（bridge 正在使用的版本配置受保护）。所有清理均二次确认并按实际删除大小显示释放空间。
 
@@ -558,8 +559,8 @@ python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前实测基线：Swift 1010 项执行（1008 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，58 个测试文件）；
-Go 348 项用例（204 顶层 + 144 子测试，0 失败，21 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
+当前实测基线：Swift 1032 项执行（1030 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，58 个测试文件）；
+Go 373 项用例（221 顶层 + 152 子测试，0 失败，25 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
 72 项 unittest 通过。
 
 ## 12. 排障

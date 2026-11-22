@@ -4,7 +4,7 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-22）**：本文描述 **4.2.0**，包含微信 4.2.1.3 适配、备份与朋友圈（Moments）
+> **发布状态（2026-11-22）**：本文描述 **4.2.1**，包含微信 4.2.1.3 适配、备份与朋友圈（Moments）
 > 入口调整；安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.2.0.md`](releases/4.2.0.md)。
 
 ## 1. 文件清单
@@ -194,6 +194,11 @@ RuntimeCoordinator.handle(event)
 - 重复投递在 `OneBotClient` 层直接丢弃（稳定投递指纹，见 §5.2），不进入 `RuntimeCoordinator.handle`，
   因此不会入库第二次、不会重复回复、也不会重复排队取图/取语音。
 - 回复生成按会话串行（`inFlightConversations`），同一会话不会并发产生多条 AI 回复，不同会话可并行。
+  生成期间到达的新消息不再丢弃：每会话保留**最新一条**待回复槽位，本轮结束后再判定一次（连发两句时
+  第二轮会用最新历史回复一次，避免「发一句没回再补一句」被静默吞掉）。
+- 会话是否「已存在」不只以内存为准：内存只加载最近 300 个会话，事件来自更早会话时先按 id 回查数据库
+  再更新，避免整行 UPSERT 把该会话已保存的 AI 开关、备注、人格/模型、独立工作时段、置顶、图片开关与
+  自定义标题覆盖成默认值；定时任务的目标会话不在内存时同样回查数据库。
 - 记忆维护与回复解耦：同会话重复触发去重，切号/停止机器人时取消并 await；失败不推进提取游标，下次新消息重试
   （见 [memory.md](memory.md) §7）。
 - dry-run 仍调用 AI 生成，但只写入一条 `direction = .system` 的「将回复」记录并打日志，不发送。
@@ -841,7 +846,10 @@ id != active 或 active == _unassigned
   `dataBackupPlan()` 固定包含 `config.json`、`account-state.json`、`accounts/`（排除 `*/logs/*`）、
   `cosyvoice/voices` 与 `voice-clones`（存在时）；`exportDataBackup(to:progress:)` 在临时目录整理后写
   `backup-manifest.json`（schema `wechatai.data-backup/v1`），用 `ditto` 先写 `.part` 再原子替换目标；
-  失败清理 staging 与半成品，不留下看似成功的空 zip。
+  失败清理 staging 与半成品，不留下看似成功的空 zip。**导出前由 `DataBackupExportButton` →
+  `AppStore.prepareDataBackup()` 对账号库与全部记忆卡做 WAL checkpoint**（导出时机器人不必停止）；
+  SQLite 主库 / `-wal` / `-shm` 在 staging 阶段用**拷贝**而不是硬链接，避免 zip 压缩时读到数据库
+  实时内容导致主库与 WAL 来自不同时刻（2026-11-22 修复）。
 - **清理**：`scanRuntimeLogs()` 覆盖 `~/Library/Logs/WeChatAI`、旧 `logs/` 与 `accounts/*/logs/`；
   `scanTemporaryFiles(referenceDate:inUsePaths:)` 只看 `updates/` 与 `runtime/` 顶层，按目录 mtime 删除
   超过 24h 的条目，bridge 正在使用的版本配置及其父目录受保护。`remove(_:allowedRoots:)` 对每个路径做
@@ -928,8 +936,8 @@ swift test --scratch-path .build-verify
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 1010 项执行（1008 通过 / 2 项按环境跳过，0 失败；58 个测试文件）；Go 348 项用例（204 顶层
-+ 144 子测试，0 失败；21 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
+当前实测基线：Swift 1032 项执行（1030 通过 / 2 项按环境跳过，0 失败；58 个测试文件）；Go 373 项用例（221 顶层
++ 152 子测试，0 失败；25 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。
 

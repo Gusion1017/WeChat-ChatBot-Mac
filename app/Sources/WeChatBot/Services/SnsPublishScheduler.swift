@@ -66,34 +66,45 @@ struct SnsPublishTodayUsage: Hashable, Sendable {
     var targetCount: Int = 0
     /// 今天已成功发布的总条数（各对象求和）。
     var sentCount: Int = 0
-    /// 今天还能发布的总条数（各对象分别计算后求和）。无上限时按 bridge 每日 50 条
-    /// 兜底计算，因此也可能为 0。
+    /// 今天还能发布的总条数。有上限时按对象分别计算后求和；无上限时是
+    /// bridge 每日 50 条**全局**额度的剩余（所有对象共用）。
     var remainingCount: Int = 0
-    /// 每个对象每天上限；无上限时是 bridge 兜底的 50（不表示用户设置了上限）。
+    /// 每个对象每天上限；无上限时是 bridge 全局兜底的 50（不表示用户设置了上限）。
     var capacityPerTarget: Int = 0
     var isUnlimited: Bool = false
 
     var isExhausted: Bool { targetCount > 0 && remainingCount == 0 }
 
     /// 由「每个已选对象今天已发条数」聚合；纯函数便于单测，不依赖 ledger/环境。
+    ///
+    /// - 有上限：每个对象各自有 capacityPerTarget，剩余额度逐对象求和；
+    /// - 无上限：capacityPerTarget 是 bridge 的**全局**每日兜底（所有对象合计），
+    ///   剩余额度只能按总发送数计算，不能按对象相加（否则 2 个对象会显示 100 条额度）。
     static func aggregate(
         capacityPerTarget: Int,
         isUnlimited: Bool,
         sentPerTarget: [Int]
     ) -> SnsPublishTodayUsage {
-        var sent = 0
+        let sent = sentPerTarget.reduce(0) { $0 + max(0, $1) }
+        if isUnlimited {
+            return SnsPublishTodayUsage(
+                targetCount: sentPerTarget.count,
+                sentCount: sent,
+                remainingCount: max(0, capacityPerTarget - sent),
+                capacityPerTarget: capacityPerTarget,
+                isUnlimited: true
+            )
+        }
         var remaining = 0
         for count in sentPerTarget {
-            let safe = max(0, count)
-            sent += safe
-            remaining += max(0, capacityPerTarget - safe)
+            remaining += max(0, capacityPerTarget - max(0, count))
         }
         return SnsPublishTodayUsage(
             targetCount: sentPerTarget.count,
             sentCount: sent,
             remainingCount: remaining,
             capacityPerTarget: capacityPerTarget,
-            isUnlimited: isUnlimited
+            isUnlimited: false
         )
     }
 }
@@ -211,6 +222,8 @@ final class SnsPublishScheduler {
     private let publishHandler: PublishHandler
     private let onDraft: DraftHandler?
     private let dryRunProvider: @MainActor () -> Bool
+    /// 发布失败原因（例如 MomentsStore.publishError），用于把「发布失败：昵称」补全为可行动说明。
+    private let failureReasonProvider: (@MainActor () -> String?)?
     private let onRunCompleted: RunHandler?
     private let logger: Logger?
     private let ledger: SnsPublishLedger
@@ -234,6 +247,7 @@ final class SnsPublishScheduler {
         ledger: SnsPublishLedger,
         targetSpacingSeconds: TimeInterval = 61,
         dryRunProvider: @escaping @MainActor () -> Bool = { false },
+        failureReasonProvider: (@MainActor () -> String?)? = nil,
         onDraft: DraftHandler? = nil,
         onRunCompleted: RunHandler? = nil,
         logger: Logger? = nil,
@@ -244,6 +258,7 @@ final class SnsPublishScheduler {
         self.draftProvider = draftProvider
         self.publishHandler = publishHandler
         self.dryRunProvider = dryRunProvider
+        self.failureReasonProvider = failureReasonProvider
         self.onDraft = onDraft
         self.ledger = ledger
         self.targetSpacingSeconds = max(0, targetSpacingSeconds)
@@ -334,10 +349,27 @@ final class SnsPublishScheduler {
             return
         }
 
+        // bridge 的每日 50 条是**全局**上限（所有好友合计）。ledger 按对象记账，
+        // 这里维护今天已发总数，避免「每个对象都没超，但全局早满了」仍去提交并失败。
+        var sentTodayTotal = 0
+        for target in targets {
+            sentTodayTotal += await ledger.state(for: target.userID, on: now, calendar: calendar).count
+        }
+
         var attempted = 0
         for target in targets {
             if stopped || Task.isCancelled { break }
             let dryRun = dryRunProvider()
+            if !dryRun, sentTodayTotal >= SnsPublishSettings.bridgeDailyLimit {
+                summary.skippedCount += 1
+                if summary.skipNote == nil {
+                    summary.skipNote = Lf(
+                        "今天已发 %d 次，达到 bridge 每日 %d 条全局上限，本轮未发送",
+                        sentTodayTotal, SnsPublishSettings.bridgeDailyLimit
+                    )
+                }
+                continue
+            }
             let state = await ledger.state(for: target.userID, on: now, calendar: calendar)
             let eligibility = publish.eligibility(
                 now: now,
@@ -400,10 +432,16 @@ final class SnsPublishScheduler {
                 // 计数由发布动作本身写入（`MomentsStore.publish` 与手动发布共用同一账本），
                 // 调度器只做编排，避免重复计数。
                 summary.sentCount += 1
+                sentTodayTotal += 1
                 logger?("朋友圈自动发布成功：\(target.displayName)")
             } else {
                 summary.failedCount += 1
-                lastError = "发布失败：\(target.displayName)"
+                let reason = failureReasonProvider?()?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let message = reason.isEmpty
+                    ? "发布失败：\(target.displayName)"
+                    : "发布失败（\(target.displayName)）：\(reason)"
+                lastError = message
                 if summary.firstError == nil {
                     summary.firstError = lastError
                 }
@@ -448,12 +486,16 @@ final class SnsPublishScheduler {
         guard !dryRunProvider() else { return false }
         guard !targets.isEmpty else { return false }
         let capacity = publish.dailyCapacity
-        guard capacity > 0 else { return false }
+        var sentTotal = 0
+        var everyTargetAtCapacity = true
         for target in targets {
             let state = await ledger.state(for: target.userID, on: now, calendar: calendar)
-            if state.count < capacity { return false }
+            sentTotal += state.count
+            if capacity <= 0 || state.count < capacity { everyTargetAtCapacity = false }
         }
-        return true
+        // bridge 每日 50 条是所有好友合计的全局上限：分开记账时也必须按总量判定。
+        if sentTotal >= SnsPublishSettings.bridgeDailyLimit { return true }
+        return everyTargetAtCapacity
     }
 
     /// 调度器真正会等待的下一次：配额用尽时自动跨到明天，避免出现「下一次 01:53」却到点跳过。

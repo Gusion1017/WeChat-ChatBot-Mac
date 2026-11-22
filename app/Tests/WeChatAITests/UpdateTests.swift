@@ -150,6 +150,99 @@ final class UpdateTests: XCTestCase {
         ))
     }
 
+    // MARK: - UpdateCenter 页面加载（P2-6）
+
+    /// P2-6：关闭「自动检查更新」只停掉后台自动检查；打开更新页仍必须拉取一次
+    /// Release 元数据并展示发布说明（docs/updates.md「版本说明」要求始终展示）。
+    @MainActor
+    func testRefreshIfNeededLoadsReleaseNotesWhenAutoCheckDisabled() async {
+        let payload = releaseJSON(tag: "v3.1.0")
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
+            var count: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return value
+            }
+        }
+        let counter = Counter()
+        UpdateStubURLProtocol.handler = { _ in
+            counter.next()
+            return (200, ["Content-Type": "application/json"], payload)
+        }
+        defer { UpdateStubURLProtocol.handler = nil }
+
+        let center = UpdateCenter(client: makeStubClient())
+        center.setAutoCheck(false)
+        XCTAssertFalse(center.autoCheckEnabled)
+        XCTAssertNil(center.latestRelease)
+
+        await center.refreshIfNeeded(loadReleaseInfo: true)
+        XCTAssertEqual(counter.count, 1, "打开更新页应拉取一次 latest Release")
+        XCTAssertEqual(center.latestRelease?.tag, "v3.1.0")
+        XCTAssertTrue(
+            center.latestRelease?.notes.contains("修复若干问题") == true,
+            "发布说明应保留供更新页展示：\(String(describing: center.latestRelease?.notes))")
+        XCTAssertFalse(center.isBusy)
+
+        // 已有检查结果后再次打开页面不重复请求（6 小时节流仍然生效）。
+        await center.refreshIfNeeded(loadReleaseInfo: true)
+        XCTAssertEqual(counter.count, 1, "已有 release 元数据时不应重复请求")
+    }
+
+    /// P2-6：关闭「自动检查更新」后，非更新页触发的 refreshIfNeeded 不再后台请求。
+    @MainActor
+    func testRefreshIfNeededDoesNotAutoCheckWhenDisabled() async {
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
+            var count: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return value
+            }
+        }
+        let counter = Counter()
+        UpdateStubURLProtocol.handler = { _ in
+            counter.next()
+            return (200, ["Content-Type": "application/json"], Data("{}".utf8))
+        }
+        defer { UpdateStubURLProtocol.handler = nil }
+
+        let center = UpdateCenter(client: makeStubClient())
+        center.setAutoCheck(false)
+        await center.refreshIfNeeded()
+        XCTAssertEqual(counter.count, 0, "自动检查关闭时不应发起后台检查")
+        XCTAssertNil(center.latestRelease)
+        XCTAssertEqual(center.state, .idle)
+    }
+
+    /// P2-6：页面补拉属于静默刷新，失败只写日志，不把页面切到 failed（手动检查才报错）。
+    @MainActor
+    func testRefreshIfNeededPageLoadFailureStaysSilent() async {
+        UpdateStubURLProtocol.failure = URLError(.notConnectedToInternet)
+        defer {
+            UpdateStubURLProtocol.failure = nil
+            UpdateStubURLProtocol.handler = nil
+        }
+        let center = UpdateCenter(client: makeStubClient())
+        center.setAutoCheck(false)
+        await center.refreshIfNeeded(loadReleaseInfo: true)
+        XCTAssertNil(center.latestRelease)
+        XCTAssertEqual(center.state, .idle, "页面静默补拉失败不应进入 failed")
+    }
+
     // MARK: - 发布资产选择
 
     func testAssetSelectorPrefersWeChatAIZip() {

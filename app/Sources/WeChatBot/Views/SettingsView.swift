@@ -1006,8 +1006,10 @@ struct SettingsView: View {
         guard !store.hookStatus.wechatVersion.isEmpty,
               !store.hookStatus.wechatVersionKnown
         else { return nil }
+        // 安装脚本按 version/build 硬校验（tools/install_gadget.sh），自定义版本配置文件
+        // 只能让「已安装」的微信尝试启动，不能绕过安装门禁；文案不要承诺自定义配置可安装。
         return Lf(
-            "当前微信 %@ 不在适配列表（%@）。安装/启动可能失败，请换回受支持版本，或使用下方「版本配置文件」指定自定义配置。",
+            "当前微信 %@ 不在适配列表（%@）。安装会被阻止，请换回受支持版本；若已安装 Hook，可在下方「版本配置文件」指定自定义配置后尝试启动。",
             WeChatStatusPresentation.versionDisplay(store.hookStatus),
             WeChatVersionSupport.compactList()
         )
@@ -1467,7 +1469,7 @@ struct SettingsView: View {
                 SettingsDivider()
                 researchRow(
                     "R3 原生文本发送",
-                    "复用真实发送上下文，仅文本；无句柄时排队，捕获后自动重发。",
+                    "复用真实发送句柄，仅文本；无句柄时排队，捕获后自动重发。",
                     symbol: "paperplane",
                     tint: Theme.accent
                 )
@@ -2524,6 +2526,7 @@ private struct LogBufferMaintenanceRow: View {
 /// 真正的文件整理、zip 与清单生成由 BackupService 完成；本控件只负责选择位置、
 /// 展示进度与结果，避免两个页面各写一份导出逻辑。
 struct DataBackupExportButton: View {
+    @Environment(AppStore.self) private var store
     @Environment(ToastCenter.self) private var toast
     @State private var service = BackupService()
     @State private var isExporting = false
@@ -2586,6 +2589,8 @@ struct DataBackupExportButton: View {
         progress = DataBackupProgress(fraction: 0, stage: .preparing)
         Task {
             do {
+                // 先把运行中的 SQLite WAL 合并回主库，再拷贝出稳定快照（不需要停止机器人）。
+                await store.prepareDataBackup()
                 let result = try await service.exportDataBackup(to: url) { value in
                     Task { @MainActor in progress = value }
                 }

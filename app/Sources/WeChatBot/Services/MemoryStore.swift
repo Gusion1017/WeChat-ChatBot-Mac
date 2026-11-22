@@ -164,6 +164,15 @@ actor MemoryStore {
         try switchDatabase(to: AppPaths.databaseFile)
     }
 
+    /// 导出数据备份前调用：把 WAL 内容合并回主库并截断，连接保持可用。
+    ///
+    /// 备份 zip 里主库与 -wal 若来自不同时刻，恢复时可能缺最近提交；checkpoint 是 SQLite
+    /// 支持的并发操作，不需要停止机器人（写入会被 SQLite 串行化）。
+    func checkpointForBackup() {
+        guard let db else { return }
+        sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+    }
+
     /// Closes the handle after a WAL checkpoint. Safe to call multiple times.
     func close() {
         guard let db else { return }

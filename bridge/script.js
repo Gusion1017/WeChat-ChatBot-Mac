@@ -2047,6 +2047,17 @@ function triggerSendMediaMessage(taskId, sender, receiver, protoHex, payloadHex,
         // 拍一拍是实验路径：复用 newsendmsg 种子闭包构造 sendappmsg task，
         // 只有运行期配置 r3AppMsgSend=true 才允许（App 在“R3 + 回拍”都开启时合并）。
         if (msgType === "pat") return r3SendPatMessage(taskId, protoHex);
+        // R3 没有 req2buf/StartTask 发送链路：img/video/file 继续往下走只会返回
+        // "fail"，bridge 只能报笼统的「发送失败」。这里返回可区分标记，bridge 映射成
+        // media_send_unsupported（docs/bridge.md §3.3）：R3 模式只支持文本/语音，
+        // 并据此清理本条 base64 媒体落在 -image_path 的临时文件。
+        // file 走 triggerSendFileMessage；fileupload/appattach 是 send_file_simple
+        // 的分片上传入口，同样属于 R3 不支持的媒体路径。
+        if (msgType === "img" || msgType === "video" || msgType === "file" ||
+            msgType === "fileupload" || msgType === "appattach") {
+            console.error("[!] R3 模式不支持发送媒体 (" + msgType + ")，仅支持 text/voice；返回 unsupported:media");
+            return "unsupported:media";
+        }
         console.error("[!] R3 模式当前只支持 text/pat (收到 " + msgType + ")");
         return "fail";
     }

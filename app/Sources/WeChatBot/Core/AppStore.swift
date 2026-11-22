@@ -258,6 +258,17 @@ final class AppStore {
 
     // MARK: Persistence
 
+    /// 定时任务变更（新增/编辑/启停/删除）后统一入口。
+    ///
+    /// profile 是唯一权威来源，数据库里的 schedules 表是崩溃恢复镜像。机器人未运行时
+    /// 调度器的 onChange 不会触发，如果只写 profile，删掉最后一个任务后重启会被
+    /// 「内存为空」误判为配置丢失，从数据库镜像里把已删除的任务恢复回来。
+    func persistSchedules() {
+        settings.schedules = schedules
+        persist()
+        RuntimeRegistry.existing(for: self)?.mirrorSchedulesToDatabase(schedules)
+    }
+
     func persist() {
         settings.providers = providers
         settings.personas = personas

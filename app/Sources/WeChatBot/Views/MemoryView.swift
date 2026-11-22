@@ -1202,8 +1202,12 @@ struct MemoryView: View {
 
     private func compress(_ memory: CharacterMemory) {
         Task {
-            await store.compressCharacterMemory(memory)
-            toast.show(L("压缩完成，结果可在日志中查看"), tone: .info, symbol: "rectangle.compress.vertical")
+            let compressed = await store.compressCharacterMemory(memory)
+            if compressed {
+                toast.show(L("压缩完成，结果可在日志中查看"), tone: .info, symbol: "rectangle.compress.vertical")
+            } else {
+                toast.show(L("压缩失败，请查看运行日志"), tone: .error, symbol: "exclamationmark.triangle")
+            }
         }
     }
 
@@ -1216,8 +1220,12 @@ struct MemoryView: View {
 
     private func deleteMemory(_ memory: CharacterMemory) {
         Task {
-            await store.deleteCharacterMemory(memory)
-            toast.show(L("已删除记忆"), tone: .info, symbol: "trash")
+            let deleted = await store.deleteCharacterMemory(memory)
+            if deleted {
+                toast.show(L("已删除记忆"), tone: .info, symbol: "trash")
+            } else {
+                toast.show(L("删除记忆失败，请查看运行日志"), tone: .error, symbol: "exclamationmark.triangle")
+            }
         }
     }
 
@@ -1236,7 +1244,11 @@ struct MemoryView: View {
     private func deleteSelectedCharacterCard() {
         guard let conversationID = store.selectedCharacterID else { return }
         Task {
-            await store.deleteCharacterCard(conversationID: conversationID)
+            let deleted = await store.deleteCharacterCard(conversationID: conversationID)
+            guard deleted else {
+                toast.show(L("删除记忆卡失败，请查看运行日志"), tone: .error, symbol: "exclamationmark.triangle")
+                return
+            }
             await store.selectCharacter(nil)
             await store.loadCharacterSummaries()
             resetFilters()

@@ -64,7 +64,7 @@ struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .help(L(isSelected ? "再次点击收起当前对话" : "打开会话"))
-        .accessibilityLabel("\(conversation.displayTitle)，\(conversation.kind.label)")
+        .accessibilityLabel(conversation.displayTitle + L10n.listSeparator + conversation.kind.label)
         .accessibilityValue(accessibilityValue)
         .accessibilityHint(L(isSelected ? "再次点击收起当前对话" : "打开会话"))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])

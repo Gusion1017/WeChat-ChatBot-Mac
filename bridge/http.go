@@ -31,6 +31,12 @@ var errSendResultTimeout = errors.New("send result timeout")
 // 防止异常客户端把 bridge 内存打爆。测试可临时改小。
 var sendBodyMaxBytes int64 = 64 << 20
 
+// fetchBodyMaxBytes 是 /fetch_image 与 /fetch_voice 的请求体上限。
+// 两个端点只需 {"message_id":...}（/fetch_voice 另可选 file_types 数组），
+// 64 KiB 已远超正常请求；用 http.MaxBytesReader 兜底，挡住异常客户端把 body
+// 整个读进内存。测试可临时改小。
+var fetchBodyMaxBytes int64 = 64 << 10
+
 // sendResultTimeout 是一次 HTTP 发送请求等待 worker 结果的总预算。
 // worker 自身超时 15s；图片/视频/语音还要等 hook 的 upload_*_finish 异步回包，
 // 所以这里留足余量，只兜底「永远等不到」的情况。测试可临时改小。
@@ -180,6 +186,11 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			rm := v.Data.ReplyMessage
+			if rm == nil {
+				// reply_message:null / 缺 data 的段在 OneBot 客户端里合法；不要空指针解引用
+				//（旧实现会 panic，连接被重置而不是返回 400）。
+				continue
+			}
 
 			// 顶层没有group_id时，从reply_message中取
 			if req.GroupID == "" && rm.GroupId != "" {
@@ -189,7 +200,7 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 			// 提取被回复消息的内容
 			referContent := ""
 			referMsgType := 1 // 默认text
-			if len(rm.Message) > 0 {
+			if len(rm.Message) > 0 && rm.Message[0] != nil {
 				switch rm.Message[0].Type {
 				case "text":
 					referContent = rm.Message[0].Data.Text
@@ -251,6 +262,20 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 	// 状态码保持 docs/bridge.md §3.3 的契约（失败一律 500），只把原因写进 error。
 	if err := waitSendResults(resultChans); err != nil {
 		w.Header().Set("Content-Type", "application/json")
+		// R3 模式没有 req2buf/StartTask 发送链路，图片/视频/文件在 hook 侧被明确
+		// 拒绝（hook 返回 unsupported:media）。给 App 一个可判定的错误码 + 可展示
+		// 原因，而不是笼统的 500「send image failed」；其余失败仍是 500，保持
+		// docs/bridge.md §3.3 的历史契约。
+		if errors.Is(err, errMediaSendUnsupported) {
+			w.WriteHeader(http.StatusNotImplemented)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "failed",
+				"error":   "media_send_unsupported",
+				"message": "R3 模式仅支持文本/语音",
+			})
+			Warn("R3 模式不支持发送媒体", "reason", err.Error())
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "failed",
@@ -304,7 +329,17 @@ func fetchImageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req fetchImageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body := http.MaxBytesReader(w, r.Body, fetchBodyMaxBytes)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeFetchImageResponse(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"status": "failed",
+				"error":  "请求体过大",
+			})
+			Error("图片获取请求体过大", "limit", fetchBodyMaxBytes)
+			return
+		}
 		writeFetchImageResponse(w, http.StatusBadRequest, map[string]any{
 			"status": "failed",
 			"error":  "无效的 JSON",

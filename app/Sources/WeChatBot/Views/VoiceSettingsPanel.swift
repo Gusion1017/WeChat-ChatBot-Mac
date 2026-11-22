@@ -791,8 +791,12 @@ struct VoiceSettingsPanel: View {
             didAttemptCosyVoiceAutoStart = true
             // 只在「允许语音回复 + 开启自动启动」时拉起 GB 级的本地模型；
             // 面板里仍可手动点「启动」。
+            // 只在机器人运行时预热：机器人未运行时打开面板不应拉起 GB 级模型
+            //（docs/voice.md §自动启动；停止机器人后没有任何回收时机）。
+            // 面板内仍可手动点「启动」试听。
             if voiceSettings.replyEnabled,
                voiceSettings.cosyVoiceAutoStart,
+               store.isBotRunning,
                cosyVoiceInstall.state.isInstalled,
                !cosyVoiceVoices.isEmpty,
                !cosyVoiceRuntime.state.isRunning,
@@ -813,6 +817,9 @@ struct VoiceSettingsPanel: View {
     }
 
     private func refreshCosyVoiceState(loadVoices: Bool) async {
+        // 顺序：先刷新安装状态（失败原因由 Installer.refresh 保留到显式重试/成功），
+        // 再探测服务状态。本方法被 1–2 秒轮询与安装失败回调共用，安装失败后这里
+        // 不能把 `.failed` 覆盖成 `.notInstalled`，否则失败原因和「重试」按钮不可达。
         cosyVoiceInstall = await CosyVoiceInstaller.shared.refresh()
         cosyVoiceRuntime = await CosyVoiceRuntime.shared.refresh(
             endpoint: voiceSettings.effectiveCosyVoiceEndpoint,
@@ -918,6 +925,8 @@ struct VoiceSettingsPanel: View {
                 await refreshCosyVoiceState(loadVoices: false)
             } catch {
                 toast.show(error.localizedDescription, tone: .error)
+                // 失败状态与原因由 Installer 保留；下面刷新服务/音色状态不会清掉它，
+                // 用户仍能看到「安装失败：…」并点「重试」。
                 await refreshCosyVoiceState(loadVoices: false)
             }
         }

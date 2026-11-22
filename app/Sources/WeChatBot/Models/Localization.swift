@@ -45,6 +45,8 @@ enum L10n {
     /// mix never leaks 「，」/「：」 into the English UI.
     static var listSeparator: String { language == "en" ? ", " : "，" }
     static var keyValueSeparator: String { language == "en" ? ": " : "：" }
+    /// 拼接多个完整句子/警告时的分隔符；英文用 ASCII 分号，中文用全角分号。
+    static var sentenceSeparator: String { language == "en" ? "; " : "；" }
 
     static func resolvedLanguage(_ raw: String) -> String {
         switch AppLanguage(rawValue: raw) ?? .system {
@@ -95,6 +97,12 @@ enum L10n {
         ("^已将 (.*) 设为默认人格$", "Set $1 as the default persona"),
         ("^日志已导出到 (.*)$", "Logs exported to $1"),
         ("^安装失败：(.*)$", "Installation failed: $1"),
+        // 本地语音服务健康监控（2026-11-22）：瞬时失败会重试，连续失败才标记不可用。
+        ("^本地服务已退出$", "The local service exited"),
+        ("^本地服务健康检查失败（第 (\\d+)/(\\d+) 次），正在重试…$",
+         "Local service health check failed ($1/$2); retrying…"),
+        ("^本地服务连续 (\\d+) 次健康检查失败：(.*)$",
+         "The local service failed $1 health checks in a row: $2"),
         ("^还原失败：(.*)$", "Restore failed: $1"),
         ("^导出失败：(.*)$", "Export failed: $1"),
         ("^保存 API Key 失败：(.*)$", "Failed to save API key: $1"),
@@ -276,6 +284,9 @@ enum L10n {
         ("^已同步 (\\d+) 条更新$", "Synced $1 updates"),
         ("^已更新 (.*)$", "Updated $1"),
         ("^朋友圈请求失败：(.*)$", "Moments request failed: $1"),
+        // 自动发布失败（目标名 + MomentsStore.publishError 的原因）；先匹配带原因的形式。
+        ("^发布失败（(.*)）：(.*)$", "Publish failed ($1): $2"),
+        ("^发布失败：(.*)$", "Publish failed: $1"),
         ("^朋友圈返回内容无效：(.*)$", "Invalid Moments response: $1"),
         ("^朋友圈内容解析失败：(.*)$", "Failed to parse Moments content: $1"),
         ("^无法连接 bridge：(.*)$", "Can't connect to bridge: $1"),

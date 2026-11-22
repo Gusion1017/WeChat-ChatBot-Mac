@@ -93,7 +93,7 @@ struct SchedulesPanel: View {
                     ForEach(filteredTasks) { task in
                         ScheduleRow(
                             task: task,
-                            nextFire: task.nextFireAt ?? ScheduleMath.nextFire(for: task),
+                            nextFire: nextFire(for: task),
                             conversationLabel: conversationLabel(for: task),
                             onToggle: { enabled in setEnabled(task, enabled) },
                             onEdit: {
@@ -183,6 +183,18 @@ struct SchedulesPanel: View {
         editingTask = draft
     }
 
+    /// 行内「下次」时间。
+    ///
+    /// task.nextFireAt 是运行期缓存：机器人停止后它可能是上次运行留下的过去时刻，
+    /// 停用任务也不会被清空。未运行 / 已停用时按当前配置即时估算，避免显示过期时间。
+    private func nextFire(for task: ScheduledTask) -> Date? {
+        guard task.enabled else { return nil }
+        if !store.isBotRunning {
+            return ScheduleMath.nextFire(for: task)
+        }
+        return task.nextFireAt ?? ScheduleMath.nextFire(for: task)
+    }
+
     private func save(_ task: ScheduledTask) {
         if let index = store.schedules.firstIndex(where: { $0.id == task.id }) {
             store.schedules[index] = task
@@ -191,19 +203,19 @@ struct SchedulesPanel: View {
             store.schedules.append(task)
             toast.show("定时任务已添加", tone: .success)
         }
-        store.persist()
+        store.persistSchedules()
     }
 
     private func setEnabled(_ task: ScheduledTask, _ enabled: Bool) {
         guard let index = store.schedules.firstIndex(where: { $0.id == task.id }) else { return }
         store.schedules[index].enabled = enabled
-        store.persist()
+        store.persistSchedules()
     }
 
     private func delete(_ task: ScheduledTask) {
         pendingDelete = nil
         store.schedules.removeAll { $0.id == task.id }
-        store.persist()
+        store.persistSchedules()
         toast.show("定时任务已删除", tone: .info, symbol: "trash")
     }
 }

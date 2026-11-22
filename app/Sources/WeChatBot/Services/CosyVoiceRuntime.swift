@@ -692,6 +692,12 @@ actor CosyVoiceRuntime {
     /// 避免常驻服务每天 1.7 万次无意义探活（唤醒/能耗/日志噪声）。
     static let idleMonitorInterval: TimeInterval = 30
     static let idleThreshold: TimeInterval = 120
+    /// 连续探测失败达到该次数才把「进程仍在运行但持续无响应」判为失败。
+    ///
+    /// 单次 `/health` 超时、连接被拒等临时故障同样会被 `probe` 归为 `.notRunning`，
+    /// 只算瞬时抖动：保留监控继续重试，避免一次探测超时就把状态永久钉在 `.failed`
+    /// （回复路径看到 `failureReason != nil` 后不再自动拉起语音服务）。
+    static let maxConsecutiveProbeFailures = 3
     static let stopGraceSeconds: TimeInterval = 5
     static let maxLogLines = 200
 
@@ -712,6 +718,8 @@ actor CosyVoiceRuntime {
     private var startTask: Task<CosyVoiceHealth, Error>?
     /// 最近一次合成活动时间；只用它决定健康轮询频率（不影响服务生命周期）。
     private var lastSynthesisAt = Date.distantPast
+    /// 连续探测失败计数；任意一次探测成功（含 `loading`）或进程退出即清零。
+    private var consecutiveProbeFailures = 0
 
     init(
         client: CosyVoiceClient? = nil,
@@ -786,6 +794,7 @@ actor CosyVoiceRuntime {
         monitorTask?.cancel()
         monitorTask = nil
         expectedTermination = true
+        consecutiveProbeFailures = 0
 
         let current = process
         let wasOwned = ownsProcess
@@ -1076,11 +1085,13 @@ actor CosyVoiceRuntime {
         state = .running(health)
         currentEndpoint = endpoint
         ownsProcess = owned
+        consecutiveProbeFailures = 0
         CosyVoiceRuntimeCache.setReady(true)
     }
 
     private func handleProcessExit(_ status: Int32) {
         lastExitStatus = status
+        consecutiveProbeFailures = 0
         guard !expectedTermination else { return }
         if state.isRunning || state.isStarting {
             appendLog("服务进程退出（退出码 \(status)）")
@@ -1119,18 +1130,39 @@ actor CosyVoiceRuntime {
         lastSynthesisAt = Date()
     }
 
-    /// 返回 false 时停止监控（服务已退出/已由其他路径接管）。
+    /// 单次健康监控；返回 false 表示停止监控。
     private func monitorTick(endpoint: URL) async -> Bool {
-        guard state.isRunning else { return false }
+        await monitorTick(endpoint: endpoint) {
+            await self.probe(endpoint: endpoint)
+        }
+    }
+
+    /// 可注入 probe 的监控单步（单测直接驱动状态机，不需要真的起进程/等轮询间隔）。
+    ///
+    /// P2-2：`probe` 会把 `/health` 超时、连接失败等同样归为 `.notRunning`，
+    /// 单次探测失败 **不等于** 服务失败。只有**本 App 持有的子进程退出**才立即
+    /// 判 `.failed`；其余探测失败按 `maxConsecutiveProbeFailures` 计数重试，
+    /// 避免一次抖动就永久失败、让回复路径不再自动拉起语音服务。
+    func monitorTick(
+        endpoint: URL,
+        probe: @Sendable () async -> CosyVoiceProbeResult
+    ) async -> Bool {
+        // 自有进程还活着时持续监控（含「连续失败判 failed」后的自愈窗口）；
+        // 复用的外部服务只在 running/starting 时监控。
+        guard state.isRunning || state.isStarting || ownsProcess else { return false }
+
+        // 自己持有的子进程退出是确定性失败：进程都没了，继续探测没有意义。
         if ownsProcess, let process, !process.isRunning {
             state = .failed("本地服务已退出")
             CosyVoiceRuntimeCache.setReady(false)
             ownsProcess = false
             self.process = nil
+            consecutiveProbeFailures = 0
             CosyVoiceProcessRegistry.clear(role: .service)
             return false
         }
-        switch await probe(endpoint: endpoint) {
+
+        switch await probe() {
         case .running(let health):
             guard health.isQwen3TTSEngine else {
                 // 端口上的服务被换成了旧版/其他引擎：立刻失效，避免继续用它合成。
@@ -1139,22 +1171,64 @@ actor CosyVoiceRuntime {
                 CosyVoiceRuntimeCache.setReady(false)
                 return false
             }
+            consecutiveProbeFailures = 0
             state = .running(health)
             CosyVoiceRuntimeCache.setReady(true)
             return true
         case .loading(let message):
+            // 服务明确回复「加载中」= 进程仍在工作，不算故障。
+            consecutiveProbeFailures = 0
             state = .starting(message.isEmpty ? "服务重新加载模型中…" : message)
             CosyVoiceRuntimeCache.setReady(false)
             return true
-        case .notRunning:
-            state = .failed("本地服务已无响应")
-            CosyVoiceRuntimeCache.setReady(false)
-            return false
+        case .notRunning(let reason):
+            return handleProbeFailure(reason: reason)
         case .unexpected(let reason):
+            // 端口可达但返回非预期内容（多半是端口被其他程序占用/引擎不匹配），
+            // 与启动路径一致：这是确定性错误，立即失败并停止监控。
             state = .failed(reason)
             CosyVoiceRuntimeCache.setReady(false)
             return false
         }
+    }
+
+    /// `.notRunning` 探测结果：计入连续失败，未达阈值时保留监控继续重试。
+    ///
+    /// - 本 App 持有的进程仍在运行：临时故障，状态置 `.starting`（提示正在重试）；
+    ///   连续失败达到 `maxConsecutiveProbeFailures` 才判 `.failed`（进程活着但持续
+    ///   无响应）。判失败后**不停止监控**，服务恢复响应时自动回到 `.running`，
+    ///   避免「一次超时 → 永久失败 → 回复路径不再自动拉起」的静默降级。
+    /// - 复用的外部服务（本 App 不持有进程）：达到阈值后置 `.stopped`（不是
+    ///   `.failed`），回复路径仍可自动拉起本 App 的语音服务。
+    private func handleProbeFailure(reason: String) -> Bool {
+        consecutiveProbeFailures += 1
+        let maxFailures = Self.maxConsecutiveProbeFailures
+        let detail = reason.isEmpty ? "健康检查无响应" : reason
+        // 探测失败期间不能继续用该服务合成，先清就绪缓存；恢复后由成功分支重新置位。
+        CosyVoiceRuntimeCache.setReady(false)
+
+        if consecutiveProbeFailures < maxFailures {
+            appendLog("健康检查失败（第 \(consecutiveProbeFailures)/\(maxFailures) 次，继续重试）：\(detail)")
+            state = .starting(
+                "本地服务健康检查失败（第 \(consecutiveProbeFailures)/\(maxFailures) 次），正在重试…")
+            return true
+        }
+
+        if ownsProcess {
+            if consecutiveProbeFailures == maxFailures {
+                let message = "本地服务连续 \(maxFailures) 次健康检查失败：\(detail)"
+                appendLog("监控判定失败：\(message)")
+                state = .failed(message)
+            }
+            // 已达阈值：保持 failed 但继续监控，服务恢复响应后自动回到 running。
+            return true
+        }
+
+        if consecutiveProbeFailures == maxFailures {
+            appendLog("复用的本地服务连续 \(maxFailures) 次健康检查失败，标记为未运行：\(detail)")
+            state = .stopped
+        }
+        return false
     }
 
     // MARK: 探测

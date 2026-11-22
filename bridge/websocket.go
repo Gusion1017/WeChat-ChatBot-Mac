@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -31,6 +32,16 @@ const wsWriteTimeout = 5 * time.Second
 // wsConnWait 等待旧连接退出的窗口：App 断线重连时旧连接 handler 可能尚未返回，
 // 直接判「已有连接」会误拒正常重连；超过窗口仍被占用才拒绝新连接。
 const wsConnWait = 300 * time.Millisecond
+
+// wsPingInterval 是服务端 ping 周期，wsReadTimeout 是读空闲上限（默认 2×ping）。
+// 半开连接（对端休眠/进程被杀/网络切换）上 ReadMessage 永远不会返回，全局 conn
+// 一直非空，App 重连只会得到 409。服务端定时 ping、客户端回 pong 即续期读截止
+// 时间；超过上限没收到 pong/入站消息就主动断开并清空全局 conn，让重连自愈。
+// 两个值都是变量，便于 httptest 用毫秒级窗口覆盖。
+var (
+	wsPingInterval = 15 * time.Second
+	wsReadTimeout  = 30 * time.Second
+)
 
 // truncateForLog 把 s 截断到最多 maxRunes 个字符（rune），超出部分以 "..." 结尾。
 // 只用于日志预览，不改变任何实际发送/解析的数据。
@@ -169,6 +180,34 @@ func wsWriteMessage(messageType int, data []byte) error {
 	return nil
 }
 
+// wsWriteControl 在 wsWriteMu 内写控制帧（ping），与数据帧共用同一把写锁，
+// 避免 ping 与事件推送并发写坏 gorilla 连接。
+func wsWriteControl(c *websocket.Conn, messageType int, data []byte) error {
+	wsWriteMu.Lock()
+	defer wsWriteMu.Unlock()
+	deadline := time.Now().Add(wsWriteTimeout)
+	return c.WriteControl(messageType, data, deadline)
+}
+
+// wsPingLoop 周期性给当前连接发 ping。写失败说明连接已半开/对端不读，
+// 主动 dropWSConn 让读循环退出、App 重连不再被 409 卡住；stop 关闭即返回。
+func wsPingLoop(c *websocket.Conn, stop <-chan struct{}) {
+	ticker := time.NewTicker(wsPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := wsWriteControl(c, websocket.PingMessage, nil); err != nil {
+				Error("WS ping 写入失败，关闭连接", "err", err)
+				dropWSConn(c)
+				return
+			}
+		}
+	}
+}
+
 type OneBotWSMsg struct {
 	Action string    `json:"action"`
 	Echo   string    `json:"echo"`
@@ -207,17 +246,46 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close()
 		return
 	}
-	defer dropWSConn(c)
 
 	c.SetReadLimit(wsReadLimit)
+
+	// 连接健康：读截止时间由 pong（以及每条入站消息）续期；ping 循环保证即使
+	// App 长时间不发动作，也能发现半开连接。退出时先通知 ping 循环停止，再清空
+	// 全局 conn，避免 ping 在锁内写一个已关闭的连接。
+	pingStop := make(chan struct{})
+	defer func() {
+		close(pingStop)
+		dropWSConn(c)
+	}()
+	_ = c.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	c.SetPongHandler(func(string) error {
+		return c.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	})
+	// App 每 20s 主动发一次 ping（OneBotClient.pingInterval）。收到 ping 也续期读
+	// 截止时间，这样即使某些客户端/系统网络栈不回 pong，只要还有 ping 就不会被
+	// 误判断线；回包保持 WebSocket 协议要求的 pong（替代 gorilla 默认处理器）。
+	c.SetPingHandler(func(appData string) error {
+		_ = c.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return wsWriteControl(c, websocket.PongMessage, []byte(appData))
+	})
+	go wsPingLoop(c, pingStop)
 
 	for {
 		m := new(OneBotWSMsg)
 		_, msgByte, err := c.ReadMessage()
 		if err != nil {
-			Error("读取失败", "err", err)
+			// 读空闲超时是最常见的「半开连接」形态：对端进程被冻结/休眠后
+			// socket 没有 FIN/RST，只有读截止时间能发现。这里与普通断线区分日志，
+			// 便于排障时判断是网络还是 App 主动关闭。
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				Warn("WS 读空闲超时，主动断开连接", "timeout", wsReadTimeout)
+			} else {
+				Error("读取失败", "err", err)
+			}
 			break
 		}
+		_ = c.SetReadDeadline(time.Now().Add(wsReadTimeout))
 
 		logEventDebug("收到消息", msgByte)
 		err = json.Unmarshal(msgByte, m)
@@ -259,7 +327,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "get_group_member_info":
-			nickname, _ := userID2NicknameMap.Load(m.Params.GroupID + "_" + m.Params.UserID)
+			// 未命中时返回空字符串而不是 null（docs/bridge.md §3.2）：sync.Map.Load 的
+			// 第二个返回值不能丢，否则 map 里是 nil interface，JSON 编码成 "nickname":null，
+			// 按 String 解析的 OneBot 客户端会解包失败。
+			nickname := ""
+			if value, ok := userID2NicknameMap.Load(m.Params.GroupID + "_" + m.Params.UserID); ok {
+				nickname, _ = value.(string)
+			}
 			err = wsWriteJSON(map[string]any{
 				"echo":   m.Echo,
 				"status": "ok",
@@ -415,10 +489,23 @@ func SendWS(req *WSParams) error {
 	return nil
 }
 
+// testWSBodyMaxBytes 是 POST /test_ws 的请求体上限。
+// /test_ws 无鉴权、把 body 原样写进 App 的 WS 连接，只用于本机联调；1 MiB 足够
+// 注入任意事件负载，同时防止本机异常进程用超大 body 占满 bridge 内存。
+var testWSBodyMaxBytes int64 = 1 << 20
+
 func testWebSocket(w http.ResponseWriter, r *http.Request) {
-	jsonData, err := io.ReadAll(r.Body)
+	body := http.MaxBytesReader(w, r.Body, testWSBodyMaxBytes)
+	jsonData, err := io.ReadAll(body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "请求体过大", http.StatusRequestEntityTooLarge)
+			Error("test_ws 请求体过大", "limit", testWSBodyMaxBytes)
+			return
+		}
 		Error("读取消息失败", "err", err)
+		http.Error(w, "读取请求体失败", http.StatusBadRequest)
 		return
 	}
 

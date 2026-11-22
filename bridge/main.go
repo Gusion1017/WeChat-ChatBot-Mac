@@ -45,6 +45,9 @@ func main() {
 		initFrida()
 	}
 	go SendWorker()
+	// 入站事件按到达顺序串行推送（见 incoming.go 的 runIncomingWorker）：
+	// 旧实现每个事件一个 goroutine，同一会话的连续消息会乱序。
+	startIncomingWorker()
 	go cleanExpiredDownloads()
 
 	http.HandleFunc("/send_private_msg", sendHandler)
@@ -365,7 +368,9 @@ func loadJs() {
 							if nested, ok := pMap["payload"].(map[string]interface{}); ok {
 								event = nested
 							}
-							go HandleIncomingMessage(event)
+							// 只入队、不在这里同步推送：Frida message 回调还要处理
+							// upload_*_finish 等发送回包，不能被 App 侧 HTTP/WS 慢速拖住。
+							enqueueIncomingMessage(event)
 						case "upload_image_finish":
 							m := &SendMsg{
 								Type: "send_image",

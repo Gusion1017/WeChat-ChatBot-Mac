@@ -4,6 +4,65 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
+## [4.2.1] — 2026-11-22
+
+### 修复
+
+- **逐功能审查修复（2026-11-22，静态审查 + 单元测试）**：
+  - `OneBotClient` 连接失败后未取消 `connectTimeoutTask`：退避 ≥15s 时旧超时任务会误报「连接超时」，
+    并把刚排好的重连替换成更长退避；现在断开时一并取消。
+  - 内存只加载最近 300 个会话：来自更早会话的新消息会以默认值整行 UPSERT，覆盖该会话已保存的
+    AI 开关 / 备注 / 人格 / 模型 / 独立工作时段 / 置顶 / 图片开关 / 自定义标题；现在先按 id 回查数据库。
+    定时任务的目标会话不在内存时同样回查（此前会静默不再发送）。
+  - 生成回复期间到达的新消息被直接丢弃（文档写「按会话串行」）：现在每会话保留最新一条待回复槽位，
+    本轮结束后再判定一次；同时修正历史已包含本轮消息时提示词重复注入（A / B / A）。
+  - 发送失败也消耗冷却与每分钟配额：现在只有至少成功发出一段才 `noteReply`。
+  - 删除定时任务（机器人停止时删掉最后一个）会在重启后被数据库崩溃恢复镜像复活：新增
+    `AppStore.persistSchedules()`，设置页每次任务变更同时更新数据库镜像。
+  - 手动发送失败仍提示「已提交发送」并清空草稿；清理聊天、删除会话 / 记忆 / 记忆卡、压缩记忆失败
+    也提示成功：相关 API 改为返回成功与否，失败时保留面板 / 草稿并给可行动的错误提示。
+  - 定时任务「下次」把未来时刻渲染成「刚刚」（`UIFormat.relative` 只处理过去时间）：新增未来分支
+    （即将 / N 分钟后 / 今天 / 明天 / 星期几 HH:mm）。
+  - 朋友圈自动互动把「超时 / 结果未知」当可重试失败，10 分钟后换文案重复评论（App 无法删除）：
+    结果未知一律标记已处理、不再重试（与手动评论的约定一致）。
+  - `ProcessRunner` 旧实现用 `String(data:encoding:.utf8)` 解码管道块：块边界切到多字节字符时
+    整块丢弃；改为按字节切行后逐行解码，并修复 CRLF 行被 Swift Character grapheme 合并的问题。
+    新增 `ProcessLineBufferTests`（4 项）。
+  - bridge：`WechatMessage` 未声明 `group_name` / `member_wxid`，`HandleMsg` 往返会静默丢弃
+    （文档承诺的群名永远收不到）；`get_group_member_info` 未命中返回 `nickname:null`；
+    `/fetch_image` 队列繁忙时先删登记导致重试必然「已过期」；`reply_message:null` 时 panic。
+  - 英文界面：补齐删除微信备份确认、Hook 端口说明、语音发送状态、旧版 TTS 残留等组件参数文案；
+    列表 / 句子分隔符改用 `L10n.listSeparator` / `sentenceSeparator`；`LocalizationCoverageTests`
+    新增全量校验（译文不得残留中文、key 与译文的格式占位符必须一致）。
+  - Gadget 端口改动提示改为「需要重新安装 Hook」，不再谎称重启机器人即可生效（端口在安装 Hook
+    时写入微信 bundle）；设置向导在安装 / 备份期间禁用「跳过向导」、语言切换与「使用该路径」；
+    定时列表在机器人未运行或任务停用时不再显示过期 `nextFireAt`。
+  - 测试：Swift 1017 项通过（新增 7 项），Go 全量测试通过。
+
+- **审查第二轮修复（2026-11-22，用户确认方向后）**：
+  - 数据备份一致性：导出前新增 `prepareDataBackup()`，对账号库与全部记忆卡执行
+    `PRAGMA wal_checkpoint(TRUNCATE)`；SQLite 主库 / `-wal` / `-shm` 在 staging 阶段改为拷贝
+    （硬链接会随数据库实时变化），机器人运行中也能得到一致快照。新增 `SQLiteCheckpointTests`（3 项）。
+  - 朋友圈自动发布：bridge 每日 50 条改为**全局**口径（所有已选对象合计），`dailyQuotaExhausted`、
+    `fire` 与「今日配额」快照统一按总量计算；发布失败把 `MomentsStore.publishError` 的
+    可展示原因写进「上次结果」；关闭朋友圈/写操作/互动/R3/写链路未验证时都清空自动互动启用时间，
+    重新开启不再补评关闭期间的历史内容。
+  - 群聊触发：只剩一种触发方式时把该 chip 置灰并在卡片内说明「至少保留一种触发方式」，
+    不再出现点击无反馈；`FilterChip` 新增 `isEnabled` 支持。
+  - 语音服务健康监控：一次 `/health` 探测超时不再永久 `.failed` 并停止监控——只有自有子进程退出才立即失败，
+    探测失败按连续 3 次阈值重试且失败后仍保留监控可自愈；复用外部服务持续无响应标记 `.stopped`（不阻断自动拉起）。
+  - 语音安装失败态：`CosyVoiceInstaller.refresh()` 不再每秒轮询时清掉 `.failed`，失败原因与「重试」按钮保留到
+    显式重试/成功/删除。
+  - 应用内更新：关闭「自动检查」后打开更新页仍会补拉一次 Release 并展示发布说明（不弹提示、不写通知标记），
+    空态文案与开关一致；`docs/updates.md` 的节流说明同步。
+  - 文档：`docs/accounts.md`、`docs/core-services.md`、`docs/sns.md`、`docs/updates.md` 同步备份与配额/水位/失败原因/更新页口径。
+  - bridge/hook：WebSocket 增加 15s 服务端 ping + 30s 读空闲超时（半开连接主动断开并清理全局 conn，重连不再永久 409）；
+    `/test_ws`（1MiB，未鉴权）、`/fetch_image`/`/fetch_voice`（64KiB）、`/send_voice`（16MiB）
+    补 `http.MaxBytesReader` 与 413；入站事件改为单 worker 串行队列（同一会话消息不再乱序）；
+    R3 模式发送图片/视频/文件由 hook 返回 `unsupported:media`，bridge 映射为 501 `media_send_unsupported`
+    并清理本条 base64 媒体临时文件（App 提示「R3 仅文本与语音」）。
+  - 测试：Swift 1032 项通过（新增 15 项）；Go 全量测试通过（新增 WS/body 上限/队列/R3 媒体 4 个测试文件、16 个用例）。
+
 ## [4.2.0] — 2026-11-22
 
 ### 修复
@@ -1634,4 +1693,5 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...v4.2.0

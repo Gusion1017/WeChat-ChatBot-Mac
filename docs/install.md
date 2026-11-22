@@ -2,7 +2,7 @@
 
 > 本项目是 **macOS 原生 App + 微信 Hook**，不是双击即用的普通应用：GitHub 的「Download ZIP」默认只给
 > **源码**，不含已编译的 App、bridge 二进制和 Frida Gadget；非开发者请用 Releases 里的 App 压缩包，
-> 只有源码时按「源码构建」操作。当前发布版本：**4.2.0（build 38，2026-11-22）**，压缩包约 70 MB（66 MiB）。
+> 只有源码时按「源码构建」操作。当前发布版本：**4.2.1（build 39，2026-11-22）**，压缩包约 70 MB（66 MiB）。
 
 ## 1. 先确认环境
 
@@ -30,12 +30,12 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.0（约 70 MB / 66 MiB）**。
+发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.1（约 70 MB / 66 MiB）**。
 
-1. 下载 `WeChat-AI-4.2.0.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
+1. 下载 `WeChat-AI-4.2.1.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-4.2.0.zip.sha256
+   shasum -a 256 -c WeChat-AI-4.2.1.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）；下文分别示例。
@@ -169,13 +169,13 @@ bash scripts/build_app.sh
 bash scripts/package_release.sh      # 或 make release
 ```
 
-脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.0.zip` + `.sha256`）；
+脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.1.zip` + `.sha256`）；
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包，也可手动执行（版本号请按 Info.plist 替换）：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.0.zip"
-( cd dist && shasum -a 256 "WeChat-AI-4.2.0.zip" > "WeChat-AI-4.2.0.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.1.zip"
+( cd dist && shasum -a 256 "WeChat-AI-4.2.1.zip" > "WeChat-AI-4.2.1.zip.sha256" )
 ```
 
 签名与公证的预期：
@@ -191,7 +191,7 @@ bash scripts/build_app.sh
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-4.2.0.zip.sha256
+shasum -a 256 -c WeChat-AI-4.2.1.zip.sha256
 ```
 
 把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.0`，当前源码为

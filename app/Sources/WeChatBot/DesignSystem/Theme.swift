@@ -184,9 +184,24 @@ enum UIFormat {
     }
 
     /// Human friendly timestamp for logs, activity and schedules.
+    ///
+    /// 同时处理过去与未来：定时任务的「下次执行」是未来时刻，若直接用「刚刚」分支
+    /// （interval < 45 对负值也成立）会把任何未来时间显示成「下次 刚刚」。
     static func relative(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }
         let interval = now.timeIntervalSince(date)
+        if interval < 0 {
+            let ahead = -interval
+            let calendar = Calendar.current
+            if ahead < 60 { return L("即将") }
+            if ahead < 3600 { return Lf("%d 分钟后", max(1, Int(ahead / 60))) }
+            if calendar.isDateInToday(date) { return L("今天") + " " + time.string(from: date) }
+            if calendar.isDateInTomorrow(date) { return L("明天") + " " + time.string(from: date) }
+            if ahead < 7 * 86_400 {
+                return weekdayName(calendar.component(.weekday, from: date)) + " " + time.string(from: date)
+            }
+            return dateTime.string(from: date)
+        }
         if interval < 45 { return L("刚刚") }
         if interval < 3600 { return Lf("%d 分钟前", max(1, Int(interval / 60))) }
         let calendar = Calendar.current

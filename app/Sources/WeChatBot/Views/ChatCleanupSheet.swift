@@ -3,7 +3,8 @@ import SwiftUI
 /// 具体会话内的聊天记录清理确认：只删本地 `messages`，不碰记忆卡与全量记录。
 struct ChatCleanupSheet: View {
     let conversationTitle: String
-    let messageCount: Int
+    /// nil 表示条数读取失败；此时禁用确认，避免把「读不到」当成「没有记录」。
+    let messageCount: Int?
     let isBusy: Bool
     let onClear: () -> Void
 
@@ -33,9 +34,15 @@ struct ChatCleanupSheet: View {
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(conversationTitle).font(.callout.weight(.medium))
-                    Text(Lf("%d 条消息", messageCount))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let messageCount {
+                        Text(Lf("%d 条消息", messageCount))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(L("条数暂不可用，请重试"))
+                            .font(.caption)
+                            .foregroundStyle(Theme.warning)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -58,7 +65,7 @@ struct ChatCleanupSheet: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.danger)
                 .keyboardShortcut(.defaultAction)
-                .disabled(isBusy)
+                .disabled(isBusy || messageCount == nil)
             }
         }
         .padding(22)

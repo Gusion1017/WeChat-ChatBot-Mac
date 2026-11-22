@@ -12,9 +12,65 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// hookMediaUnsupportedMarker 是 hook 在 R3 模式下拒绝媒体发送时返回的可区分标记
+// （普通失败是 "fail"）。见 hook/script.js 的 triggerSendMediaMessage。
+const hookMediaUnsupportedMarker = "unsupported:media"
+
+// errMediaSendUnsupported 表示当前 hook 发送模式（R3）不支持图片/视频/文件。
+// /send_* 会把它映射成 HTTP 501 + error=media_send_unsupported（docs/bridge.md §3.3），
+// 不再是笼统的 500「send image failed」。
+var errMediaSendUnsupported = errors.New("media_send_unsupported")
+
+// pendingMediaTempPaths 记录 bridge 为 base64 媒体在 -image_path 下新建的临时文件。
+// 图片/视频/语音的最终发送结果要等 hook 的 upload_*_finish 异步回包，失败时按
+// target_id 取回路径并删除，避免微信账号目录里堆积孤儿文件。与 pendingResultMap
+// 相同，target_id 只保留最后一次；并发发往同一会话是已知限制。
+var pendingMediaTempPaths sync.Map
+
+// mediaSendUnsupportedResult 判断 hook 返回值是否为「R3 不支持媒体」标记。
+func mediaSendUnsupportedResult(result any) bool {
+	return strings.TrimSpace(fmt.Sprint(result)) == hookMediaUnsupportedMarker
+}
+
+// rememberMediaTempPath 登记本条 base64 媒体新建的临时文件，供最终发送失败时清理。
+func rememberMediaTempPath(targetID, path string) {
+	if targetID == "" || path == "" {
+		return
+	}
+	pendingMediaTempPaths.Store(targetID, path)
+}
+
+// cleanupMediaTempPath 删除并移除 target_id 对应的临时文件登记。
+func cleanupMediaTempPath(targetID string) {
+	if targetID == "" {
+		return
+	}
+	if value, ok := pendingMediaTempPaths.LoadAndDelete(targetID); ok {
+		path, _ := value.(string)
+		removeTempMediaFile(path)
+	}
+}
+
+// removeTempMediaFile 删除 bridge 为本条 base64 媒体新建在 -image_path 的临时文件。
+// 文件已不存在（例如同一 target 的后续发送已清理过）不算错误。
+func removeTempMediaFile(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		if !os.IsNotExist(err) {
+			Warn("删除媒体临时文件失败", "path", path, "err", err)
+		}
+		return
+	}
+	Info("已删除媒体临时文件", "path", path)
+}
 
 func SendWorker() {
 	defer func() {
@@ -95,6 +151,8 @@ func SendWechatMsg(m *SendMsg) {
 		// 比较（那样恒为真，图片永远判失败）。统一转文本比较，与 media.go/voice.go 一致。
 		if strings.TrimSpace(fmt.Sprint(result)) != "0" {
 			Error("上传图片失败", "target_id", targetId, "md5", md5Str, "result", result)
+			// 上传都没开始，微信不会再用这个文件：删除本次新建的临时文件。
+			removeTempMediaFile(targetPath)
 			sendErr = errors.New("upload image failed")
 			return
 		}
@@ -102,8 +160,20 @@ func SendWechatMsg(m *SendMsg) {
 			pendingResultMap.Store(targetId, m.ResultChan)
 			m.ResultChan = nil // 不让 defer 发送结果
 		}
+		// 上传是异步的：等 upload_image_finish → send_image 才有最终结果，
+		// 先登记路径，最终发送失败时由 cleanupMediaTempPath 清理。
+		rememberMediaTempPath(targetId, targetPath)
 		return
 	case "send_image":
+		// 最终发送失败（含 R3 不支持媒体）时删掉本条 base64 图片的临时文件；
+		// 成功时只移除登记、保留文件，避免 hook 的异步链路仍需读取时被提前删除。
+		defer func() {
+			if sendErr != nil {
+				cleanupMediaTempPath(targetId)
+			} else {
+				pendingMediaTempPaths.Delete(targetId)
+			}
+		}()
 		protoHex, err := BuildImgMsgProto(myWechatId, targetId, m.CdnKey, m.AesKey, m.Md5Key)
 		if err != nil {
 			Error("构建图片protobuf失败", "err", err)
@@ -113,6 +183,11 @@ func SendWechatMsg(m *SendMsg) {
 		payloadHex := BuildSendPayload(currTaskId, "img")
 		result := fridaScript.ExportsCall("triggerSendImgMessage", currTaskId, myWechatId, targetId, protoHex, payloadHex)
 		Info("📩 发送图片任务执行结果", "result", result, "task_id", currTaskId, "wechat_id", myWechatId, "target_id", targetId)
+		if mediaSendUnsupportedResult(result) {
+			Error("R3 模式不支持发送图片", "task_id", currTaskId, "target_id", targetId)
+			sendErr = errMediaSendUnsupported
+			return
+		}
 		if result != "1" {
 			Error("发送图片失败", "task_id", currTaskId, "target_id", targetId, "result", result)
 			sendErr = errors.New("send image failed")
@@ -145,6 +220,8 @@ func SendWechatMsg(m *SendMsg) {
 		// 同上传图片：RPC 返回 number，用文本化后比较，避免 "!= \"0\"" 恒真。
 		if strings.TrimSpace(fmt.Sprint(result)) != "0" {
 			Error("上传视频失败", "target_id", targetId, "md5", md5Str, "result", result)
+			// 上传失败时微信不会再读这个文件，直接清理本次新建的临时文件。
+			removeTempMediaFile(targetPath)
 			sendErr = errors.New("upload video failed")
 			return
 		}
@@ -152,8 +229,17 @@ func SendWechatMsg(m *SendMsg) {
 			pendingResultMap.Store(targetId, m.ResultChan)
 			m.ResultChan = nil
 		}
+		// 等 upload_video_finish → send_video 的最终结果；失败时清理临时文件。
+		rememberMediaTempPath(targetId, targetPath)
 		return
 	case "send_video":
+		defer func() {
+			if sendErr != nil {
+				cleanupMediaTempPath(targetId)
+			} else {
+				pendingMediaTempPaths.Delete(targetId)
+			}
+		}()
 		var duration, videoSize int32
 		if info, ok := videoInfoMap.LoadAndDelete(targetId); ok {
 			vi := info.(*VideoInfo)
@@ -169,6 +255,11 @@ func SendWechatMsg(m *SendMsg) {
 		payloadHex := BuildSendPayload(currTaskId, "video")
 		result := fridaScript.ExportsCall("triggerSendVideoMessage", currTaskId, myWechatId, targetId, protoHex, payloadHex)
 		Info("📩 发送视频任务执行结果", "result", result, "task_id", currTaskId, "wechat_id", myWechatId, "target_id", targetId, "duration", duration, "size", videoSize)
+		if mediaSendUnsupportedResult(result) {
+			Error("R3 模式不支持发送视频", "task_id", currTaskId, "target_id", targetId)
+			sendErr = errMediaSendUnsupported
+			return
+		}
 		if result != "1" {
 			Error("发送视频失败", "task_id", currTaskId, "target_id", targetId, "result", result)
 			sendErr = errors.New("send video failed")
@@ -215,6 +306,8 @@ func SendWechatMsg(m *SendMsg) {
 		silkData, voiceDurationMs, err := ConvertToSilk(rawAudio)
 		if err != nil {
 			Error("转换SILK格式失败", "err", err)
+			// 没有进入上传，微信不会再用这个文件：清理本次新建的临时文件。
+			removeTempMediaFile(targetPath)
 			sendErr = err
 			return
 		}
@@ -227,6 +320,7 @@ func SendWechatMsg(m *SendMsg) {
 		// 同上传图片/视频：RPC 返回 number，用文本化后比较，避免 "!= \"0\"" 恒真。
 		if strings.TrimSpace(fmt.Sprint(result)) != "0" {
 			Error("上传语音失败", "target_id", targetId, "result", result)
+			removeTempMediaFile(targetPath)
 			sendErr = errors.New("upload voice failed")
 			return
 		}
@@ -234,8 +328,17 @@ func SendWechatMsg(m *SendMsg) {
 			pendingResultMap.Store(targetId, m.ResultChan)
 			m.ResultChan = nil
 		}
+		// 等 upload_voice_finish → send_voice 的最终结果；失败时清理临时文件。
+		rememberMediaTempPath(targetId, targetPath)
 		return
 	case "send_voice":
+		defer func() {
+			if sendErr != nil {
+				cleanupMediaTempPath(targetId)
+			} else {
+				pendingMediaTempPaths.Delete(targetId)
+			}
+		}()
 		voiceHeaderHex := ""
 		if fridaScript != nil {
 			voiceHeaderHex = fmt.Sprint(fridaScript.ExportsCall("r3VoiceHeader"))
@@ -263,6 +366,13 @@ func SendWechatMsg(m *SendMsg) {
 			sendErr = err
 			return
 		}
+		// 文件发送失败（含 R3 不支持媒体）时清理本次新建的临时文件；成功时保留，
+		// 避免 hook 的异步 uploadappattach 仍需读取时被提前删除。
+		defer func() {
+			if sendErr != nil {
+				removeTempMediaFile(targetPath)
+			}
+		}()
 
 		chunks, fileInfo, err := BuildUploadAppAttachChunks(targetId, targetPath)
 		if err != nil {
@@ -279,6 +389,11 @@ func SendWechatMsg(m *SendMsg) {
 			chunkTaskId := atomic.AddInt64(&taskId, 1)
 			payloadHex := BuildSendPayload(chunkTaskId, "appattach")
 			result := fridaScript.ExportsCall("triggerUploadAppAttach", chunkTaskId, myWechatId, targetId, chunkHex, payloadHex)
+			if mediaSendUnsupportedResult(result) {
+				Error("R3 模式不支持发送文件", "chunk", i, "target_id", targetId)
+				sendErr = errMediaSendUnsupported
+				return
+			}
 			if result != "1" {
 				Error("uploadappattach分片发送失败", "chunk", i, "result", result)
 				sendErr = errors.New("upload app attach chunk failed")
@@ -322,6 +437,11 @@ func SendWechatMsg(m *SendMsg) {
 		payloadHex := BuildSendPayload(currTaskId, "file")
 		result := fridaScript.ExportsCall("triggerSendFileMessage", currTaskId, myWechatId, targetId, protoHex, payloadHex)
 		Info("📩 发送文件消息(simple)执行结果", "result", result, "task_id", currTaskId, "target_id", targetId)
+		if mediaSendUnsupportedResult(result) {
+			Error("R3 模式不支持发送文件", "task_id", currTaskId, "target_id", targetId)
+			sendErr = errMediaSendUnsupported
+			return
+		}
 		if result != "1" {
 			Error("发送文件失败(simple)", "task_id", currTaskId, "target_id", targetId, "result", result)
 			sendErr = errors.New("send file failed")

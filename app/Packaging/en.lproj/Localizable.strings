@@ -3624,3 +3624,59 @@
 "当前微信版本的朋友圈写链路尚未通过真机验证；自动发布已强制关闭（演练草稿不受影响），读取不受影响。" = "The Moments write path for this WeChat version has not been verified on a real device; automatic posting is force-disabled (dry-run drafts still work). Reading is unaffected.";
 "将删除 %@ 的官方微信备份。" = "This deletes the official WeChat backup for %@.";
 "文件 %@，占用 %@。" = "File %@, %@.";
+
+/* 2026-11-22 审查补充：语音发送状态、微信备份删除确认、Hook 端口说明、旧版 TTS 残留提示。 */
+
+"bridge 未连接" = "Bridge not connected";
+"缺少发送句柄：请手动发一条文字和一条语音" = "Missing send handles: send one text and one voice message manually";
+"缺少文本句柄：请手动发一条文字" = "Missing text handle: send one text message manually";
+"缺少语音句柄：请手动发一条语音" = "Missing voice handle: send one voice message manually";
+"未启用 R3 原生发送（语音会降级文字）" = "R3 native sending is off (voice replies fall back to text)";
+"可发送语音" = "Voice sending ready";
+"旧版 CosyVoice3 服务仍在运行，请先退出旧版/重启 App" = "The legacy CosyVoice3 service is still running. Quit the legacy service or restart the app.";
+"删除微信备份" = "Delete WeChat backup";
+"删除后无法用该版本备份还原微信；需要时可重新备份。" = "After deletion you can't restore WeChat from this version's backup; back up again if needed.";
+"Hook 监听端口；修改后需重新安装 Hook 才会生效，bridge 会连接该端口" = "Port the Hook listens on; changing it requires reinstalling the Hook. The bridge connects to this port.";
+
+/* 2026-11-22 审查补充：未来时间（定时任务「下次执行」）不再显示「刚刚」。 */
+
+"即将" = "Soon";
+"%d 分钟后" = "in %d min";
+
+/* 2026-11-22 审查补充：清理/删除失败不再伪装成功；条数读取失败。 */
+
+"清理聊天记录失败，请查看运行日志后重试" = "Failed to clear the chat history. Check the run log and try again.";
+"删除聊天失败，请查看运行日志后重试" = "Failed to delete the chat. Check the run log and try again.";
+"压缩失败，请查看运行日志" = "Compression failed. Check the run log.";
+"删除记忆失败，请查看运行日志" = "Failed to delete the memory. Check the run log.";
+"删除记忆卡失败，请查看运行日志" = "Failed to delete the memory card. Check the run log.";
+"条数暂不可用，请重试" = "Message count is unavailable. Try again.";
+
+/* 2026-11-22 审查补充：Gadget 端口只在安装 Hook 时写入微信，重启机器人不生效。 */
+
+"Gadget 端口已修改：端口在安装 Hook 时写入微信，需要重新「备份并安装 Hook」后才会生效；仅重启机器人不会生效" = "Gadget port changed: the port is written into WeChat when the Hook is installed, so back up and reinstall the Hook for it to take effect. Restarting the bot alone is not enough.";
+
+/* 2026-11-22 审查补充：朋友圈自动互动遇到「结果未知」时停止重试，避免重复评论。 */
+
+"发送结果未知，已停止重试以避免重复：%@" = "Send result unknown; stopped retrying to avoid a duplicate: %@";
+
+/* 2026-11-22 审查补充：未适配版本的安装/启动说明与手动发送失败兜底。 */
+
+"当前微信 %@ 不在适配列表（%@）。安装会被阻止，请换回受支持版本；若已安装 Hook，可在下方「版本配置文件」指定自定义配置后尝试启动。" = "WeChat %@ is not in the supported list (%@). Installation is blocked, so switch back to a supported version. If the Hook is already installed, you can point to a custom configuration below and try starting.";
+"消息发送失败，请查看运行日志" = "Message send failed. Check the run log.";
+
+/* 2026-11-22 审查补充：bridge 每日 50 条是全局上限（所有好友合计）。 */
+
+"今天已发 %d 次，达到 bridge 每日 %d 条全局上限，本轮未发送" = "Posted %d times today, hitting the bridge's daily global limit of %d. Nothing was sent this round.";
+
+/* 2026-11-22 审查补充：群聊触发至少保留一种的可见说明。 */
+
+"至少保留一种触发方式；当前这种方式不能取消。" = "At least one trigger is required; the last remaining trigger can't be turned off.";
+
+/* 2026-11-22 审查补充：关闭自动检查后更新页的说明。 */
+
+"自动检查已关闭；打开本页仍会加载最新发布说明，也可以立即检查。" = "Auto-check is off. Opening this page still loads the latest release notes; you can also check now.";
+
+/* 2026-11-22 审查补充：bridge R3 模式的媒体发送限制。 */
+
+"R3 原生发送当前只支持文本与语音；图片/视频/文件发送未实现" = "R3 native sending currently supports text and voice only; image/video/file sending is not implemented.";

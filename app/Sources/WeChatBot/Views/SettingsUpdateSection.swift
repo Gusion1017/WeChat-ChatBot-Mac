@@ -25,6 +25,7 @@ struct SettingsUpdateSection: View {
             updates.reloadSettings()
             // 重启后 6 小时节流内不会自动检查，但更新页仍应能展示本版本更新内容：
             // 缺少检查结果时补拉一次（只读 latest，不改自动检查节奏）。
+            // 关闭「自动检查更新」时同样补拉：它只停掉后台自动检查，页面仍要展示发布说明。
             await updates.refreshIfNeeded(loadReleaseInfo: true)
         }
         .sheet(isPresented: $showInstallConfirmation) {
@@ -171,7 +172,9 @@ struct SettingsUpdateSection: View {
             SettingsSection(title: "更新检查") {
                 SettingsRow(
                     title: "尚未检查更新",
-                    subtitle: "启动 App 后自动检查；也可以立即检查。",
+                    subtitle: updates.autoCheckEnabled
+                        ? "启动 App 后自动检查；也可以立即检查。"
+                        : "自动检查已关闭；打开本页仍会加载最新发布说明，也可以立即检查。",
                     symbol: "questionmark.circle",
                     tint: .secondary
                 ) {

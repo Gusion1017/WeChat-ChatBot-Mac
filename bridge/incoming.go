@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"runtime/debug"
 	"strings"
+	"sync"
 )
 
 // isChatroomID 微信群 ID 契约：一律以 @chatroom 结尾（大小写不敏感）。
@@ -28,6 +30,57 @@ func sanitizeIncomingChatIDs(payload map[string]interface{}) {
 	}
 	if patChat, _ := payload["pat_chat_wxid"].(string); patChat != "" && !isChatroomID(patChat) {
 		payload["pat_chat_wxid"] = ""
+	}
+}
+
+// incomingEventQueueSize 是入站事件队列容量。1024 足够覆盖 App 侧 HTTP 短暂变慢
+// （单条 SendHttpReq 预算 10s）时的积压；队列本身只存 map 指针，不复制消息体。
+const incomingEventQueueSize = 1024
+
+// incomingEvents 串行化入站事件：hook 的 incoming_message 由 Frida message 回调
+// 投递，旧实现直接 go HandleIncomingMessage，多个 goroutine 完工顺序不确定，
+// 同一会话的连续消息可能乱序（App 侧会话列表/上下文顺序错乱）。这里用单 worker
+// channel 按入队顺序处理，读循环只做非阻塞入队（见 enqueueIncomingMessage），
+// 不等待真实推送完成。
+var incomingEvents = make(chan map[string]interface{}, incomingEventQueueSize)
+
+var incomingWorkerOnce sync.Once
+
+// startIncomingWorker 启动唯一的入站事件消费者（幂等）。main 启动时显式调用一次，
+// 第一个事件到达时 enqueueIncomingMessage 也会兜底启动，避免测试/旧调用路径漏启。
+func startIncomingWorker() {
+	incomingWorkerOnce.Do(func() {
+		go runIncomingWorker(incomingEvents, HandleIncomingMessage)
+	})
+}
+
+// enqueueIncomingMessage 把事件交给串行 worker。
+//
+// 队列满时阻塞投递而不是丢弃：聊天消息丢一条用户就永远看不到，而正常负载下
+// worker 远快于到达速度；只有 App 侧 HTTP 接收长时间卡住才会积压，此时让 Frida
+// 回调短暂背压优于静默丢事件（日志会先告警，便于定位 App 侧卡顿）。
+func enqueueIncomingMessage(payload map[string]interface{}) {
+	startIncomingWorker()
+	select {
+	case incomingEvents <- payload:
+	default:
+		Warn("入站事件队列已满，等待消费", "capacity", cap(incomingEvents))
+		incomingEvents <- payload
+	}
+}
+
+// runIncomingWorker 串行消费 ch 直到关闭；单独一层便于单测验证顺序与串行性。
+// 单条事件 panic 只记日志并继续消费：否则一条坏事件会让整个入站链路永久停摆。
+func runIncomingWorker(ch <-chan map[string]interface{}, handle func(map[string]interface{})) {
+	for payload := range ch {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					Error("入站事件处理 panic", "err", r, "stack", string(debug.Stack()))
+				}
+			}()
+			handle(payload)
+		}()
 	}
 }
 

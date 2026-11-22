@@ -1143,7 +1143,7 @@ struct CosyVoiceVoiceEditorSheet: View {
             }
         }
         if !failures.isEmpty {
-            errorText = Lf("以下音频未能加入：%@", failures.joined(separator: "；"))
+            errorText = Lf("以下音频未能加入：%@", failures.joined(separator: L10n.sentenceSeparator))
         } else if stoppedForBudget {
             errorText = L("参考音总长已达 30 秒，请先删除或缩短参考音。")
         } else if addedIDs.count < urls.count {

@@ -452,6 +452,11 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
 
     private func handleDisconnectLocked(reason: String) {
         guard running else { return }
+        // 失败的连接会留下仍在计时的 connectTimeoutTask。若不取消：退避 ≥ connectTimeout
+        // 时（连续失败 5 次后 16s > 15s）它会再次触发「连接超时」并把刚排好的重连替换成
+        // 更长的退避（16s → 30s），恢复时间被成倍拉长。
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
         if connected { notifyLog(.warning, "OneBot 连接断开：\(reason)") }
         connected = false
         receiveTask?.cancel()
@@ -650,7 +655,9 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
         }
         let body = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw OneBotError.sendFailed("HTTP \(httpResponse.statusCode) \(body.prefix(300))")
+            throw OneBotError.sendFailed(
+                Self.sendFailureReason(data: data, statusCode: httpResponse.statusCode)
+            )
         }
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let status = object["status"] as? String {
@@ -686,6 +693,25 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
             throw OneBotError.badResponse("非 HTTP 响应")
         }
         return try Self.parseImageFetchResponse(data: data, statusCode: httpResponse.statusCode)
+    }
+
+    /// 从 bridge 的失败体提取可展示原因（纯函数，便于单测）。
+    ///
+    /// bridge 的失败体是 `{"status":"failed","error":"<给用户看的说明或错误码>"}`：
+    /// - 已知错误码（如 `media_send_unsupported`，R3 模式发送图片/视频/文件）翻译成用户文案；
+    /// - 其它情况直接展示 bridge 的 error（中文）；
+    /// - 非 JSON 响应回退到 HTTP 状态 + 响应片段，便于排障。
+    static func sendFailureReason(data: Data, statusCode: Int) -> String {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let raw = ((object["error"] as? String) ?? (object["message"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw == "media_send_unsupported" {
+                return L("R3 原生发送当前只支持文本与语音；图片/视频/文件发送未实现")
+            }
+            if !raw.isEmpty { return raw }
+        }
+        return "HTTP \(statusCode) \(body.prefix(300))"
     }
 
     /// Builds the `POST /fetch_image` request. Pure function so it can be unit-tested.

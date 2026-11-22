@@ -1145,7 +1145,17 @@ func fetchVoiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req fetchVoiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body := http.MaxBytesReader(w, r.Body, fetchBodyMaxBytes)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeVoiceJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"ok":    false,
+				"error": "请求体过大",
+			})
+			Error("语音获取请求体过大", "limit", fetchBodyMaxBytes)
+			return
+		}
 		writeVoiceJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":    false,
 			"error": "无效的 JSON",
@@ -1562,6 +1572,12 @@ func sendVoiceSilk(targetID string, silkData []byte) (int, error) {
 	return int(durationMs), nil
 }
 
+// sendVoiceBodyMaxBytes 是 /send_voice 的请求体上限。
+// PCM 硬上限 120s@24k = 5.76MB（voice.go maxVoiceSendPCMBytes），base64 后约 7.7MB；
+// 16 MiB 给 JSON 与时长余量留出空间，同时兜底异常超大 body（http.MaxBytesReader）。
+// 测试可临时改小。
+var sendVoiceBodyMaxBytes int64 = 16 << 20
+
 // sendVoiceRequest 是 POST /send_voice（/send_private_msg voice 段的别名端点）请求体。
 type sendVoiceRequest struct {
 	UserID     string `json:"user_id"`
@@ -1593,7 +1609,17 @@ func sendVoiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sendVoiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body := http.MaxBytesReader(w, r.Body, sendVoiceBodyMaxBytes)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeVoiceJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"ok":    false,
+				"error": "请求体过大",
+			})
+			Error("语音发送请求体过大", "limit", sendVoiceBodyMaxBytes)
+			return
+		}
 		writeVoiceJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":    false,
 			"error": "无效的 JSON",

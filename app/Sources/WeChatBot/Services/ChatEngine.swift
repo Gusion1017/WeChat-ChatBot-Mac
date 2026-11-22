@@ -400,7 +400,10 @@ final class ChatEngine: @unchecked Sendable {
             return .user(Self.attributedUserText(content, message: message, isGroupChat: isGroupChat))
         }
         let incomingText = Self.promptText(for: incoming)
-        if recent.last?.id != incoming.id, !incomingText.isEmpty {
+        // 历史里已包含本条时不能再追加：生成期间会话里可能来了更新的消息，
+        // 此时 incoming 不再是 recent.last，按旧判断会把本轮消息再注入一次
+        //（提示词出现 A / B / A，模型会重复回应 A）。
+        if !recent.contains(where: { $0.id == incoming.id }), !incomingText.isEmpty {
             conversationMessages.append(.user(
                 Self.attributedUserText(incomingText, message: incoming, isGroupChat: isGroupChat)
             ))

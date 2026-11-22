@@ -119,6 +119,7 @@ struct OnboardingView: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .frame(width: 170)
+                .disabled(isInstalling || isBackingUpWeChat)
                 .help(L("语言 / Language"))
 
                 if step < stepTitles.count - 1 {
@@ -126,6 +127,8 @@ struct OnboardingView: View {
                         .buttonStyle(.plain)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        // 安装/备份进行中不能跳过：否则进度与失败原因全部不可见（docs/ui-design.md §安装）。
+                        .disabled(isInstalling || isBackingUpWeChat)
                         .help(L("跳过剩余步骤；之后可在「设置 → 通用」重新打开"))
                 }
             }
@@ -358,6 +361,7 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.glass)
                     .controlSize(.small)
+                    .disabled(isInstalling || isBackingUpWeChat)
                 }
             }
 
@@ -900,6 +904,8 @@ struct OnboardingView: View {
     }
 
     private func skip() {
+        // 安装/备份进行中不响应跳过：避免任务在后台继续、用户却看不到进度与失败原因。
+        guard !isInstalling, !isBackingUpWeChat else { return }
         hasCompletedOnboarding = true
         store.isOnboardingPresented = false
         dismiss()

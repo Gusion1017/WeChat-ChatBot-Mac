@@ -73,6 +73,11 @@ type WechatMessage struct {
 	// TargetID 是会话目标：私聊=对方 wxid，群聊=群 ID。自消息的 sender 仍是
 	// 自己，单靠 user_id 无法确定会话，App 需要用 target_id 归位。
 	TargetID string `json:"target_id,omitempty"`
+	// GroupName 是 bridge 通讯录补全的群显示名（contact.go enrichIncomingSender 写入），
+	// MemberWXID 是 hook 上报的群成员 wxid。二者必须显式声明，否则 HandleMsg 的
+	// map→struct→map 往返会静默丢弃（docs/architecture.md §9 承诺群事件带 group_name）。
+	GroupName  string `json:"group_name,omitempty"`
+	MemberWXID string `json:"member_wxid,omitempty"`
 	// 拍一拍（appmsg type=62 / 旧版 sysmsg type=pat）的结构化解析结果。
 	// 这些字段必须显式声明，否则 HandleMsg 反序列化再序列化时会静默丢弃；
 	// 规则层用 target 判断是否拍的是机器人，不能只看正文有没有「拍了拍」。

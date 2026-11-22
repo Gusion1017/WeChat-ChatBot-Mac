@@ -1243,11 +1243,12 @@ final class SnsInteractionSchedulerTests: XCTestCase {
     }
 
     func testFailureEntersRetryCooldown() async {
-        // 429 是节流（见 testRateLimitedIsTransientAndDoesNotConsumeAttemptBudget），
-        // 这里用普通可重试失败验证 10 分钟冷却/最多 3 次的重试预算。
+        // 429 是节流（见 testRateLimitedIsTransientAndDoesNotConsumeAttemptBudget）；
+        // 超时/连接中断属于「结果未知」，已改为不再重试（见 testTimedOutWriteIsNotRetried），
+        // 这里用服务端明确拒绝的失败验证 10 分钟冷却/最多 3 次的重试预算。
         let harness = makeHarness(
             posts: [makePost(id: "p1")],
-            submitError: SnsClientError.timedOut
+            submitError: SnsClientError.operationFailed("服务端拒绝")
         )
         _ = await harness.scheduler.performCheck()
         _ = await harness.scheduler.performCheck()
@@ -1257,6 +1258,31 @@ final class SnsInteractionSchedulerTests: XCTestCase {
         let ledger = SnsInteractionLedger(accountID: "wxid_self", defaults: defaults)
         let snapshot = await ledger.snapshot()
         XCTAssertEqual(snapshot.attempts["post:p1"]?.count, 1)
+    }
+
+    /// 回归：写请求超时/连接中断时，bridge/微信可能已经执行了评论。
+    /// 此前会按「可重试失败」在 10 分钟后换一段文案再提交，导致好友动态下出现重复评论
+    /// （App 无删除评论能力）。现在这类「结果未知」必须标记为已处理、不再重试。
+    func testTimedOutWriteIsNotRetried() async {
+        let harness = makeHarness(
+            posts: [makePost(id: "p1")],
+            submitError: SnsClientError.timedOut
+        )
+        let summary = await harness.scheduler.performCheck()
+        XCTAssertEqual(summary.failedCount, 0, "结果未知不计入可重试失败")
+        XCTAssertEqual(summary.skippedCount, 1)
+        XCTAssertNotNil(summary.firstError)
+        let ledger = SnsInteractionLedger(accountID: "wxid_self", defaults: defaults)
+        let snapshot = await ledger.snapshot()
+        XCTAssertTrue(snapshot.handledKeys.contains("post:p1"), "结果未知的候选必须标记已处理")
+        XCTAssertNil(snapshot.attempts["post:p1"], "结果未知不应占用重试预算")
+
+        // 下一轮检查不再为同一目标生成文案 / 提交（harness 在抛出前不会记录 submitted）。
+        XCTAssertTrue(harness.submitted().isEmpty)
+        let draftsAfterFirst = harness.drafts().count
+        let second = await harness.scheduler.performCheck()
+        XCTAssertEqual(second.commentedCount, 0)
+        XCTAssertEqual(harness.drafts().count, draftsAfterFirst, "已处理的候选不应再次生成文案")
     }
 
     func testNewPostOlderThanMaxAgeIsIgnored() async {

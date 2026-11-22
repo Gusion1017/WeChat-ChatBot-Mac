@@ -40,7 +40,7 @@ struct LogRow: View, Equatable {
         .padding(.vertical, 4)
         .background(rowBackground)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.level.label)，\(entry.source)，\(entry.message)")
+        .accessibilityLabel([entry.level.label, entry.source, entry.message].joined(separator: L10n.listSeparator))
     }
 
     private var rowBackground: Color {

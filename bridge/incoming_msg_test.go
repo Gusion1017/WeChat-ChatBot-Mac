@@ -172,3 +172,38 @@ func TestHandleMsgToleratesNilMessageSegments(t *testing.T) {
 		t.Fatalf("last segment lost: %+v", got.Message[3])
 	}
 }
+
+
+// 回归：bridge 通讯录补全的 group_name 与 hook 上报的 member_wxid 必须原样透传。
+// 它们由 contact.go / hook 写进 payload，若 WechatMessage 不声明，HandleMsg 的
+// map→struct→map 往返会把字段静默吞掉（docs/architecture.md §9 承诺群事件带 group_name）。
+func TestHandleMsgPreservesGroupNameAndMemberWXID(t *testing.T) {
+	payload := []byte(`{
+		"group_id":"123@chatroom",
+		"self_id":"wxid_bot",
+		"user_id":"wxid_user",
+		"sender":{"user_id":"wxid_user","nickname":"用户"},
+		"time":1760000000000,
+		"message_id":"1000000000000000002",
+		"message":[{"type":"text","data":{"text":"你好"}}],
+		"raw_message":"你好",
+		"message_type":"group",
+		"group_name":"测试群",
+		"member_wxid":"wxid_member"
+	}`)
+
+	out, err := HandleMsg(payload)
+	if err != nil {
+		t.Fatalf("HandleMsg 失败: %v", err)
+	}
+	var got WechatMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("回包反序列化失败: %v", err)
+	}
+	if got.GroupName != "测试群" {
+		t.Fatalf("group_name 被丢弃: got %q", got.GroupName)
+	}
+	if got.MemberWXID != "wxid_member" {
+		t.Fatalf("member_wxid 被丢弃: got %q", got.MemberWXID)
+	}
+}

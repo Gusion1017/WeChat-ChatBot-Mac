@@ -516,7 +516,8 @@ func fetchIncomingImage(messageID string) (string, error) {
 	case imageFetchSemaphore <- struct{}{}:
 		defer func() { <-imageFetchSemaphore }()
 	case <-time.After(imageFetchSemaphoreWait):
-		pendingImageJobs.Delete(messageID)
+		// 保留登记（与 voice.go 的 restorePendingVoiceJob 一致）：「队列繁忙，请稍后重试」
+		// 必须真的可重试；旧实现先删登记，重试只会得到 400「已过期」。
 		Warn("图片获取失败", "message_id", messageID, "reason", errImageFetchBusy)
 		return "", errImageFetchBusy
 	}

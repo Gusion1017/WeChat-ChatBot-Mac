@@ -131,19 +131,29 @@ final class UpdateCenter {
     ///
     /// - Parameter loadReleaseInfo: 本次进程还没有检查结果时强制拉取一次（忽略 6 小时节流），
     ///   用于「更新」页展示本版本/新版本的更新内容；只由设置页触发，不影响启动自动检查节奏。
+    ///
+    /// P2-6：关闭「自动检查更新」只应停掉**后台自动检查**（启动 8 秒后的检查与 6 小时节流），
+    /// 打开更新页仍要拉取一次 Release 元数据并展示发布说明——docs/updates.md「版本说明」
+    /// 要求更新页始终展示对应内容。否则页面会永远停在「尚未检查」，本版本更新内容不可达。
     func refreshIfNeeded(loadReleaseInfo: Bool = false) async {
-        guard autoCheckEnabled, !state.isBusy else { return }
+        guard !state.isBusy else { return }
         if loadReleaseInfo, latestRelease == nil {
-            await checkForUpdates(userInitiated: false)
+            // 页面打开是用户主动行为：自动检查关闭时也补拉一次；
+            // 不弹「有可用更新」toast（那是后台自动检查的提示策略）。
+            await checkForUpdates(userInitiated: false, notifyIfAvailable: false)
             return
         }
+        guard autoCheckEnabled else { return }
         guard UpdateCheckPolicy.isCheckDue(lastCheckedAt: lastCheckedAt) else { return }
         await checkForUpdates(userInitiated: false)
     }
 
     // MARK: - Check
 
-    func checkForUpdates(userInitiated: Bool = true) async {
+    func checkForUpdates(
+        userInitiated: Bool = true,
+        notifyIfAvailable: Bool = true
+    ) async {
         guard !state.isBusy else { return }
         state = .checking
         do {
@@ -168,7 +178,7 @@ final class UpdateCenter {
                     state = .upToDate(checkedAt: now)
                 } else {
                     state = .available(release)
-                    if !userInitiated {
+                    if !userInitiated, notifyIfAvailable {
                         notifyIfNeeded(for: release)
                     }
                 }

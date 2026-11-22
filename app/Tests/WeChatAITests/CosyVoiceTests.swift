@@ -730,6 +730,60 @@ final class CosyVoiceTests: XCTestCase {
         }
     }
 
+    // MARK: - 5.1 安装失败态保留（P2-5）
+
+    /// P2-5：安装失败后设置页每 1–2 秒轮询 refresh()，失败状态与原因必须保留，
+    /// 否则「安装失败：…」和「重试」按钮最多只显示一个轮询周期；显式重试成功后才更新。
+    func testInstallerRefreshKeepsFailureUntilRetrySucceeds() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        let failingScript = try makeFakeInstallScript(
+            body: """
+            #!/bin/bash
+            echo "下载依赖失败：网络不可用"
+            exit 1
+            """)
+        setenv(CosyVoiceInstallation.installScriptEnvironmentKey, failingScript.path, 1)
+        let installer = CosyVoiceInstaller(home: home)
+        do {
+            try await installer.install(consent: true)
+            XCTFail("脚本退出码 1 时安装应失败")
+        } catch is CosyVoiceInstallError {
+            // 预期失败。
+        }
+        let failed = await installer.snapshot()
+        guard case .failed(let reason) = failed.state else {
+            return XCTFail("安装失败后状态应为 failed，实际：\(failed.state)")
+        }
+        XCTAssertTrue(reason.contains("下载依赖失败"), "失败原因应保留脚本最后一条日志：\(reason)")
+
+        // 设置页轮询：连续 refresh 不得把失败状态/原因冲掉（修复前第二次轮询就变 notInstalled）。
+        for _ in 0..<3 {
+            let refreshed = await installer.refresh()
+            XCTAssertEqual(refreshed.state, failed.state, "refresh() 必须保留安装失败状态")
+        }
+
+        // 显式重试并成功：状态进入 installed，之后 refresh 也保持 installed。
+        let successScript = try makeFakeInstallScript(
+            body: """
+            #!/bin/bash
+            set -e
+            mkdir -p "$COSYVOICE_HOME/venv-qwen3tts/bin" "$COSYVOICE_MODEL_DIR"
+            echo '#!/bin/sh' > "$COSYVOICE_HOME/venv-qwen3tts/bin/python"
+            chmod +x "$COSYVOICE_HOME/venv-qwen3tts/bin/python"
+            echo '{"model_type":"qwen3_tts"}' > "$COSYVOICE_MODEL_DIR/config.json"
+            : > "$COSYVOICE_MODEL_DIR/model.safetensors"
+            echo '{"version":1}' > "$COSYVOICE_HOME/.installed-qwen3tts"
+            exit 0
+            """)
+        setenv(CosyVoiceInstallation.installScriptEnvironmentKey, successScript.path, 1)
+        try await installer.install(consent: true)
+        let done = await installer.refresh()
+        guard case .installed = done.state else {
+            return XCTFail("显式重试成功后应为 installed，实际：\(done.state)")
+        }
+    }
+
     // MARK: - 6. 健康轮询（注入 fake）
 
     func testHealthPollingRetriesLoadingThenReady() async {
@@ -2621,6 +2675,167 @@ final class CosyVoiceTests: XCTestCase {
         await runtime.stop()
         let stopped = await runtime.snapshot()
         XCTAssertEqual(stopped.state, .stopped)
+    }
+
+    // MARK: - 7.1 健康监控容错（P2-2）
+
+    /// P2-2：`probe` 会把 `/health` 超时归为 `.notRunning`，单次失败不能把状态
+    /// 永久钉在 `.failed` 并停止监控；下一次探测成功必须自动恢复 `.running`。
+    func testRuntimeMonitorToleratesTransientProbeFailureThenRecovers() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        try createFakeInstall(home: home)
+        let endpoint = URL(string: "http://127.0.0.1:5051")!
+        let readyJSON = Self.readyHealthJSON(engine: "qwen3tts")
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                value += 1
+                return value
+            }
+        }
+        let counter = Counter()
+        FakeCosyVoiceURLProtocol.setHandler { _ in
+            // 第一次探测模拟端口空闲 → 启动自有进程；之后返回 Qwen3 ready。
+            if counter.next() == 1 {
+                return .failure(URLError(.cannotConnectToHost))
+            }
+            return .http(
+                status: 200,
+                body: readyJSON,
+                headers: ["Content-Type": "application/json"])
+        }
+        let launcher = FakeCosyVoiceLauncher {
+            FakeCosyVoiceProcess(pid: 12_001, running: true)
+        }
+        let runtime = CosyVoiceRuntime(client: makeClient(), launcher: launcher, home: home)
+        addTeardownBlock { await runtime.stop() }
+        _ = try await runtime.start(endpoint: endpoint, timeout: 5)
+        XCTAssertEqual(launcher.launchCount, 1, "应启动自有子进程")
+        let readyHealth = CosyVoiceHealth(
+            ok: true, ready: true, model: "Qwen3-TTS", engine: "qwen3tts")
+
+        let stillMonitoring = await runtime.monitorTick(endpoint: endpoint) {
+            .notRunning("请求超时（服务可能在加载模型）")
+        }
+        XCTAssertTrue(stillMonitoring, "单次探测超时只应重试，不应停止监控")
+        let afterFailure = await runtime.snapshot()
+        XCTAssertTrue(
+            afterFailure.state.isStarting,
+            "瞬时失败应显示正在重试，实际：\(afterFailure.state)")
+        XCTAssertFalse(runtime.isServiceReadySnapshot, "探测失败期间不应把服务标为就绪")
+
+        let recovered = await runtime.monitorTick(endpoint: endpoint) {
+            .running(readyHealth)
+        }
+        XCTAssertTrue(recovered)
+        let afterRecovery = await runtime.snapshot()
+        XCTAssertTrue(
+            afterRecovery.state.isRunning,
+            "探测恢复后应回到 running，实际：\(afterRecovery.state)")
+        XCTAssertTrue(runtime.isServiceReadySnapshot)
+    }
+
+    /// P2-2：自有进程仍在运行但连续探测失败时，达到阈值可判 failed，但**不能停止监控**；
+    /// 服务恢复响应后自动回到 running，避免长期静默降级。
+    func testRuntimeMonitorRecoversAfterConsecutiveProbeFailuresForOwnedProcess() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        try createFakeInstall(home: home)
+        let endpoint = URL(string: "http://127.0.0.1:5051")!
+        let readyJSON = Self.readyHealthJSON(engine: "qwen3tts")
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                value += 1
+                return value
+            }
+        }
+        let counter = Counter()
+        FakeCosyVoiceURLProtocol.setHandler { _ in
+            if counter.next() == 1 {
+                return .failure(URLError(.cannotConnectToHost))
+            }
+            return .http(
+                status: 200,
+                body: readyJSON,
+                headers: ["Content-Type": "application/json"])
+        }
+        let launcher = FakeCosyVoiceLauncher {
+            FakeCosyVoiceProcess(pid: 12_002, running: true)
+        }
+        let runtime = CosyVoiceRuntime(client: makeClient(), launcher: launcher, home: home)
+        addTeardownBlock { await runtime.stop() }
+        _ = try await runtime.start(endpoint: endpoint, timeout: 5)
+        let readyHealth = CosyVoiceHealth(
+            ok: true, ready: true, model: "Qwen3-TTS", engine: "qwen3tts")
+        let maxFailures = CosyVoiceRuntime.maxConsecutiveProbeFailures
+        XCTAssertGreaterThanOrEqual(maxFailures, 2, "连续失败阈值至少为 2 才有重试意义")
+
+        for attempt in 1...maxFailures {
+            let keepMonitoring = await runtime.monitorTick(endpoint: endpoint) {
+                .notRunning("健康检查超时")
+            }
+            XCTAssertTrue(
+                keepMonitoring,
+                "自有进程仍在运行，第 \(attempt) 次探测失败也应继续监控")
+        }
+        let failed = await runtime.snapshot()
+        guard case .failed(let reason) = failed.state else {
+            return XCTFail("连续 \(maxFailures) 次失败后应判 failed，实际：\(failed.state)")
+        }
+        XCTAssertTrue(reason.contains("连续 \(maxFailures) 次"), "失败文案应含连续次数：\(reason)")
+        XCTAssertFalse(runtime.isServiceReadySnapshot)
+
+        let recovered = await runtime.monitorTick(endpoint: endpoint) {
+            .running(readyHealth)
+        }
+        XCTAssertTrue(recovered)
+        let afterRecovery = await runtime.snapshot()
+        XCTAssertTrue(
+            afterRecovery.state.isRunning,
+            "服务恢复后应自动回到 running，实际：\(afterRecovery.state)")
+        XCTAssertTrue(runtime.isServiceReadySnapshot)
+    }
+
+    /// P2-2：复用的外部服务（本 App 不持有进程）探测失败达到阈值后应置 `stopped`
+    /// 而不是 `failed`，回复路径仍可按 `cosyVoiceAutoStart` 自动拉起本 App 的服务。
+    func testRuntimeMonitorMarksReusedExternalServiceStoppedNotFailed() async throws {
+        let home = Self.makeTempDirectory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        try createFakeInstall(home: home)
+        let endpoint = URL(string: "http://127.0.0.1:5051")!
+        let readyJSON = Self.readyHealthJSON(engine: "qwen3tts")
+        FakeCosyVoiceURLProtocol.setHandler { _ in
+            .http(status: 200, body: readyJSON, headers: ["Content-Type": "application/json"])
+        }
+        let launcher = FakeCosyVoiceLauncher()
+        let runtime = CosyVoiceRuntime(client: makeClient(), launcher: launcher, home: home)
+        addTeardownBlock { await runtime.stop() }
+        _ = try await runtime.start(endpoint: endpoint, timeout: 5)
+        XCTAssertEqual(launcher.launchCount, 0, "已运行的服务应被复用")
+        let maxFailures = CosyVoiceRuntime.maxConsecutiveProbeFailures
+        for _ in 1..<maxFailures {
+            let keepMonitoring = await runtime.monitorTick(endpoint: endpoint) {
+                .notRunning("连接被拒绝")
+            }
+            XCTAssertTrue(keepMonitoring, "外部服务瞬时失败应继续监控")
+        }
+        let stopped = await runtime.monitorTick(endpoint: endpoint) {
+            .notRunning("连接被拒绝")
+        }
+        XCTAssertFalse(stopped, "外部服务确认不可用后应停止监控")
+        let snapshot = await runtime.snapshot()
+        XCTAssertEqual(snapshot.state, .stopped)
+        XCTAssertNil(
+            snapshot.state.failureReason,
+            "外部服务停止不应变成 failed，否则回复路径不会再自动拉起")
     }
 
     // MARK: - Helpers

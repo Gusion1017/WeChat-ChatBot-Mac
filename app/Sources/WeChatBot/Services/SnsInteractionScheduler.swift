@@ -1078,6 +1078,25 @@ final class SnsInteractionScheduler {
                         logOnce("朋友圈自动互动：被 bridge 限流，下一轮再试（\(message)）")
                         break
                     }
+                    if Self.isUnknownWriteOutcome(error) {
+                        // bridge 超时/连接中断/5xx：微信可能已经执行了这次评论或回复。
+                        // 若下一轮换一段文案再提交，就会在好友动态下出现两条评论，App 无法删除。
+                        // 因此标记为已处理、不再重试，并在记录里说明原因。
+                        await ledger.markHandled(key: candidate.key, at: Date())
+                        summary.skippedCount += 1
+                        let note = Lf("发送结果未知，已停止重试以避免重复：%@", message)
+                        if summary.firstError == nil { summary.firstError = note }
+                        onActivity?(makeActivity(
+                            candidate: candidate,
+                            text: text,
+                            imageCount: draft.imageCount,
+                            outcome: .failed,
+                            error: note
+                        ))
+                        logger?("朋友圈自动互动：\(candidate.kind.label) 结果未知，停止重试（\(message)）")
+                        if Self.isBridgeUnreachable(error) { break }
+                        continue
+                    }
                     await recordAttempt(candidate.key, dryRun: configuration.dryRun)
                     if Self.isPermanentFailure(error) {
                         await ledger.markHandled(key: candidate.key, at: Date())
@@ -1219,6 +1238,32 @@ final class SnsInteractionScheduler {
         guard let snsError = error as? SnsClientError else { return false }
         if case .rateLimited = snsError { return true }
         return false
+    }
+
+    /// 写请求的「结果未知」失败：bridge 超时 / 连接中断 / 5xx 时，微信可能已经执行了这次
+    /// 评论或回复。自动互动不能像发布那样在下一轮换文案重试——同一条动态下会出现两条评论，
+    /// 而 App 没有删除评论的能力，所以这类失败一律不再重试。
+    private static func isUnknownWriteOutcome(_ error: Error) -> Bool {
+        guard let snsError = error as? SnsClientError else { return false }
+        switch snsError {
+        case .timedOut, .transport, .bridgeFailure, .invalidResponse:
+            return true
+        case .http(let code, _):
+            return code >= 500
+        default:
+            return false
+        }
+    }
+
+    /// bridge 不可达/超时：继续处理其它候选只会重复等待同样的超时，直接结束本轮。
+    private static func isBridgeUnreachable(_ error: Error) -> Bool {
+        guard let snsError = error as? SnsClientError else { return false }
+        switch snsError {
+        case .timedOut, .transport:
+            return true
+        default:
+            return false
+        }
     }
 
     /// 通道级失败：继续处理其它候选只会重复失败，立即结束本轮。

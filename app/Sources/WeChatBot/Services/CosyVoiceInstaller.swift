@@ -201,13 +201,26 @@ actor CosyVoiceInstaller {
     }
 
     /// 从文件系统重新推导安装状态（打开设置页/切换设备/删除后调用）。
+    ///
+    /// P2-5：设置页每 1–2 秒轮询一次 `refresh()`。安装失败后如果这里无条件回写
+    /// `.notInstalled`，失败原因与「重试」按钮最多只能显示一个轮询周期，用户再也
+    /// 看不到失败原因、也无法点「重试」。因此：
+    /// - 文件系统显示已完整安装 → 视为成功，覆盖任何旧状态；
+    /// - 仍处于 `.failed` → 原样保留（连同失败原因），直到显式重试 `install()`
+    ///   重新进入 `.installing` / 成功 / 删除；
+    /// - 其它状态才按文件系统回写 `.notInstalled`。
     func refresh() -> CosyVoiceInstallSnapshot {
         // 安装中不改状态机；UI 在安装期间会禁用相关操作。
         guard !state.isInstalling else { return snapshot() }
         let installed = CosyVoiceInstallation.isInstalled(home: home)
-        state = installed
-            ? .installed(installedAt: Self.markerDate(home: home))
-            : .notInstalled
+        if installed {
+            state = .installed(installedAt: Self.markerDate(home: home))
+            return snapshot()
+        }
+        if case .failed = state {
+            return snapshot()
+        }
+        state = .notInstalled
         return snapshot()
     }
 

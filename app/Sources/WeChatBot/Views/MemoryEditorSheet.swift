@@ -359,8 +359,13 @@ struct MemoryEditorSheet: View {
     private func delete() {
         isSaving = true
         Task {
-            await store.deleteCharacterMemory(original)
+            let deleted = await store.deleteCharacterMemory(original)
             isSaving = false
+            guard deleted else {
+                // 失败时保持面板打开，用户可以重试；不能提示已删除。
+                toast.show(L("删除记忆失败，请查看运行日志"), tone: .error, symbol: "exclamationmark.triangle")
+                return
+            }
             toast.show(L("已删除记忆"), tone: .info, symbol: "trash")
             dismiss()
         }

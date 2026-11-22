@@ -65,6 +65,12 @@ private final class CharacterDatabase {
         close()
     }
 
+    /// 导出数据备份前调用：把 WAL 合并回主库，连接保持可用。
+    func checkpoint() {
+        guard let handle else { return }
+        sqlite3_wal_checkpoint_v2(handle, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+    }
+
     func close() {
         guard let handle else { return }
         sqlite3_wal_checkpoint_v2(handle, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
@@ -549,6 +555,36 @@ actor CharacterStore {
         for database in connections.values { database.close() }
         connections.removeAll()
         accessOrder.removeAll()
+    }
+
+    /// 导出数据备份前调用：把所有记忆卡的 WAL 合并回主库。
+    ///
+    /// 已打开的连接直接 checkpoint；磁盘上还有非空 -wal 但未打开的记忆卡，临时打开
+    /// 一次完成 checkpoint 再关闭（只为有 WAL 的库做，避免备份时打开全部卡片）。
+    func checkpointForBackup() {
+        for database in connections.values { database.checkpoint() }
+        guard let root else { return }
+        let openKeys = Set(connections.keys)
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for entry in entries {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  !openKeys.contains(entry.lastPathComponent) else { continue }
+            let dbURL = entry.appendingPathComponent("memory.sqlite")
+            guard FileManager.default.fileExists(atPath: dbURL.path) else { continue }
+            let walURL = URL(fileURLWithPath: dbURL.path + "-wal")
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: walURL.path),
+                  let size = attributes[.size] as? NSNumber,
+                  size.intValue > 0 else { continue }
+            guard let database = try? CharacterDatabase(directory: entry) else { continue }
+            database.checkpoint()
+            database.close()
+        }
     }
 
     private func requireRoot() throws -> URL {

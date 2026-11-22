@@ -1109,6 +1109,10 @@ actor BackupService {
     }
 
     /// APFS 上优先硬链接（不额外占空间）；跨卷或权限受限时回退到复制。
+    ///
+    /// SQLite 主库 / -wal / -shm 例外，一律复制：硬链接共享 inode，zip 压缩时读到的
+    /// 是数据库的**实时**内容，主库与 WAL 可能来自不同时刻（甚至 checkpoint 中的
+    /// 页级撕裂）。导出前 prepareDataBackup() 已 checkpoint，这里用拷贝得到稳定快照。
     private func placeFile(_ source: URL, at destination: URL) throws {
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -1117,11 +1121,22 @@ actor BackupService {
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
+        if Self.isSQLiteBackupFile(source.lastPathComponent) {
+            try fileManager.copyItem(at: source, to: destination)
+            return
+        }
         do {
             try fileManager.linkItem(at: source, to: destination)
         } catch {
             try fileManager.copyItem(at: source, to: destination)
         }
+    }
+
+    /// SQLite 主库 / WAL / SHM：备份时必须拷贝而不是硬链接（硬链接会随数据库实时变化）。
+    static func isSQLiteBackupFile(_ name: String) -> Bool {
+        name.hasSuffix(".sqlite")
+            || name.hasSuffix(".sqlite-wal")
+            || name.hasSuffix(".sqlite-shm")
     }
 
     // MARK: - Removal

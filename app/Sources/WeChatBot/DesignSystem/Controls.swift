@@ -58,6 +58,8 @@ struct FilterChip: View {
     var count: Int?
     var isSelected: Bool
     var tint: Color = Theme.accent
+    /// 置灰并禁止点击（例如「至少保留一项」的最后一个选项），调用方需在附近说明原因。
+    var isEnabled: Bool = true
     var action: () -> Void
 
     var body: some View {
@@ -91,6 +93,8 @@ struct FilterChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }

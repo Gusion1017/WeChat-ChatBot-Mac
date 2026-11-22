@@ -141,6 +141,9 @@ final class RuntimeCoordinator {
     private var startedOneBotConfiguration: OneBotClient.Configuration?
     private var selfID = ""
     private var inFlightConversations: Set<String> = []
+    /// 生成回复期间到达的最新一条消息（每会话一个槽位）：本轮结束后再判定一次，
+    /// 而不是把第二条消息直接丢弃（用户「发一句没回再补一句」时不会漏回）。
+    private var pendingReplies: [String: (message: ChatMessage, receivedAt: Date)] = [:]
     /// 识图（视觉模型）状态：只记录本次运行尝试过的消息，描述本身落库
     /// （`ChatMessage.imageDescription`）。避免同一条图片在一次运行内反复请求付费模型。
     private var visionAttempted: Set<String> = []
@@ -1561,6 +1564,11 @@ final class RuntimeCoordinator {
             dryRunProvider: { [weak store] in
                 store?.settings.bot.dryRun ?? false
             },
+            // 失败时 MomentsStore 把可展示原因写在 publishError（例如正文超长/写开关关闭），
+            // 传给调度器写进「上次结果」，避免只显示「发布失败：昵称」。
+            failureReasonProvider: { [weak store] in
+                store?.moments.publishError
+            },
             onDraft: { [weak store] text, target in
                 store?.snsOutbox.add(SnsPendingDraft(
                     text: text,
@@ -1606,19 +1614,28 @@ final class RuntimeCoordinator {
         }
         let sns = settings.bot.snsSettings
         let interaction = sns.interaction.sanitized
+        // 任何一环被关闭都清空「启用时间」：否则重新开启后会补做关闭期间（最长 24h）
+        // 的历史动态，用户会觉得「刚打开就评论了一堆旧内容」。机器人停止不在此列，
+        // 重启保留水位（docs/sns.md §启用时间）。
+        func clearInteractionStartDate(_ reason: String) {
+            let ledger = store.snsInteractionLedger()
+            Task { await ledger.clearStartDate() }
+            log(.debug, "SNS", "自动互动未运行（\(reason)），已清空启用时间")
+        }
         guard sns.enabled, sns.writeEnabled, interaction.enabled else {
-            // 关闭自动互动时清空「启用时间」：下次开启只处理新内容，不回头评论历史动态。
-            if !interaction.enabled {
-                let ledger = store.snsInteractionLedger()
-                Task { await ledger.clearStartDate() }
-            }
+            clearInteractionStartDate(
+                !sns.enabled ? "朋友圈功能未开启"
+                    : (!sns.writeEnabled ? "写操作未开启" : "自动互动未开启")
+            )
             return
         }
         guard interaction.hasAction else {
+            clearInteractionStartDate("未启用任何互动动作")
             log(.info, "SNS", "自动互动未启用任何动作；已跳过调度")
             return
         }
         guard settings.hook.enableNativeSend else {
+            clearInteractionStartDate("R3 原生发送未开启")
             log(.warning, "SNS", "自动互动需要开启 R3 原生发送；已跳过调度")
             return
         }
@@ -1628,6 +1645,7 @@ final class RuntimeCoordinator {
             version: store.hookStatus.wechatVersion,
             dryRun: settings.bot.dryRun
         ) {
+            clearInteractionStartDate("朋友圈写链路未验证")
             log(.warning, "SNS", "微信 \(snsWriteGateVersionLabel)：朋友圈写链路尚未验证，已跳过自动互动（只读可用）")
             return
         }
@@ -2294,6 +2312,7 @@ final class RuntimeCoordinator {
         oneBotClient = nil
         startedOneBotConfiguration = nil
         inFlightConversations.removeAll()
+        pendingReplies.removeAll()
         clearReplyProgresses()
         store.imageFetcher.cancelAll()
         pendingImageFetchIDs.removeAll()
@@ -2541,6 +2560,7 @@ final class RuntimeCoordinator {
         r3SeedSyncTask?.cancel()
         r3SeedSyncTask = nil
         inFlightConversations.removeAll()
+        pendingReplies.removeAll()
         visionAttempted.removeAll()
         pendingImageFetchIDs.removeAll()
         pendingVoiceFetchIDs.removeAll()
@@ -2709,7 +2729,7 @@ final class RuntimeCoordinator {
             return
         }
 
-        let conversation = upsertConversation(for: event)
+        let conversation = await upsertConversation(for: event)
         // 历史回放/补同步的语音不自动下载转写：直接标失败（气泡可手动重试），
         // 避免打开旧会话时对旧语音批量发请求。
         let isStaleReplay = receivedAt.timeIntervalSince(event.timestamp) > Self.staleReplyWindow
@@ -2806,7 +2826,12 @@ final class RuntimeCoordinator {
             conversationID: conversationID, activationTimestamp: memoryActivationTimestamp)
     }
 
-    private func upsertConversation(for event: OneBotEvent) -> Conversation {
+    /// 取（或创建）事件对应的会话。
+    ///
+    /// 内存只保留最近 300 个会话；事件可能来自更早的会话。此时必须先按 id 回查数据库，
+    /// 否则会以默认值新建并整行 UPSERT，把用户为该会话保存的 AI 开关、备注、人格/模型、
+    /// 独立工作时段、置顶、图片开关与自定义标题全部覆盖成默认值。
+    private func upsertConversation(for event: OneBotEvent) async -> Conversation {
         let existingIndex = store.conversations.firstIndex { $0.id == event.conversationID }
         // 目录名比事件里的 sender.nickname 更权威；只在标题仍是占位值时使用。
         let directoryTitle = ContactDirectoryTitles.title(
@@ -2817,6 +2842,17 @@ final class RuntimeCoordinator {
         var conversation: Conversation
         if let index = existingIndex {
             conversation = store.conversations[index]
+            if let directoryTitle,
+               ConversationName.isPlaceholderTitle(
+                   conversation.title,
+                   conversationID: conversation.id,
+                   kind: conversation.kind
+               ) {
+                conversation.title = directoryTitle
+            }
+        } else if let stored = try? await memory.conversation(id: event.conversationID) {
+            // 会话存在但不在内存前 300 条：复用库里的设置，只更新消息相关字段。
+            conversation = stored
             if let directoryTitle,
                ConversationName.isPlaceholderTitle(
                    conversation.title,
@@ -3872,11 +3908,27 @@ final class RuntimeCoordinator {
             return
         }
         guard !inFlightConversations.contains(conversation.id) else {
-            log(.debug, "Bot", "会话 \(conversation.displayTitle) 正在生成回复，跳过本条")
+            // 按会话串行，但不要丢弃：记录最新一条，本轮结束后再判定一次。
+            pendingReplies[conversation.id] = (message, receivedAt)
+            log(.debug, "Bot", "会话 \(conversation.displayTitle) 正在生成回复，最新消息将在本轮结束后处理")
             return
         }
         inFlightConversations.insert(conversation.id)
-        defer { inFlightConversations.remove(conversation.id) }
+        defer {
+            inFlightConversations.remove(conversation.id)
+            if let pending = pendingReplies.removeValue(forKey: conversation.id) {
+                Task { @MainActor [weak self] in
+                    guard let self, epoch == self.accountEpoch else { return }
+                    let latest = self.store.conversations.first(where: { $0.id == conversation.id }) ?? conversation
+                    await self.evaluateAndReply(
+                        conversation: latest,
+                        message: pending.message,
+                        receivedAt: pending.receivedAt,
+                        epoch: epoch
+                    )
+                }
+            }
+        }
 
         // 拍一拍回复优先：不再回拍，只发送自定义文字和/或 AI 回复；
         // 只有「没发出任何内容、需要回退」时才继续普通 AI 流程。
@@ -3981,7 +4033,7 @@ final class RuntimeCoordinator {
                 dryRun: store.settings.bot.dryRun
             )
             guard epoch == accountEpoch else { return }
-            await deliver(
+            let delivered = await deliver(
                 plan: plan,
                 conversation: conversation,
                 receivedAt: receivedAt,
@@ -3991,7 +4043,9 @@ final class RuntimeCoordinator {
             )
             guard epoch == accountEpoch else { return }
             // 演练不消耗真实回复冷却/每分钟上限：否则彩排之后真正回复会被无谓节流。
-            if !plan.dryRun {
+            // 发送失败也不消耗：否则 bridge/句柄异常后同会话会被冷却与每分钟上限
+            // 连续拦截，看起来像「出过错之后机器人不回了」。
+            if !plan.dryRun, delivered {
                 ruleEngine.noteReply(conversationID: conversation.id)
             }
             log(.info, "AI", "\(conversation.displayTitle) 生成回复（\(Int(plan.latencyMs))ms，tokens \(plan.usage.totalTokens)，\(evaluation.triggerLabel)）")
@@ -4005,6 +4059,8 @@ final class RuntimeCoordinator {
         }
     }
 
+    /// 投递一轮回复；返回是否至少成功发出一段（调用方据此决定是否消耗冷却/每分钟配额）。
+    @discardableResult
     private func deliver(
         plan: ChatReplyPlan,
         conversation: Conversation,
@@ -4012,8 +4068,8 @@ final class RuntimeCoordinator {
         mention: PatMention? = nil,
         incomingWasVoice: Bool = false,
         epoch: UInt64
-    ) async {
-        guard epoch == accountEpoch else { return }
+    ) async -> Bool {
+        guard epoch == accountEpoch else { return false }
         if plan.dryRun {
             var text = "（dry-run）将回复：\(plan.fullText)"
             if mention != nil { text += "（第一条回复会 @ 拍的人）" }
@@ -4022,7 +4078,7 @@ final class RuntimeCoordinator {
             // 否则会话列表会把彩排当成一次真实回复，和「演练不落地」的语义冲突。
             await appendSystemNotice(text, conversationID: conversation.id)
             completeReplyProgress(conversationID: conversation.id, note: "演练完成（未实际发送）")
-            return
+            return true
         }
 
         let outcome = await sendPlanSegments(
@@ -4032,11 +4088,11 @@ final class RuntimeCoordinator {
             incomingWasVoice: incomingWasVoice,
             epoch: epoch
         )
-        guard epoch == accountEpoch else { return }
+        guard epoch == accountEpoch else { return false }
 
         guard outcome.sentCount > 0 else {
             failReplyProgress(conversationID: conversation.id, error: "消息发送失败，详见运行日志")
-            return
+            return false
         }
         let segmentCount = plan.segments.count
         let sentCount = outcome.sentCount
@@ -4051,6 +4107,7 @@ final class RuntimeCoordinator {
         let endToEndMs = Int(Date().timeIntervalSince(receivedAt) * 1000)
         log(.info, "Bot", "回复投递完成：端到端 \(endToEndMs)ms（AI \(Int(plan.latencyMs))ms，拟人化 \(outcome.appliedDelayMs)ms，bridge 环节见上一条）")
         scheduleStatsPersist()
+        return true
     }
 
     /// 按拟人化设置发送一段 AI 回复计划，返回成功段数与实际等待的拟人化延迟。
@@ -4774,7 +4831,13 @@ final class RuntimeCoordinator {
             log(.info, "Scheduler", "定时任务「\(task.name)」为模拟收到消息类型，暂不执行")
             return
         }
-        guard let conversation = store.conversations.first(where: { $0.id == task.conversationID }) else {
+        // 内存只保留最近 300 个会话：目标会话可能不在内存里，先回查数据库，
+        // 否则滑出前 300 名的会话的定时任务会从此静默不再发送。
+        var resolvedConversation = store.conversations.first(where: { $0.id == task.conversationID })
+        if resolvedConversation == nil {
+            resolvedConversation = try? await memory.conversation(id: task.conversationID)
+        }
+        guard let conversation = resolvedConversation else {
             log(.warning, "Scheduler", "定时任务「\(task.name)」的会话不存在：\(task.conversationID)")
             return
         }
@@ -4787,6 +4850,14 @@ final class RuntimeCoordinator {
         }
         log(.info, "Scheduler", "执行定时任务「\(task.name)」→ \(conversation.displayTitle)")
         await sendOutgoingText(task.content, conversation: conversation, epoch: accountEpoch)
+    }
+
+    /// 设置页在机器人停止时的新增/编辑/启停/删除也要写数据库镜像（见 AppStore.persistSchedules）。
+    func mirrorSchedulesToDatabase(_ tasks: [ScheduledTask]) {
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.memory.replaceSchedules(tasks)
+        }
     }
 
     private func schedulesDidChange(_ tasks: [ScheduledTask]) {
@@ -4835,6 +4906,7 @@ final class RuntimeCoordinator {
                 }
             }
             var changed: [String] = []
+            var gadgetPortChanged = false
             if let started = startedOneBotConfiguration {
                 if started.host != store.settings.onebot.host
                     || started.port != store.settings.onebot.port
@@ -4844,8 +4916,10 @@ final class RuntimeCoordinator {
                 }
             }
             if let started = startedHookRuntimeConfig {
+                // Gadget 端口在「安装 Hook」时写进微信包里的 FridaGadget.config，
+                // 只重启机器人不会更新微信端配置，bridge 会连到旧端口并退出。
                 if started.gadgetPort != store.settings.hook.gadgetPort {
-                    changed.append(L("Gadget 端口"))
+                    gadgetPortChanged = true
                 }
                 if started.autoStartBridge != store.settings.hook.autoStartBridge {
                     changed.append(L("自动启动 bridge"))
@@ -4854,12 +4928,17 @@ final class RuntimeCoordinator {
                     changed.append(L("R3 原生发送"))
                 }
             }
-            let notice = changed.isEmpty
-                ? nil
-                : Lf(
+            var notices: [String] = []
+            if !changed.isEmpty {
+                notices.append(Lf(
                     "已修改 %@；重启机器人后生效",
                     changed.joined(separator: L10n.listSeparator)
-                )
+                ))
+            }
+            if gadgetPortChanged {
+                notices.append(L("Gadget 端口已修改：端口在安装 Hook 时写入微信，需要重新「备份并安装 Hook」后才会生效；仅重启机器人不会生效"))
+            }
+            let notice = notices.isEmpty ? nil : notices.joined(separator: L10n.sentenceSeparator)
             if store.oneBotRestartNotice != notice {
                 store.oneBotRestartNotice = notice
             }
@@ -4885,7 +4964,12 @@ final class RuntimeCoordinator {
 
     // MARK: Manual actions
 
-    func sendManualMessage(conversationID: String, text: String) async {
+    /// 手动发送一条消息；返回是否真的发送成功。
+    ///
+    /// 视图必须据此决定 Toast/清空草稿：失败时 sendOutgoingText 已把气泡标成失败并写入
+    /// store.lastError，不能再给「已提交发送」的成功反馈。
+    @discardableResult
+    func sendManualMessage(conversationID: String, text: String) async -> Bool {
         await bootstrapIfNeeded()
         var conversation: Conversation
         if let existing = store.conversations.first(where: { $0.id == conversationID }) {
@@ -4900,12 +4984,13 @@ final class RuntimeCoordinator {
             let error = RuntimeError.notRunning
             store.lastError = error.localizedDescription
             log(.error, "Bot", "手动发送失败：\(error.localizedDescription)")
-            return
+            return false
         }
         let sent = await sendOutgoingText(text, conversation: conversation, epoch: accountEpoch)
         if sent {
             ruleEngine.noteReply(conversationID: conversationID)
         }
+        return sent
     }
 
     func testProvider(_ provider: AIProvider) async -> Result<String, Error> {
@@ -4966,7 +5051,9 @@ final class RuntimeCoordinator {
 
     // MARK: Memory maintenance
 
-    func clearMessages(conversationID: String?) async {
+    /// 返回是否真的清空成功（视图据此决定成功/失败提示）。
+    @discardableResult
+    func clearMessages(conversationID: String?) async -> Bool {
         do {
             if let conversationID {
                 try await memory.clearMessages(conversationID: conversationID)
@@ -4988,17 +5075,30 @@ final class RuntimeCoordinator {
                 try? await memory.upsertConversations(store.conversations)
             }
             log(.info, "Memory", conversationID == nil ? "已清空全部消息" : "已清空会话消息：\(conversationID!)")
+            return true
         } catch {
             log(.error, "Memory", "清空消息失败：\(error.localizedDescription)")
+            return false
         }
     }
 
-    func messageCount(conversationID: String? = nil) async -> Int {
+    /// 导出数据备份前调用：把账号库与全部记忆卡的 WAL 合并回主库。
+    ///
+    /// 备份包对运行中的 SQLite 做拷贝；不先 checkpoint 时主库与 -wal 可能来自不同时刻，
+    /// 恢复后可能缺最近提交。checkpoint 与写入由 SQLite 串行化，不需要停止机器人。
+    func prepareDataBackup() async {
+        await memory.checkpointForBackup()
+        await characterStore.checkpointForBackup()
+        log(.debug, "Backup", "数据备份前已完成 SQLite checkpoint")
+    }
+
+    /// 读取消息条数；读取失败返回 nil，视图要能区分「0 条」与「读不到」。
+    func messageCount(conversationID: String? = nil) async -> Int? {
         do {
             return try await memory.messageCount(conversationID: conversationID)
         } catch {
             log(.warning, "Memory", "messageCount 失败：\(error.localizedDescription)")
-            return 0
+            return nil
         }
     }
 
@@ -5032,12 +5132,16 @@ final class RuntimeCoordinator {
         log(.info, "Memory", "已删除消息 \(id)")
     }
 
-    func deleteConversation(id: String) async {
+    /// 返回是否真的删除成功。数据库删除失败时保留内存里的会话，避免界面显示已删除、
+    /// 重启后又出现（隐私清理场景尤其不能给假成功）。
+    @discardableResult
+    func deleteConversation(id: String) async -> Bool {
         cancelMemoryMaintenance(conversationID: id)
         do {
             try await memory.deleteConversation(id: id)
         } catch {
-            log(.warning, "Memory", "删除会话失败：\(error.localizedDescription)")
+            log(.error, "Memory", "删除会话失败：\(error.localizedDescription)")
+            return false
         }
         do {
             try await characterStore.deleteCharacter(conversationID: id)
@@ -5057,6 +5161,7 @@ final class RuntimeCoordinator {
             await loadCharacterSummaries()
         }
         log(.info, "Memory", "已删除会话 \(id)")
+        return true
     }
 
     // MARK: Memory maintenance
@@ -5207,7 +5312,9 @@ final class RuntimeCoordinator {
         }
     }
 
-    func deleteCharacterMemory(_ memory: CharacterMemory) async {
+    /// 返回是否真的删除成功（视图据此决定提示与是否关闭面板）。
+    @discardableResult
+    func deleteCharacterMemory(_ memory: CharacterMemory) async -> Bool {
         do {
             try await characterStore.deleteMemory(
                 conversationID: memory.characterID, id: memory.id)
@@ -5216,12 +5323,16 @@ final class RuntimeCoordinator {
                 await loadCharacterSummaries()
             }
             log(.info, "Memory", "已删除记忆")
+            return true
         } catch {
             log(.error, "Memory", "删除记忆失败：\(error.localizedDescription)")
+            return false
         }
     }
 
-    func compressCharacterMemory(_ memory: CharacterMemory) async {
+    /// 返回是否压缩成功（失败时视图不能提示「压缩完成」）。
+    @discardableResult
+    func compressCharacterMemory(_ memory: CharacterMemory) async -> Bool {
         let conversation = store.conversations.first(where: { $0.id == memory.characterID })
             ?? Conversation(id: memory.characterID, kind: .direct, title: CharacterStore.globalTitle)
         let provider = providerForMaintenance(conversation: conversation)
@@ -5234,8 +5345,10 @@ final class RuntimeCoordinator {
                 await selectCharacter(store.selectedCharacterID)
             }
             log(.info, "Memory", "已压缩记忆（\(memory.category.label)）")
+            return true
         } else {
             log(.warning, "Memory", "压缩记忆失败")
+            return false
         }
     }
 
@@ -5275,10 +5388,12 @@ final class RuntimeCoordinator {
         log(.info, "Memory", "已取消取代标记（\(changed.count) 条）")
     }
 
-    func deleteCharacterCard(conversationID: String) async {
+    /// 返回是否真的删除成功（全局共享记忆卡不可删除，返回 false）。
+    @discardableResult
+    func deleteCharacterCard(conversationID: String) async -> Bool {
         guard conversationID != CharacterStore.globalConversationID else {
             log(.warning, "Memory", "全局共享记忆卡不能删除")
-            return
+            return false
         }
         cancelMemoryMaintenance(conversationID: conversationID)
         do {
@@ -5301,8 +5416,10 @@ final class RuntimeCoordinator {
                 }
             }
             log(.info, "Memory", "已删除角色记忆卡（\(conversationID)）")
+            return true
         } catch {
             log(.error, "Memory", "删除角色记忆卡失败：\(error.localizedDescription)")
+            return false
         }
     }
 
@@ -6131,10 +6248,11 @@ extension AppStore {
         return await coordinator.testProvider(provider)
     }
 
-    func sendManualMessage(conversationID: String, text: String) async {
+    @discardableResult
+    func sendManualMessage(conversationID: String, text: String) async -> Bool {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.sendManualMessage(conversationID: conversationID, text: text)
+        return await coordinator.sendManualMessage(conversationID: conversationID, text: text)
     }
 
     /// 关闭会话页的回复进度状态条（完成/失败态由用户手动收起）。
@@ -6202,13 +6320,21 @@ extension AppStore {
         }
     }
 
-    func clearMessages(conversationID: String?) async {
+    /// 导出数据备份前调用：checkpoint 运行中的 SQLite（见 RuntimeCoordinator.prepareDataBackup）。
+    func prepareDataBackup() async {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.clearMessages(conversationID: conversationID)
+        await coordinator.prepareDataBackup()
     }
 
-    func messageCount(conversationID: String? = nil) async -> Int {
+    @discardableResult
+    func clearMessages(conversationID: String?) async -> Bool {
+        let coordinator = RuntimeRegistry.coordinator(for: self)
+        await coordinator.bootstrapIfNeeded()
+        return await coordinator.clearMessages(conversationID: conversationID)
+    }
+
+    func messageCount(conversationID: String? = nil) async -> Int? {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
         return await coordinator.messageCount(conversationID: conversationID)
@@ -6220,10 +6346,11 @@ extension AppStore {
         await coordinator.deleteMessage(id: id)
     }
 
-    func deleteConversation(id: String) async {
+    @discardableResult
+    func deleteConversation(id: String) async -> Bool {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.deleteConversation(id: id)
+        return await coordinator.deleteConversation(id: id)
     }
 
     /// Paginated history loading for the conversation view.
@@ -6295,16 +6422,18 @@ extension AppStore {
         return await coordinator.saveCharacterMemory(memory)
     }
 
-    func deleteCharacterMemory(_ memory: CharacterMemory) async {
+    @discardableResult
+    func deleteCharacterMemory(_ memory: CharacterMemory) async -> Bool {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.deleteCharacterMemory(memory)
+        return await coordinator.deleteCharacterMemory(memory)
     }
 
-    func compressCharacterMemory(_ memory: CharacterMemory) async {
+    @discardableResult
+    func compressCharacterMemory(_ memory: CharacterMemory) async -> Bool {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.compressCharacterMemory(memory)
+        return await coordinator.compressCharacterMemory(memory)
     }
 
     func cancelSupersede(_ memory: CharacterMemory) async {
@@ -6313,10 +6442,11 @@ extension AppStore {
         await coordinator.cancelSupersede(memory)
     }
 
-    func deleteCharacterCard(conversationID: String) async {
+    @discardableResult
+    func deleteCharacterCard(conversationID: String) async -> Bool {
         let coordinator = RuntimeRegistry.coordinator(for: self)
         await coordinator.bootstrapIfNeeded()
-        await coordinator.deleteCharacterCard(conversationID: conversationID)
+        return await coordinator.deleteCharacterCard(conversationID: conversationID)
     }
 
     func loadCharacterInteractions(conversationID: String, search: String? = nil) async {

@@ -26,7 +26,7 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   `script.js` 同步 `hook/script.js` 的微信版本化适配（4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 /
   4.2.0.5；4.1.x 自 2026-11-20 起移除，见 §5）。
 
-> **发布状态（2026-11-22）**：本文描述 **4.2.0**，包含朋友圈 `/sns/*` 与 4.2.1.3 适配；下载用户见
+> **发布状态（2026-11-22）**：本文描述 **4.2.1**，包含朋友圈 `/sns/*` 与 4.2.1.3 适配；下载用户见
 > [`install.md`](install.md) 与 [`releases/4.2.0.md`](releases/4.2.0.md)。
 
 ---
@@ -220,7 +220,9 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
   （未配置鉴权）时放行。App 自 1.6.0 起在 WS 握手带 Bearer 头，旧版 App（不带该头）
   需要先把 bridge `-token` 留空才能连接。
 - 事件在完成身份归一化与入站图片登记后**立即**写出（不等待 `-send_interval`），WS 写由
-  `wsWriteMu` 串行化；HTTP 推送同样立即发出。
+  `wsWriteMu` 串行化；HTTP 推送同样立即发出。入站事件按到达顺序**串行**推送
+  （`incoming.go` 的单 worker 队列）：同一会话的连续消息不会因并发 goroutine 乱序；
+  队列满时对 Frida 回调施加短暂背压，不静默丢事件。
 - 上游通过 `json.Marshal(WechatMessage)` 发送紧凑 JSON；`message` 为数组；
   `sender`、`group_id`、`raw_message` 等在 protobuf 解析路径上通常存在。实际字段集合比
   契约示例多 `post_type`、`msgsource`、`show_content`；解析方应忽略未知字段。
@@ -251,7 +253,9 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
 
 未列出的 action 会被静默忽略。同一时刻只接受一个 WS 连接：已有活动连接时新连接被拒绝
 （HTTP 409），避免第二个连接抢占事件流；读限制 8 MB、写超时 5 s，写失败会关闭连接。
-WS 入站消息同样受 token 约束；未连接期间的事件会被丢弃（仅记日志）。
+服务端每 15 s 发一次 ping，客户端回 pong（或任一入站消息）会续期 30 s 读截止时间；
+超过上限说明连接已半开（对端休眠/被杀/网络切换），bridge 主动关闭并清空全局连接，
+App 重连不会再被 409 长期挡住。WS 入站消息同样受 token 约束；未连接期间的事件会被丢弃（仅记日志）。
 
 ### 3.3 HTTP 发送接口
 
@@ -284,11 +288,19 @@ Content-Type: application/json
   等待有**总预算 60s**（`sendResultTimeout`）：worker 自身 15s 超时，图片/视频/语音还要等 hook 的
   `upload_*_finish` 异步回包，这个预算只兜底「永远等不到」；超时返回 HTTP 500
   `{"status":"failed","error":"send result timeout"}`（`errSendResultTimeout`），不会让连接与 goroutine 永久挂起。
-- `/send_*` 请求体上限为 **64 MiB**（`sendBodyMaxBytes`，`http.MaxBytesReader`）：覆盖 40 MiB 文件的 base64
-  （约 53 MB）与最长语音段的 base64；超限返回 **413**（`请求体过大`）。不是 1 MiB——旧值会拒掉常见图片/视频/
-  文件与 >15s 语音段。仅 `/sns/*` 使用 1 MiB 级上限，两者互不影响。
-- 额外的未鉴权调试端点：`/test_ws`（向当前 WS 连接写任意 body）以及
-  `net/http/pprof` 注册的 `/debug/pprof/*`。它们只在 127.0.0.1 上暴露，详见 §7。
+- **R3 模式仅支持文本/语音**：`r3ModeActive` 时 hook 没有 req2buf/StartTask 发送链路，
+  `img`/`video`/`file`（含 `send_file_simple` 的 `appattach` 分片）会返回可区分标记
+  `unsupported:media`；`/send_*` 映射为 **HTTP 501**
+  `{"status":"failed","error":"media_send_unsupported","message":"R3 模式仅支持文本/语音"}`，
+  不再报笼统的 500。拍一拍仍是实验路径（`r3PatSend` 默认关闭）。
+  发送失败时 bridge 会删除本条 base64 媒体新建在 `-image_path` 下的临时文件，
+  避免微信账号目录堆积孤儿文件。
+- 请求体上限（`http.MaxBytesReader`）：`/send_*` **64 MiB**（`sendBodyMaxBytes`，覆盖 40 MiB 文件
+  base64 约 53 MB 与最长语音段）；`/send_voice` **16 MiB**（`sendVoiceBodyMaxBytes`，PCM 上限
+  5.76 MB、base64 约 7.7 MB）；`/fetch_image` 与 `/fetch_voice` **64 KiB**（`fetchBodyMaxBytes`）。
+  超限统一返回 **413**（纯文本/JSON 里的 `请求体过大`）。仅 `/sns/*` 使用独立的 1 MiB 级上限。
+- 额外的未鉴权调试端点：`/test_ws`（向当前 WS 连接写任意 body，请求体上限 **1 MiB**，
+  `testWSBodyMaxBytes`）以及 `net/http/pprof` 注册的 `/debug/pprof/*`。它们只在 127.0.0.1 上暴露，详见 §7。
 
 ### 3.4 入站图片获取接口
 
@@ -302,6 +314,7 @@ Content-Type: application/json
 
 - 鉴权与 `/send_*` 一致（Bearer + `hmac.Equal`）；非 POST → 405，未授权 → 401，
   `message_id` 缺失/未登记/已过期 → 400，下载失败 → 502。
+- 请求体上限 **64 KiB**（`fetchBodyMaxBytes`）：正常请求只有 `message_id`，超限返回 413。
 - 成功：HTTP 200
 
   ```json
@@ -459,7 +472,7 @@ Content-Type: application/json
   传给进程，同机用户可用 `ps` 看到；仅适用于单用户桌面环境。App 日志如需脱敏，
   应在读取 bridge stdout 时过滤 `OnebotToken`。
 - **未鉴权端点**：`/test_ws`、`/debug/pprof/*` 无鉴权（`/test_ws` 可向当前 App WS
-  连接注入任意 JSON）。它们默认只监听 `127.0.0.1`（由 `-receive_host`/App host 决定）；
+  连接注入任意 JSON，请求体上限 1 MiB）。它们默认只监听 `127.0.0.1`（由 `-receive_host`/App host 决定）；
   本机其他进程仍可访问，因此不要在不受信任的多用户机器上运行。
 - **日志**：`bridge/log/macos.log` 含消息内容，轮转上限 100 MB × 10、保留 30 天。
   入站图片获取的日志只记 `message_id`、字节数与失败原因，**不记** aeskey / CDN key / XML。

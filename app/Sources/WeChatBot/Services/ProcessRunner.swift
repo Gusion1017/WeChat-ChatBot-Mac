@@ -246,23 +246,31 @@ private final class ProcessLifecycle: @unchecked Sendable {
 /// Splits streamed bytes into complete lines. Thread-safe: reader callbacks may run
 /// concurrently for stdout/stderr.
 ///
+/// 按**字节**切行（0x0A），再逐行解码 UTF-8：
+/// - 管道读块边界可能落在多字节字符中间，旧实现 String(data:encoding:.utf8) 会返回 nil
+///   并丢掉整块输出（bridge 日志/安装进度/status JSON 静默缺行）；按字节切行后，只有
+///   终止换行到齐的行才会被解码，字符不会被切断；
+/// - Swift 的 Character 会把 "\r\n" 当成一个 grapheme，用 Character 找 "\n" 会跳过 CRLF
+///   行（旧实现因此把多行 CRLF 输出合并成一行）。
+///
 /// ANSI escape codes are removed here, on the background pipe-reader threads, before
 /// lines are yielded to callers — so bridge colour codes never reach the main actor,
 /// the log buffer or SQLite. Content-only consumers (scripts, otool) see the same text.
-private final class LineBuffer: @unchecked Sendable {
+final class LineBuffer: @unchecked Sendable {
     private let lock = NSLock()
-    private var buffer = ""
+    /// 尚未遇到换行符的尾部字节（可能停在多字节字符中间）。
+    private var pendingBytes = Data()
 
     func append(_ data: Data) -> [String] {
-        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return [] }
         lock.lock()
         defer { lock.unlock() }
-        buffer += text
+        pendingBytes.append(data)
         var lines: [String] = []
-        while let index = buffer.firstIndex(of: "\n") {
-            var line = String(buffer[buffer.startIndex..<index])
-            if line.hasSuffix("\r") { line.removeLast() }
-            buffer.removeSubrange(buffer.startIndex...index)
+        while let newline = pendingBytes.firstIndex(of: 0x0A) {
+            var bytes = Data(pendingBytes[pendingBytes.startIndex..<newline])
+            pendingBytes.removeSubrange(pendingBytes.startIndex...newline)
+            if bytes.last == 0x0D { bytes.removeLast() }
+            let line = String(decoding: bytes, as: UTF8.self)
             lines.append(AnsiText.strip(line))
         }
         return lines
@@ -271,8 +279,10 @@ private final class LineBuffer: @unchecked Sendable {
     func flush() -> String? {
         lock.lock()
         defer { lock.unlock() }
-        let remainder = AnsiText.strip(buffer).trimmingCharacters(in: .whitespacesAndNewlines)
-        buffer = ""
+        guard !pendingBytes.isEmpty else { return nil }
+        let remainder = AnsiText.strip(String(decoding: pendingBytes, as: UTF8.self))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingBytes.removeAll(keepingCapacity: true)
         return remainder.isEmpty ? nil : remainder
     }
 }

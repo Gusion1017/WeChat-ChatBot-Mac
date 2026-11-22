@@ -167,7 +167,8 @@ struct CaptureSetupSheet: View {
     private var missingItemsText: String {
         let titles = plan.missingItems.map { title(for: $0) }
         guard !titles.isEmpty else { return L("正在等待手动发送，完成后会自动检测") }
-        return Lf("还差：%@", titles.joined(separator: "、"))
+        // 分隔符随语言：英文界面用 ", "，中文用 "、"（见 docs/copy-style.md §1）。
+        return Lf("还差：%@", titles.joined(separator: L10n.listSeparator))
     }
 
     private static func symbol(for status: CaptureSetupStatus) -> String {

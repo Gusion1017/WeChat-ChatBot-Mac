@@ -4,7 +4,8 @@ import SwiftUI
 private struct ConversationCleanupTarget: Identifiable {
     var id: String { conversation.id }
     let conversation: Conversation
-    let messageCount: Int
+    /// nil 表示条数读取失败：不能显示成「0 条消息」，也不能照常确认清理。
+    let messageCount: Int?
 }
 
 /// 会话：会话列表 + 聊天详情 + 输入区。三栏由主窗口侧边栏、会列表和详情组成。
@@ -520,10 +521,19 @@ struct ConversationsView: View {
     private func clearChats(of conversation: Conversation) {
         isClearing = true
         Task {
-            await store.clearMessages(conversationID: conversation.id)
-            toast.show(L("已清理当前会话聊天记录"), tone: .success, symbol: "trash")
+            let cleared = await store.clearMessages(conversationID: conversation.id)
             isClearing = false
-            cleanupTarget = nil
+            if cleared {
+                toast.show(L("已清理当前会话聊天记录"), tone: .success, symbol: "trash")
+                cleanupTarget = nil
+            } else {
+                // 失败时保留确认面板，用户可直接重试；不要给成功提示。
+                toast.show(
+                    L("清理聊天记录失败，请查看运行日志后重试"),
+                    tone: .error,
+                    symbol: "exclamationmark.triangle"
+                )
+            }
         }
     }
 
@@ -664,8 +674,16 @@ struct ConversationsView: View {
     private func delete(_ conversation: Conversation) {
         deleteTarget = nil
         Task {
-            await store.deleteConversation(id: conversation.id)
-            toast.show("已删除聊天「\(conversation.displayTitle)」", tone: .success, symbol: "trash")
+            let deleted = await store.deleteConversation(id: conversation.id)
+            if deleted {
+                toast.show("已删除聊天「\(conversation.displayTitle)」", tone: .success, symbol: "trash")
+            } else {
+                toast.show(
+                    L("删除聊天失败，请查看运行日志后重试"),
+                    tone: .error,
+                    symbol: "exclamationmark.triangle"
+                )
+            }
         }
     }
 
@@ -700,12 +718,21 @@ struct ConversationsView: View {
             toast.show(L("OneBot 未连接，请先启动机器人"), tone: .warning)
             return
         }
-        draft = ""
         isSending = true
         Task {
-            await store.sendManualMessage(conversationID: conversation.id, text: text)
+            let sent = await store.sendManualMessage(conversationID: conversation.id, text: text)
             isSending = false
-            toast.show(L("消息已提交发送"), tone: .success, symbol: "paperplane.fill")
+            // 只有真正发送成功才清空草稿并提示成功：失败时保留输入（可直接重试），
+            // 用 store.lastError 说明原因与下一步，避免「失败却提示已提交」。
+            if sent {
+                draft = ""
+                toast.show(L("消息已提交发送"), tone: .success, symbol: "paperplane.fill")
+            } else {
+                let reason = store.lastError?.isEmpty == false
+                    ? store.lastError!
+                    : L("消息发送失败，请查看运行日志")
+                toast.show(Lf("消息发送失败：%@", reason), tone: .error, symbol: "exclamationmark.triangle")
+            }
         }
     }
 }

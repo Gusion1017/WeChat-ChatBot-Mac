@@ -60,6 +60,9 @@ main.go
   以及发布时段/每日上限/最小间隔配置）与 `registerSNSHandlers()`（注册
   `/sns/status|timeline|detail|media|sync|post|comment|like|objectop`）。
   未启用时 handler 返回 404；SNS 请求全部在 bridge 内编解码（protobuf 不经过 hook）。
+  2026-11-22：`incoming_message` 不再 `go HandleIncomingMessage`，改为
+  `enqueueIncomingMessage` 单 worker 队列（按到达顺序串行推送）；启动时
+  `startIncomingWorker()`。
 
 logger.go
   日志文件路径改为由 `-log_file` 指定，并在启动时创建所在目录。
@@ -91,6 +94,9 @@ incoming.go
   不再每条事件写 Info 日志。
   2026-10-26：推送前调用 `registerIncomingVoice`，解析入站 `<voicemsg>` 并登记
   按需下载元数据，把 `[语音]` 文本占位替换成无文件的 voice 段（duration_ms 可空）。
+  2026-11-22：新增 `incomingEvents` 单 worker 队列（`enqueueIncomingMessage` /
+  `runIncomingWorker`）：入站事件按到达顺序串行处理，单条事件 panic 只记日志、
+  不终止队列；队列满时对 Frida 回调施加背压而不丢事件。
 
 worker.go
   新增 `pat` 发送分支：构建 appmsg type=62 的 `SendAppMsgReq` 并调用 hook
@@ -100,6 +106,10 @@ worker.go
   2026-10-23：入站图片事件经过 `SendWebSocketMsg → HandleMsg` 时，legacy 的
   `image` 分支会尝试把空 `data.text` 当 XML 解析并返回 EOF，导致整条图片事件被丢弃。
   现在空文本/无 data 的 image 段直接跳过 legacy 下载逻辑，事件原样转发给 App。
+  2026-11-22：R3 媒体止血——hook 返回 `unsupported:media` 时 `send_image` /
+  `send_video` / `send_file_simple` 映射为 `errMediaSendUnsupported`（HTTP 501
+  `media_send_unsupported`）；发送失败时清理本次 base64 媒体新建在 `-image_path`
+  的临时文件（`pendingMediaTempPaths` / `removeTempMediaFile`）。
 
 websocket.go
   新增 WS 动作 `get_contact_directory`：按 `image_path` 推导 `db_storage`，
@@ -111,6 +121,9 @@ websocket.go
   （`worker.go SendWechatMsg`）。`发送数据` / `收到消息` 日志降为 Debug，只记
   字节长度与最多 256 字符的截断预览（新增 `truncateForLog` / `logEventDebug`），
   不再打印完整事件 JSON。
+  2026-11-22：WS 连接健康——服务端每 15s ping，pong/入站消息续期 30s 读截止时间；
+  超时说明连接已半开，主动 dropWSConn 并清空全局 conn，App 重连不再长期 409。
+  `/test_ws` 请求体上限 1 MiB（`http.MaxBytesReader`，超限 413）。
 
 http.go
   `/send_group_msg` 的 `at` 昵称同样在群成员缓存未命中时回退通讯录昵称
@@ -125,6 +138,9 @@ http.go
   base64；也兼容 16k WAV base64），交给 `sendVoicePCM16k` 用 go-silk 编码
   Tencent SILK；Hook 未支持时
   返回 `{"ok":false,"error":"voice_send_unsupported"}`，App 降级文字。
+  2026-11-22：`/send_*` 对 `errMediaSendUnsupported` 返回 HTTP 501
+  `{"status":"failed","error":"media_send_unsupported","message":"R3 模式仅支持文本/语音"}`；
+  `/fetch_image` 请求体上限 64 KiB（超限 413）。
 
 msg.go
   2026-10-23：`Download()` 在某个 CDN key 的首个分片到达时记录下载代次与 key，
@@ -144,6 +160,13 @@ media_test.go             上述逻辑的单元测试（XML 解析、事件段�
                           下载触发、HTTP 鉴权/参数/错误映射；不连接微信/Frida）
 http_auth_test.go         无 Gadget 场景下验证 HTTP 鉴权、参数校验与 /ws 动作的
                           httptest 测试（不启动真实端口、不连接 Frida）
+websocket_test.go         WS 连接健康测试：读空闲超时清理半开连接、pong 续期、
+                          断开后重连不再 409、单连接 409 仍生效（httptest）
+http_body_limit_test.go   /test_ws 1 MiB、/fetch_image 与 /fetch_voice 64 KiB、
+                          /send_voice 16 MiB 的 MaxBytesReader/413 测试
+incoming_queue_test.go    入站事件单 worker 队列的顺序/串行性与 panic 恢复测试
+media_r3_test.go          R3 媒体标记 → media_send_unsupported 映射（HTTP 501）与
+                          base64 媒体临时文件清理测试（临时目录，不连接 Frida）
 incoming_msg_test.go      `HandleMsg` 序列化保留 mentions / 自消息字段的回归测试
 incoming_normalize_test.go 入站事件归一化（自消息、群聊、@、非法帧、非法群 ID
                           清洗、旧 hook 群自消息补群）单元测试
@@ -181,7 +204,8 @@ voice.go                  入站语音获取（2026-10-26）：`<voicemsg>` XML 
                           .silk 落盘 + go-silk 解码 16k PCM + WAV 落盘 + 幂等缓存）；
                           出站 `POST /send_voice` / voice 段 `data.pcm16k`：官方 SILK SDK
                           24k WeChat 兼容编码（cgo 包 silkenc）；R3 模式 + 句柄就绪时等待语音发送结果，
-                          未就绪返回 voice_handle_missing / voice_send_unsupported
+                          未就绪返回 voice_handle_missing / voice_send_unsupported；
+                          /fetch_voice 请求体上限 64 KiB、/send_voice 16 MiB（413）
 r3seed.go                 文本/语音发送句柄按微信 PID 持久化（voice_seed 与 seed
                           共用记录；bridge 重启自动恢复，微信重启自动失效）
 silkenc/                  SILK SDK（Skype 2006–2012 许可，见 LICENSES/SILK-SDK.txt；

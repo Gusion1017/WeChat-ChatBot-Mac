@@ -70,7 +70,7 @@
 | --- | --- |
 | 开关 | `updates.autoCheck`，默认 `true`；关闭后不自动检查，手动检查仍可用 |
 | 启动与节流 | App 启动完成后延迟 8 秒发起，仅当自动检查开启且未被节流时执行；`UpdateCheckPolicy.autoCheckInterval` = 6 小时，以 `updates.lastCheckedAt` 为基准 |
-| 手动检查/静默刷新 | 手动检查不受节流限制，成功检查也会刷新 `lastCheckedAt`，顺带推迟下一次自动检查；打开更新页时若自动检查开启、未在忙，且（距上次检查超过 6 小时 **或** `latestRelease` 为空）则静默刷新一次 |
+| 手动检查/静默刷新 | 手动检查不受节流限制，成功检查也会刷新 `lastCheckedAt`，顺带推迟下一次自动检查；打开更新页时**无论自动检查开关**，只要未在忙且 `latestRelease` 为空就静默补拉一次（不弹提示、不写 `lastNotifiedTag`）；自动检查开启时另按距上次检查超过 6 小时节流 |
 | 检查失败 | 自动检查失败只写日志，**不**进入 `failed`、不弹错误，已有徽标保持不变；手动检查失败进入 `failed(message)` 并可重试 |
 | 提示条件、去重与跳过 | Release 版本 > 当前版本且 tag ≠ `updates.skippedTag`；自动检查发现新版本时，若 tag ≠ `updates.lastNotifiedTag`，发一次应用内 toast 并写入该 tag；点「跳过此版本」写入 `skippedTag`，清空即取消跳过，若仍存在更新则恢复 `available` 与徽标 |
 | 并发 | 检查/下载/校验/安装进行中不重复触发（`isBusy`）；手动与自动检查共用同一状态机 |

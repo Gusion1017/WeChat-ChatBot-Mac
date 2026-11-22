@@ -49,7 +49,7 @@ memory, voice and image understanding.
 ### 快速开始
 
 1. 从 [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest) 下载
-   `WeChat-AI-4.2.0.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
+   `WeChat-AI-4.2.1.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
 2. App 未公证，首次启动被 Gatekeeper 拦截时，在「系统设置 → 隐私与安全性」点「仍要打开」，或执行：
 
    ```bash
@@ -93,7 +93,7 @@ bash scripts/build_bridge.sh        # Go 构建 + 测试
 make release                        # 构建、打包、签名校验与 SHA256
 ```
 
-当前基线：Swift 1010 项执行（1008 通过 / 2 项环境跳过），Go 348 项用例。
+当前基线：Swift 1032 项执行（1030 通过 / 2 项环境跳过），Go 373 项用例。
 修改 `hook/script.js` 后运行 `bash scripts/sync_hook_script.sh`；接口或行为变更先改 `docs/`。
 
 ### 隐私与风险
@@ -144,7 +144,7 @@ Hook installation needs Xcode Command Line Tools; source builds need Xcode 27.
 
 ### Quick Start
 
-1. Download `WeChat-AI-4.2.0.zip` and `.sha256` from
+1. Download `WeChat-AI-4.2.1.zip` and `.sha256` from
    [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest), unzip and move
    `WeChat AI.app` to `~/Applications` or `/Applications`.
 2. If Gatekeeper blocks the first launch, choose "Open Anyway" under System Settings → Privacy &
@@ -192,7 +192,7 @@ bash scripts/build_bridge.sh        # Go build + tests
 make release                        # build, package, signature check, SHA256
 ```
 
-Current baseline: 1010 Swift tests (1008 passed / 2 environment-gated skips) and 348 Go test cases.
+Current baseline: 1032 Swift tests (1030 passed / 2 environment-gated skips) and 373 Go test cases.
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`; change `docs/` before code
 for interface or behaviour changes.
 

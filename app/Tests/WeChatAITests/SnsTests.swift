@@ -3164,13 +3164,83 @@ final class SnsPublishRunTests: XCTestCase {
         )
         XCTAssertTrue(unlimited.isUnlimited)
         XCTAssertEqual(unlimited.sentCount, 7)
-        XCTAssertEqual(unlimited.remainingCount, 93, "无上限按 bridge 50 条/人兜底计算剩余")
+        XCTAssertEqual(unlimited.remainingCount, 43, "无上限时 50 条是全局额度（7 已发，剩 43）")
         XCTAssertFalse(unlimited.isExhausted)
 
         let unlimitedFull = SnsPublishTodayUsage.aggregate(
             capacityPerTarget: 50, isUnlimited: true, sentPerTarget: [50, 50]
         )
         XCTAssertTrue(unlimitedFull.isExhausted, "无上限也要承认 bridge 每日 50 条兜底已到")
+    }
+
+    /// bridge 每日 50 条是**全局**上限：ledger 按对象记账，但两个对象合计到 50 后
+    /// 调度器不应再提交（旧实现按每对象 50 判断，会继续提交并连续失败）。
+    func testBridgeGlobalDailyLimitStopsAllTargets() async {
+        let (defaults, suite) = suiteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let ledger = SnsPublishLedger(accountID: "wxid_test", defaults: defaults)
+        var settings = makeSettings(targetIDs: ["wxid_a", "wxid_b"])
+        settings.publish.mode = .windows
+        settings.publish.maxPerDay = 0
+        settings.publish.windows = [
+            SnsPublishWindow(id: "all", startMinute: 9 * 60, endMinute: 22 * 60)
+        ]
+        settings.publish.minIntervalMinutes = 0
+        let now = Date()
+        for _ in 0..<25 {
+            await ledger.record(targetID: "wxid_a", at: now)
+            await ledger.record(targetID: "wxid_b", at: now)
+        }
+        var summary: SnsPublishRunSummary?
+        var submits = 0
+        let scheduler = SnsPublishScheduler(
+            settingsProvider: { settings },
+            targetsProvider: { [self.target("wxid_a"), self.target("wxid_b")] },
+            draftProvider: { _ in .success("文案") },
+            publishHandler: { _, _ in
+                submits += 1
+                return true
+            },
+            ledger: ledger,
+            targetSpacingSeconds: 0,
+            onRunCompleted: { summary = $0 }
+        )
+        await scheduler.fire(settings: settings, scheduledAt: now, now: now)
+        XCTAssertEqual(submits, 0, "全局 50 条已满时不应再提交")
+        XCTAssertEqual(summary?.skippedCount, 2)
+        XCTAssertEqual(summary?.sentCount, 0)
+        XCTAssertTrue(summary?.skipNote?.contains("bridge") == true, "应说明是 bridge 全局上限")
+        let exhausted = await scheduler.dailyQuotaExhausted(
+            publish: settings.publish,
+            targets: [target("wxid_a"), target("wxid_b")],
+            on: now
+        )
+        XCTAssertTrue(exhausted, "合计 50 条应判定为今日额度用尽")
+    }
+
+    /// 发布失败时必须把 MomentsStore 的失败原因写进「上次结果」，否则只显示「发布失败：昵称」。
+    func testPublishFailureReasonSurfacesInRunSummary() async {
+        let (defaults, suite) = suiteDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let ledger = SnsPublishLedger(accountID: "wxid_test", defaults: defaults)
+        let settings = makeSettings(targetIDs: ["wxid_a"])
+        let now = Date()
+        var summary: SnsPublishRunSummary?
+        let scheduler = SnsPublishScheduler(
+            settingsProvider: { settings },
+            targetsProvider: { [self.target("wxid_a")] },
+            draftProvider: { _ in .success("文案") },
+            publishHandler: { _, _ in false },
+            ledger: ledger,
+            targetSpacingSeconds: 0,
+            failureReasonProvider: { "正文最多 1500 字" },
+            onRunCompleted: { summary = $0 }
+        )
+        await scheduler.fire(settings: settings, scheduledAt: now, now: now)
+        XCTAssertEqual(summary?.failedCount, 1)
+        let error = summary?.firstError ?? ""
+        XCTAssertTrue(error.contains("正文最多 1500 字"), "失败原因应进入 firstError：\(error)")
+        XCTAssertTrue(error.contains("wxid_a"), "失败信息应包含目标名：\(error)")
     }
 
     /// 有目标成功时不能把整轮说成「上次未发送」：skipNote 只描述整轮 0 发送/0 草稿。

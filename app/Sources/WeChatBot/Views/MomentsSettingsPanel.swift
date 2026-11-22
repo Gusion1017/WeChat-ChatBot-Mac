@@ -1011,7 +1011,7 @@ struct MomentsSettingsPanel: View {
             InlineNotice(
                 kind: .warning,
                 title: "还不能自动互动",
-                message: interactionConfigBlockers.joined(separator: "；")
+                message: interactionConfigBlockers.joined(separator: L10n.sentenceSeparator)
             )
             if interactionNeedsCapture {
                 Button(L("查看捕获步骤…")) {
@@ -1219,7 +1219,7 @@ struct MomentsSettingsPanel: View {
                 InlineNotice(
                     kind: .warning,
                     title: "还不能自动发布",
-                    message: autoPublishConfigBlockers.joined(separator: "；")
+                    message: autoPublishConfigBlockers.joined(separator: L10n.sentenceSeparator)
                 )
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -1624,7 +1624,7 @@ struct MomentsSettingsPanel: View {
                     : usageSummaryText(usage))
             }
         }
-        return parts.joined(separator: "；")
+        return parts.joined(separator: L10n.sentenceSeparator)
     }
 
     /// 状态胶囊：已发满 → warning；否则显示下一次实际时刻。
@@ -2021,7 +2021,7 @@ struct MomentsSettingsPanel: View {
         } else if !store.isBotRunning {
             detail = L("机器人启动后才会执行自动互动。")
         } else if !interactionConfigBlockers.isEmpty {
-            detail = interactionConfigBlockers.joined(separator: "；")
+            detail = interactionConfigBlockers.joined(separator: L10n.sentenceSeparator)
         } else {
             let limit = interaction.isMaxPerDayUnlimited
                 ? L("每天互动次数不设上限")
@@ -2044,7 +2044,7 @@ struct MomentsSettingsPanel: View {
         guard blockers.isEmpty else {
             return MomentsSectionState(
                 label: L("待配置"),
-                detail: blockers.joined(separator: "；"),
+                detail: blockers.joined(separator: L10n.sentenceSeparator),
                 tint: Theme.warning
             )
         }

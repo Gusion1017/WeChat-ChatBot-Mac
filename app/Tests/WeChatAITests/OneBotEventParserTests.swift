@@ -73,4 +73,28 @@ final class OneBotEventParserTests: XCTestCase {
         XCTAssertTrue(OneBotEventParser.parse(data: Data("not-json".utf8)).isEmpty)
         XCTAssertTrue(OneBotEventParser.parse(data: Data("[]".utf8)).isEmpty)
     }
+
+    // MARK: 发送失败原因（bridge 失败体 → 可展示文案）
+
+    func testSendFailureReasonMapsMediaUnsupportedCode() {
+        let data = Data(#"{"status":"failed","error":"media_send_unsupported"}"#.utf8)
+        let reason = OneBotClient.sendFailureReason(data: data, statusCode: 501)
+        XCTAssertTrue(reason.contains("文本"), "应翻译成用户文案：\(reason)")
+        XCTAssertFalse(reason.contains("media_send_unsupported"), "不应把错误码直接展示给用户")
+    }
+
+    func testSendFailureReasonUsesBridgeMessage() {
+        let data = Data(#"{"status":"failed","error":"send image failed"}"#.utf8)
+        XCTAssertEqual(
+            OneBotClient.sendFailureReason(data: data, statusCode: 500),
+            "send image failed"
+        )
+    }
+
+    func testSendFailureReasonFallsBackToHTTPStatus() {
+        let data = Data("boom".utf8)
+        let reason = OneBotClient.sendFailureReason(data: data, statusCode: 500)
+        XCTAssertTrue(reason.contains("HTTP 500"))
+        XCTAssertTrue(reason.contains("boom"))
+    }
 }

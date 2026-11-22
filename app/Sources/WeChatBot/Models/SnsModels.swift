@@ -342,7 +342,10 @@ struct SnsPublishSettings: Codable, Hashable {
     static let maxTimePoints = 10
     /// 可发时段上限：设置页「最多 6 段」与排程/模型归一化共用同一常量。
     static let maxWindows = 6
-    static let unlimitedDailyCapacity = 50
+    /// bridge 每日发布全局兜底：所有好友合计 50 条/天（bridge 侧限流，不是每对象额度）。
+    static let bridgeDailyLimit = 50
+    /// 「无上限」时生成排程槽位用的容量（沿 bridge 全局兜底，不等于每对象额度）。
+    static let unlimitedDailyCapacity = bridgeDailyLimit
     /// 到点判定容差：调度误差/系统轻微睡眠内仍算「到点」；超过则跳过，不补发。
     static let dueToleranceSeconds: TimeInterval = 150
 

@@ -48,6 +48,29 @@ final class LocalizationCoverageTests: XCTestCase {
             "微信 %@ 的 Hook 地址表尚未真机验证（%@）。启动 bridge 会修改微信内部函数，可能导致微信崩溃，已阻止启动。请换回已验证的微信版本（如 4.2.1.3），或等待该版本适配完成后再试。",
             "当前微信版本的版本表标记为未真机验证；启动机器人会注入错误地址并导致微信崩溃，因此已阻止启动。请换回已验证的微信版本（如 4.2.1.3），或等待该版本适配完成。",
             "当前微信版本的版本表尚未真机验证；安装可以继续，但启动机器人会被阻止，避免错误地址导致微信崩溃。请换回已验证的微信版本（如 4.2.1.3），或等待适配完成。",
+            "bridge 未连接",
+            "缺少发送句柄：请手动发一条文字和一条语音",
+            "缺少文本句柄：请手动发一条文字",
+            "缺少语音句柄：请手动发一条语音",
+            "未启用 R3 原生发送（语音会降级文字）",
+            "可发送语音",
+            "旧版 CosyVoice3 服务仍在运行，请先退出旧版/重启 App",
+            "删除微信备份",
+            "删除后无法用该版本备份还原微信；需要时可重新备份。",
+            "Hook 监听端口；修改后需重新安装 Hook 才会生效，bridge 会连接该端口",
+            // 定时任务「下次执行」的未来时间文案。
+            "即将",
+            "%d 分钟后",
+            // 清理/删除/压缩失败提示（真实结果未知时不能提示成功）。
+            "清理聊天记录失败，请查看运行日志后重试",
+            "删除聊天失败，请查看运行日志后重试",
+            "压缩失败，请查看运行日志",
+            "删除记忆失败，请查看运行日志",
+            "删除记忆卡失败，请查看运行日志",
+            "条数暂不可用，请重试",
+            "消息发送失败，请查看运行日志",
+            // Gadget 端口改动需要重新安装 Hook。
+            "Gadget 端口已修改：端口在安装 Hook 时写入微信，需要重新「备份并安装 Hook」后才会生效；仅重启机器人不会生效",
         ]
         for key in required {
             let value = strings[key]
@@ -93,5 +116,48 @@ final class LocalizationCoverageTests: XCTestCase {
             if !seen.insert(key).inserted { duplicates.append(key) }
         }
         XCTAssertTrue(duplicates.isEmpty, "英文文案存在重复 key：\(duplicates.prefix(5))")
+    }
+
+    /// 英文文案里不允许残留中文：L() 未命中时会回退中文源串，英文界面等于没翻译。
+    func testEnglishValuesContainNoChinese() throws {
+        let strings = try englishStrings()
+        XCTAssertFalse(strings.isEmpty)
+        let han = try NSRegularExpression(pattern: #"\p{Han}"#)
+        var leaking: [String] = []
+        for (key, value) in strings {
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            if han.firstMatch(in: value, range: range) != nil {
+                leaking.append(key)
+            }
+        }
+        XCTAssertTrue(
+            leaking.isEmpty,
+            "英文文案仍含中文（前 5 条）：\(leaking.sorted().prefix(5))"
+        )
+    }
+
+    /// key 与英文译文的 %@ / %d / %.1f 等占位符必须完全一致：
+    /// 少一个会在 String(format:) 丢参数，多一个会崩溃或输出空值。
+    func testFormatPlaceholdersMatchBetweenKeyAndTranslation() throws {
+        let strings = try englishStrings()
+        let specifier = try NSRegularExpression(
+            pattern: #"%(?:\d+\$)?[-+ 0#]*\d*(?:\.\d+)?(?:lld|ld|d|i|u|f|g|e|@|s)"#
+        )
+        func specifiers(_ text: String) -> [String] {
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            return specifier.matches(in: text, range: range).compactMap { match in
+                Range(match.range, in: text).map { String(text[$0]) }
+            }.sorted()
+        }
+        var mismatches: [String] = []
+        for (key, value) in strings where key.contains("%") {
+            if specifiers(key) != specifiers(value) {
+                mismatches.append("\(key) -> \(value)")
+            }
+        }
+        XCTAssertTrue(
+            mismatches.isEmpty,
+            "占位符不一致（前 5 条）：\(mismatches.sorted().prefix(5))"
+        )
     }
 }
