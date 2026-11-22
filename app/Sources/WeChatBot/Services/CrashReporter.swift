@@ -621,8 +621,8 @@ enum CrashReporter {
 
 // MARK: - 主线程看门狗
 
-/// 主线程看门狗：后台串行队列每 `tickInterval` 秒向主队列发一次心跳，
-/// 主线程超过 `stallThreshold` 没有响应就记录卡顿。
+/// 主线程看门狗：后台串行队列按当前节奏向主队列发心跳，
+/// 主线程超过 `cadence.stallThreshold` 没有响应就记录卡顿。
 ///
 /// 设计要点：
 /// - 行情健康时每个 tick 只产生一次 main-queue block，不拼字符串、不分配数组；
@@ -630,14 +630,26 @@ enum CrashReporter {
 /// - 卡顿期间**不叠加**新的 ping，因此不会反过来压垮主队列。
 /// - 卡顿记录只写文件 + 统一日志，并把补写运行日志的 `Task { @MainActor }` 扔给主队列：
 ///   主线程卡住时它排队等待、恢复后执行，不会造成 MainActor 死锁。
+/// - 频率分档（2026-11-22 perf）：机器人运行且 App 活跃时保持 1s/1.5s；
+///   机器人停止或 App 非活跃时降到 5s/7.5s，空闲时不再每秒唤醒主队列。
 /// - 测试环境（XCTest）与 `WECHATAI_DISABLE_WATCHDOG=1` 下不启动。
+struct WatchdogCadence: Equatable, Sendable {
+    var tickInterval: TimeInterval
+    var stallThreshold: TimeInterval
+    var leewayMilliseconds: Int
+}
+
 final class MainThreadWatchdog {
     static let shared = MainThreadWatchdog()
 
-    /// 心跳间隔（秒）。
+    /// 前台/活跃心跳间隔（秒）。
     static let tickInterval: TimeInterval = 1.0
-    /// 判定“主线程无响应”的阈值（秒）。
+    /// 前台/活跃卡顿阈值（秒）。
     static let stallThreshold: TimeInterval = 1.5
+    /// 空闲（机器人停止或 App 非活跃）心跳间隔（秒）。
+    static let idleTickInterval: TimeInterval = 5.0
+    /// 空闲卡顿阈值（秒）：同步放宽，仍是 tick 的 1.5 倍。
+    static let idleStallThreshold: TimeInterval = 7.5
     /// 同一次卡顿内重复上报的最小间隔（秒）。
     private static let repeatedReportInterval: TimeInterval = 5.0
 
@@ -650,6 +662,11 @@ final class MainThreadWatchdog {
     private var lastReportAt: TimeInterval = 0
     private var reportedThisStall = false
     private var running = false
+    /// 机器人是否在运行、App 是否活跃：两者都为 true 才保持 1s 精细取证。
+    private var botRunning = false
+    private var appActive = true
+    /// 当前生效的心跳/阈值组合（由 `update(botRunning:appActive:)` 调整）。
+    private var cadence = MainThreadWatchdog.cadence(botRunning: false, appActive: true)
 
     /// 卡顿/恢复回调。在**后台队列**上调用，实现方必须自己保证线程安全。
     var onStall: ((String) -> Void)?
@@ -667,6 +684,59 @@ final class MainThreadWatchdog {
         return NSClassFromString("XCTestCase") != nil
     }
 
+    /// 频率决策（纯函数，便于单测）：机器人运行且 App 活跃时保持 1s/1.5s 精细取证；
+    /// 否则降到 5s/7.5s，避免空闲（机器人停止、用户切到微信）时每秒唤醒。
+    static func cadence(botRunning: Bool, appActive: Bool) -> WatchdogCadence {
+        guard botRunning, appActive else {
+            return WatchdogCadence(
+                tickInterval: idleTickInterval,
+                stallThreshold: idleStallThreshold,
+                leewayMilliseconds: 500
+            )
+        }
+        return WatchdogCadence(
+            tickInterval: tickInterval,
+            stallThreshold: stallThreshold,
+            leewayMilliseconds: 200
+        )
+    }
+
+    /// 更新看门狗的输入状态（机器人启停 / App 前后台切换）。幂等；未启动时只记录。
+    ///
+    /// 真正重新排程在后台队列执行，避免与 `stop()` 的 cancel 竞争。
+    func update(botRunning: Bool? = nil, appActive: Bool? = nil) {
+        lock.lock()
+        if let botRunning { self.botRunning = botRunning }
+        if let appActive { self.appActive = appActive }
+        let newCadence = Self.cadence(
+            botRunning: self.botRunning,
+            appActive: self.appActive
+        )
+        let changed = newCadence != cadence
+        cadence = newCadence
+        let isRunning = running
+        let timer = self.timer
+        let botRunningSnapshot = self.botRunning
+        let appActiveSnapshot = self.appActive
+        lock.unlock()
+
+        guard changed, isRunning, let timer else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.running, self.timer != nil else { return }
+            timer.schedule(
+                deadline: .now() + newCadence.tickInterval,
+                repeating: newCadence.tickInterval,
+                leeway: .milliseconds(newCadence.leewayMilliseconds)
+            )
+        }
+        stabilityLogger.notice(
+            "主线程看门狗频率已调整（botRunning=\(botRunningSnapshot, privacy: .public)，appActive=\(appActiveSnapshot, privacy: .public)）：tick=\(Int(newCadence.tickInterval * 1000), privacy: .public)ms，阈值=\(Int(newCadence.stallThreshold * 1000), privacy: .public)ms"
+        )
+    }
+
     func start() {
         guard !Self.isRunningUnderTests else {
             stabilityLogger.notice("主线程看门狗：检测到测试环境，跳过启动")
@@ -680,13 +750,14 @@ final class MainThreadWatchdog {
         lock.lock()
         guard !running else { lock.unlock(); return }
         running = true
+        let initialCadence = cadence
         lock.unlock()
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(
-            deadline: .now() + Self.tickInterval,
-            repeating: Self.tickInterval,
-            leeway: .milliseconds(200)
+            deadline: .now() + initialCadence.tickInterval,
+            repeating: initialCadence.tickInterval,
+            leeway: .milliseconds(initialCadence.leewayMilliseconds)
         )
         timer.setEventHandler { [weak self] in
             self?.tick()
@@ -697,7 +768,7 @@ final class MainThreadWatchdog {
         lock.unlock()
         timer.resume()
         stabilityLogger.notice(
-            "主线程看门狗已启动（tick=\(Int(Self.tickInterval * 1000), privacy: .public)ms，阈值=\(Int(Self.stallThreshold * 1000), privacy: .public)ms）"
+            "主线程看门狗已启动（tick=\(Int(initialCadence.tickInterval * 1000), privacy: .public)ms，阈值=\(Int(initialCadence.stallThreshold * 1000), privacy: .public)ms）"
         )
     }
 
@@ -723,18 +794,19 @@ final class MainThreadWatchdog {
         let sentAt = pingSentAt
         let reported = reportedThisStall
         let lastReport = lastReportAt
+        let threshold = cadence.stallThreshold
         lock.unlock()
         guard running else { return }
 
         if awaiting {
             let elapsed = now - sentAt
-            if elapsed >= Self.stallThreshold,
+            if elapsed >= threshold,
                !reported || now - lastReport >= Self.repeatedReportInterval {
                 lock.lock()
                 reportedThisStall = true
                 lastReportAt = now
                 lock.unlock()
-                reportStall(elapsed: elapsed)
+                reportStall(elapsed: elapsed, threshold: threshold)
             }
             // 主线程仍无响应：不叠加新 ping，等它恢复。
             return
@@ -771,8 +843,8 @@ final class MainThreadWatchdog {
         onStall?(message)
     }
 
-    private func reportStall(elapsed: TimeInterval) {
-        let message = "主线程无响应 ≥\(Self.milliseconds(elapsed))ms（阈值 \(Self.milliseconds(Self.stallThreshold))ms）"
+    private func reportStall(elapsed: TimeInterval, threshold: TimeInterval) {
+        let message = "主线程无响应 ≥\(Self.milliseconds(elapsed))ms（阈值 \(Self.milliseconds(threshold))ms）"
         stabilityLogger.error("\(message, privacy: .public)")
         CrashReporter.recordMainThreadStall(message)
         onStall?(message)
@@ -780,5 +852,13 @@ final class MainThreadWatchdog {
 
     private static func milliseconds(_ interval: TimeInterval) -> String {
         String(format: "%.0f", interval * 1000)
+    }
+}
+
+extension CrashReporter {
+    /// 机器人运行状态变化时调整主线程看门狗频率：
+    /// 运行中且 App 活跃保持 1s 精细取证，停止/后台降到 5s。
+    static func setBotRunning(_ running: Bool) {
+        MainThreadWatchdog.shared.update(botRunning: running)
     }
 }

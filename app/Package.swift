@@ -3,8 +3,8 @@ import PackageDescription
 
 // MARK: - WeChat AI native app
 //
-// 语音合成走本机 CosyVoice3 HTTP 旁路（devtools/cosyvoice/server.py），
-// App 侧不链接任何本地推理静态库：`swift build` 无需额外下载 vendored 依赖。
+// 语音合成走本机 Qwen3-TTS 本地 HTTP 服务（devtools/cosyvoice/server.py；
+// 目录沿用历史名字），App 侧不链接任何本地推理静态库：`swift build` 无需额外下载 vendored 依赖。
 
 let package = Package(
     name: "WeChatAI",

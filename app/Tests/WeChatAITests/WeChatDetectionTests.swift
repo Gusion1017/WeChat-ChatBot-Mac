@@ -7,9 +7,10 @@ final class WeChatDetectionTests: XCTestCase {
     private let fileManager = FileManager.default
 
     private func makeFakeApp(
-        version: String = "4.2.0.17",
-        build: String = "270353",
-        executableName: String = "WeChat"
+        version: String = "4.2.1.3",
+        build: String = "270595",
+        executableName: String = "WeChat",
+        shortVersion: String? = nil
     ) throws -> URL {
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("wechatai-detect-\(UUID().uuidString)", isDirectory: true)
@@ -19,7 +20,7 @@ final class WeChatDetectionTests: XCTestCase {
         try fileManager.createDirectory(at: macOS, withIntermediateDirectories: true)
         let plist: [String: Any] = [
             "WeChatBundleVersion": version,
-            "CFBundleShortVersionString": version,
+            "CFBundleShortVersionString": shortVersion ?? version,
             "CFBundleVersion": build,
             "CFBundleExecutable": executableName,
         ]
@@ -39,31 +40,73 @@ final class WeChatDetectionTests: XCTestCase {
     // MARK: Version support
 
     func testKnownVersionPairsMatchInstallScripts() {
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 6)
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.0.17")
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270353")
-        XCTAssertTrue(WeChatVersionSupport.versions.contains("4.1.12.53"))
-        XCTAssertTrue(WeChatVersionSupport.builds.contains("269365"))
-        XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.0.17 (270353)"))
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 5)
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.1.3")
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270595")
+        XCTAssertTrue(WeChatVersionSupport.versions.contains("4.2.0.5"))
+        XCTAssertTrue(WeChatVersionSupport.builds.contains("270341"))
+        XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.1.3 (270595)"))
+        XCTAssertFalse(WeChatVersionSupport.versions.contains("4.1.15.55"))
+        XCTAssertFalse(WeChatVersionSupport.builds.contains("270135"))
     }
 
     func testVersionSupportRequiresKnownVersionOrBuild() {
-        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.0.17", build: "270353"))
-        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.0.17", build: ""))
-        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "", build: "270353"))
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: "270595"))
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: ""))
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "", build: "270595"))
         XCTAssertFalse(WeChatVersionSupport.isKnown(version: "4.2.0.18", build: "270399"))
         XCTAssertFalse(WeChatVersionSupport.isKnown(version: "", build: ""))
+        XCTAssertFalse(WeChatVersionSupport.isKnown(version: "4.1.15.55", build: "270135"))
         XCTAssertFalse(
-            WeChatVersionSupport.isKnown(version: "4.2.0.17", build: "270348"),
+            WeChatVersionSupport.isKnown(version: "4.2.1.3", build: "270353"),
             "版本与 build 必须来自同一已知组合"
         )
     }
 
     func testNativeSendVersionListExcludesLegacyOnly() {
+        XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.2.1.3", build: "270595"))
         XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.2.0.17", build: "270353"))
-        XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.1.15.55", build: ""))
+        XCTAssertFalse(NativeSendVersionSupport.supports(version: "4.1.15.55", build: ""))
         XCTAssertFalse(NativeSendVersionSupport.supports(version: "4.1.12.53", build: "269365"))
         XCTAssertFalse(NativeSendVersionSupport.supports(version: "", build: ""))
+    }
+
+    /// 运行时门禁/覆盖配置使用「检测到的微信」优先于设置路径：
+    /// 设置路径失效但检测到受支持版本时，不能按空版本关闭 R3 发送。
+    func testRuntimeTargetPrefersDetectedPathAndDrivesVersionSupport() throws {
+        let detected = try makeFakeApp(version: "4.2.1.3", build: "270595")
+        defer { cleanup(detected) }
+        let missingConfigured = "/tmp/wechatai-missing-\(UUID().uuidString)/WeChat.app"
+
+        let target = WeChatRuntimeTarget.path(
+            configuredPath: missingConfigured,
+            detectedPath: detected.path
+        )
+        XCTAssertEqual(target, detected.path)
+        let installation = WeChatInstallation.inspect(path: target)
+        XCTAssertTrue(installation.isKnownVersion)
+        XCTAssertTrue(NativeSendVersionSupport.supports(
+            version: installation.version,
+            build: installation.build
+        ))
+
+        // 旧逻辑只用设置路径：失效路径读不到版本，会被判成不支持而静默关闭 R3。
+        let stale = WeChatInstallation.inspect(path: missingConfigured)
+        XCTAssertFalse(NativeSendVersionSupport.supports(version: stale.version, build: stale.build))
+    }
+
+    func testRuntimeTargetFallsBackToConfiguredPath() {
+        XCTAssertEqual(
+            WeChatRuntimeTarget.path(
+                configuredPath: "/Applications/WeChat.app",
+                detectedPath: "   \n"
+            ),
+            "/Applications/WeChat.app"
+        )
+        XCTAssertEqual(
+            WeChatRuntimeTarget.path(configuredPath: "", detectedPath: ""),
+            ""
+        )
     }
 
     // MARK: Inspection
@@ -73,11 +116,34 @@ final class WeChatDetectionTests: XCTestCase {
         defer { cleanup(app) }
         let installation = WeChatInstallation.inspect(path: app.path)
         XCTAssertTrue(installation.exists)
-        XCTAssertEqual(installation.version, "4.2.0.17")
-        XCTAssertEqual(installation.build, "270353")
-        XCTAssertEqual(installation.versionDisplay, "4.2.0.17 (270353)")
+        XCTAssertEqual(installation.version, "4.2.1.3")
+        XCTAssertEqual(installation.build, "270595")
+        XCTAssertEqual(installation.versionDisplay, "4.2.1.3 (270595)")
         XCTAssertTrue(installation.isKnownVersion)
         XCTAssertEqual(installation.executable?.lastPathComponent, "WeChat")
+    }
+
+    /// 4.2.1.3 的 Info.plist 把工程版本放在 WeChatBundleVersion，CFBundleShortVersionString 只是 4.2.1；
+    /// 检测必须优先后者，否则会把 4.2.1.3 误判成未知版本。
+    func testInspectPrefersWeChatBundleVersionOverShortVersion() throws {
+        let app = try makeFakeApp(version: "4.2.1.3", build: "270595", shortVersion: "4.2.1")
+        defer { cleanup(app) }
+        let installation = WeChatInstallation.inspect(path: app.path)
+        XCTAssertEqual(installation.version, "4.2.1.3")
+        XCTAssertEqual(installation.build, "270595")
+        XCTAssertTrue(installation.isKnownVersion)
+    }
+
+    /// 启动预热与 Hook 检测必须使用同一套 Info.plist 解析（WeChatBundleVersion 优先）。
+    func testPrewarmVersionMatchesInstallationInspection() throws {
+        let app = try makeFakeApp(version: "4.2.1.3", build: "270595", shortVersion: "4.2.1")
+        defer { cleanup(app) }
+        XCTAssertEqual(AppStore.installedWeChatVersion(path: app.path), "4.2.1.3")
+        XCTAssertNil(
+            AppStore.installedWeChatVersion(
+                path: "/tmp/wechatai-missing-\(UUID().uuidString)/WeChat.app"
+            )
+        )
     }
 
     func testInspectMissingAppIsNotExisting() {
@@ -208,8 +274,8 @@ final class WeChatDetectionTests: XCTestCase {
     }
 
     func testCompactVersionListIsLanguageAware() {
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 6 个版本"))
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("6 versions"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 5 个版本"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("5 versions"))
     }
 
     // MARK: Quit confirmation

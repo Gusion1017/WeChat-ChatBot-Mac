@@ -191,6 +191,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CrashReporter.markPhase(.running)
         CrashReporter.captureSnapshot(reason: "didFinishLaunching", force: true)
         // 主线程看门狗：给「卡顿 → 布局风暴 → 显示周期断言」这条链路留下时间线。
+        // 启动前先按「机器人是否运行 + App 是否活跃」选择 1s/5s 节奏。
+        MainThreadWatchdog.shared.update(
+            botRunning: AppStore.shared?.isBotRunning ?? false,
+            appActive: NSApp.isActive
+        )
         MainThreadWatchdog.shared.start()
 
         let settings = SettingsStore.load()
@@ -281,6 +286,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// AppKit/LaunchServices can reset an accessory app to `.regular` when it becomes
     /// active (e.g. activating from the menu bar); re-assert the window-derived policy.
     func applicationDidBecomeActive(_ notification: Notification) {
+        // App 回到前台：看门狗恢复 1s 精细取证（机器人运行时）。
+        MainThreadWatchdog.shared.update(appActive: true)
         ActivationPolicyController.reapplyCurrent()
         // 用户从微信切回来时顺手核对一次微信进程状态：覆盖 App 启动前就已退出/启动，
         // 或通知被系统合并的场景。轻量检查，不读 Info.plist。
@@ -289,6 +296,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await store.refreshWeChatProcessState()
             }
         }
+    }
+
+    /// App 切到后台（用户去看微信等）：看门狗降到 5s，避免空闲时每秒唤醒主队列。
+    func applicationWillResignActive(_ notification: Notification) {
+        MainThreadWatchdog.shared.update(appActive: false)
     }
 
     /// 机器人或 bridge 仍在运行时，按设置先确认再退出，避免误触 ⌥⌘Q / 菜单栏退出。

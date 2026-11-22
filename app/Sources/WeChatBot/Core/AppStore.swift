@@ -419,11 +419,11 @@ final class AppStore {
 
     /// Reads WeChat's bundle version. Pure file I/O with no actor state, so it can run
     /// off the main actor (startup prewarm in `AppStore+Runtime`).
+    ///
+    /// 复用 `WeChatInstallation.inspect`，保证「WeChatBundleVersion 优先、数字型版本、
+    /// 空串归一」与 Hook 检测完全一致；两处各写一份解析曾在数字/空格场景下显示不同版本。
     nonisolated static func installedWeChatVersion(path: String) -> String? {
-        let info = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
-        guard let data = try? Data(contentsOf: info),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        else { return nil }
-        return plist["WeChatBundleVersion"] as? String ?? plist["CFBundleShortVersionString"] as? String
+        let version = WeChatInstallation.inspect(path: path).version
+        return version.isEmpty ? nil : version
     }
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
-	"text/template"
 	"time"
 
 	"github.com/frida/frida-go/frida"
@@ -136,7 +134,11 @@ func initFlag() {
 	flag.StringVar(&config.ImagePath, "image_path", "", "图片路径: /Users/xxx/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/xxx/temp/xxx/2026-01/Img/")
 	flag.StringVar(&config.MediaDir, "media_dir", "",
 		"入站图片落盘目录（App 传入；留空则 ~/Library/Application Support/WeChatAI/media）")
-	flag.StringVar(&config.WechatConf, "wechat_conf", "../wechat_version/4_1_11_53_mac.json", "微信配置文件路径: ../wechat_version/4_1_6_12_mac.json")
+	// 默认指向仓库内的唯一事实来源版本表（hook/versions/**）；旧默认
+	// ../wechat_version/4_1_11_53_mac.json 所在目录已随 4.1.x 支持一起删除，
+	// 裸跑二进制时会直接 "读取文件失败" 退出。App 与 scripts/run_bridge.sh
+	// 都显式传 -wechat_conf，这里只影响手工裸跑。
+	flag.StringVar(&config.WechatConf, "wechat_conf", "../hook/versions/4_2_1_3_mac.json", "微信配置文件路径: ../hook/versions/4_2_1_3_mac.json（按微信版本选择，见 hook/versions/）")
 	flag.StringVar(&config.ConnType, "conn_type", "http", "连接类型: http | websocket")
 	flag.IntVar(&config.SendInterval, "send_interval", 1000, "发送间隔: ms")
 	flag.IntVar(&config.WechatPid, "wechat_pid", 0, "微信进程 PID，不设置则自动查找")
@@ -254,19 +256,14 @@ func loadJs() {
 		Fatal("读取脚本失败", "err", err)
 	}
 
-	tmpl, err := template.New("fridaScript").Parse(string(codeTemplate))
+	// 渲染并校验缺键（见 hook_template.go）：模板缺键会渲染成 <no value>，
+	// 落在代码位置时整份脚本语法错误、所有 hook 静默失效，必须在注入前拒绝。
+	rendered, err := renderHookScript(string(codeTemplate), wechatHookConf)
 	if err != nil {
-		Fatal("解析模板失败", "err", err)
-		return
+		Fatal("渲染 hook 脚本失败，拒绝注入", "err", err)
 	}
 
-	var buf bytes.Buffer
-	err = tmpl.Execute(&buf, wechatHookConf)
-	if err != nil {
-		Fatal("执行模板失败", "err", err)
-	}
-
-	script, err := session.CreateScript(buf.String())
+	script, err := session.CreateScript(rendered)
 	if err != nil {
 		Fatal("创建脚本失败", "err", err)
 	}

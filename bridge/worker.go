@@ -539,18 +539,18 @@ func HandleBuf2Resp(msgType string, data []byte) {
 
 	if len(data) == 0 {
 		Error("buf2resp响应数据为空", "msg_type", msgType)
-		buf2RespChan <- &Buf2RespData{
+		postBuf2Resp(&Buf2RespData{
 			MsgType: msgType,
 			Data:    data,
 			Err:     errors.New("response data is empty"),
-		}
+		})
 		return
 	}
 
 	switch msgType {
 	case "appattach":
 		Info("收到uploadappattach响应", "data_len", len(data))
-		appAttachRespChan <- data
+		postAppAttachResp(data)
 		return
 	}
 
@@ -562,17 +562,48 @@ func HandleBuf2Resp(msgType string, data []byte) {
 	// 判断错误码是否为0
 	if ret != 0 {
 		Error("buf2resp响应错误", "msg_type", msgType, "ret", ret, "errMsg", errMsg)
-		buf2RespChan <- &Buf2RespData{
+		postBuf2Resp(&Buf2RespData{
 			MsgType: msgType,
 			Data:    data,
 			Err:     fmt.Errorf("response error, ret=%d, errMsg=%s", ret, errMsg),
-		}
+		})
 		return
 	}
 
 	Info("buf2resp响应成功", "msg_type", msgType)
-	buf2RespChan <- &Buf2RespData{
+	postBuf2Resp(&Buf2RespData{
 		MsgType: msgType,
 		Data:    data,
+	})
+}
+
+// postBuf2Resp 非阻塞投递 buf2resp 结果。
+// 调用方是 Frida 消息回调派生出的 goroutine：发送已超时（15s）或 R3 模式跳过
+// 等待后，迟到的回包没有消费者。阻塞投递会让该 goroutine 永久挂起并一直占住
+// 回包数据（历史上每个迟到回包泄漏一个 goroutine），因此满时直接丢弃并告警。
+func postBuf2Resp(resp *Buf2RespData) {
+	postBuf2RespTo(buf2RespChan, resp)
+}
+
+// postBuf2RespTo 是非阻塞投递的实现（单独一层便于单测用局部 channel 覆盖）。
+func postBuf2RespTo(ch chan *Buf2RespData, resp *Buf2RespData) {
+	select {
+	case ch <- resp:
+	default:
+		Warn("buf2resp 结果无人消费，已丢弃", "msg_type", resp.MsgType)
+	}
+}
+
+// postAppAttachResp 非阻塞投递 uploadappattach 分片回包，语义同 postBuf2Resp。
+func postAppAttachResp(data []byte) {
+	postAppAttachRespTo(appAttachRespChan, data)
+}
+
+// postAppAttachRespTo 是非阻塞投递的实现（单独一层便于单测）。
+func postAppAttachRespTo(ch chan []byte, data []byte) {
+	select {
+	case ch <- data:
+	default:
+		Warn("uploadappattach 回包无人消费，已丢弃", "data_len", len(data))
 	}
 }

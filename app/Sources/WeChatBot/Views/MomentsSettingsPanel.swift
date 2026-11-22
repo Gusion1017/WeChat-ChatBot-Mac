@@ -10,8 +10,8 @@ import SwiftUI
 ///   发布前确认已移除（v3.0 完全自动发布）；
 /// - **禁用有原因**：每张卡都展示前置条件（就绪状态 / 写通道 / 演练模式 / 发布对象 / 白名单对象），
 ///   不再出现「灰着但不知道为什么」；
-/// - **不重复配置**：自动互动的对象直接取「机器人 → 名单」里的聊天白名单私聊对象，
-///   朋友圈设置不再维护第二份互动名单与回复范围。
+/// - **对象集中在名单**：发布对象在「机器人 → 名单 → 朋友圈对象」选择；互动对象沿用聊天
+///   白名单私聊对象（只读）。本面板只显示摘要与「去名单…」跳转，不重复维护名单。
 /// - **可观测**：读取状态来自 `MomentsStore`（bridge `/sns/status`），自动发布展示
 ///   「排程预览」（今天剩余时刻、今日配额与下一次）与上一轮结果（含跳过原因）。
 ///
@@ -30,7 +30,6 @@ struct MomentsSettingsPanel: View {
     @SceneStorage("bot.subTab")
     private var botSubTabID: String = BotTab.general.rawValue
 
-    @State private var isTargetsPresented = false
     @State private var isOutboxPresented = false
     @State private var isInteractionActivityPresented = false
     @State private var isCheckingReadiness = false
@@ -56,6 +55,11 @@ struct MomentsSettingsPanel: View {
     private var moments: MomentsStore { store.moments }
     private var writeEnabled: Bool { sns.enabled && sns.writeEnabled }
     private var publishEditable: Bool { writeEnabled && publish.enabled }
+    /// 当前微信版本是否强制只读（写链路未真机验证）：与 bridge 下发的
+    /// `snsWrite=false` 同一判据，发布/评论/回复都不会真正执行。
+    private var snsWriteSuppressed: Bool {
+        SnsWriteGate.showsReadOnlyUI(version: store.hookStatus.wechatVersion)
+    }
 
     private var selectedSection: MomentsSettingsSection {
         MomentsSettingsSection(rawValue: settingsSectionID) ?? .read
@@ -95,10 +99,6 @@ struct MomentsSettingsPanel: View {
             if MomentsSettingsSection(rawValue: settingsSectionID) == nil {
                 settingsSectionID = MomentsSettingsSection.read.rawValue
             }
-        }
-        .sheet(isPresented: $isTargetsPresented) {
-            MomentsTargetsSheet()
-                .environment(store)
         }
         .sheet(isPresented: $isOutboxPresented) {
             MomentsOutboxSheet()
@@ -286,6 +286,10 @@ struct MomentsSettingsPanel: View {
         }
         guard moments.status != nil else {
             return (L("待检测"), Theme.info, "hourglass")
+        }
+        // 版本级只读：不是配置问题，换版本前发布/互动都不会执行。
+        if snsWriteSuppressed {
+            return (L("只读"), Theme.warning, "eye")
         }
         let captureMissing = moments.status?.isPrimed != true
         let interactionBlocked = interaction.enabled
@@ -580,6 +584,16 @@ struct MomentsSettingsPanel: View {
             }
         ) {
             VStack(spacing: 0) {
+                if snsWriteSuppressed {
+                    InlineNotice(
+                        kind: .warning,
+                        title: "写链路仅只读",
+                        message: "当前微信版本的朋友圈写链路尚未通过真机验证；自动评论与回复已强制关闭，读取不受影响。"
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    SettingsDivider()
+                }
                 // 只有「配置缺失」才用 warning；机器人没运行是运行态，不是配置错误。
                 if interaction.enabled, !interactionConfigBlockers.isEmpty {
                     interactionBlockersNotice
@@ -674,8 +688,8 @@ struct MomentsSettingsPanel: View {
                 }
                 .buttonStyle(.glass)
                 .controlSize(.small)
-                .help(L("切换到「机器人 → 名单」编辑聊天白名单"))
-                .accessibilityLabel(L("去名单分栏设置聊天白名单"))
+                .help(L("切换到「机器人 → 名单」管理朋友圈对象"))
+                .accessibilityLabel(L("去名单分栏管理朋友圈对象"))
             }
         }
     }
@@ -1030,7 +1044,8 @@ struct MomentsSettingsPanel: View {
             if moments.status?.canRefreshNatively != true {
                 items.append(L("尚未捕获朋友圈读取样本：先在微信打开一次朋友圈"))
             }
-            if !store.settings.bot.dryRun, moments.status?.commentReady != true {
+            if !store.settings.bot.dryRun, !snsWriteSuppressed,
+               moments.status?.commentReady != true {
                 items.append(L("评论通道未就绪：在微信里手动评论一次即可捕获"))
             }
         }
@@ -1046,7 +1061,8 @@ struct MomentsSettingsPanel: View {
 
     /// 互动是否还有可通过「本机手动操作」补齐的捕获项。
     private var interactionNeedsCapture: Bool {
-        guard sns.enabled, store.settings.hook.enableNativeSend else { return false }
+        // 只读版本没有写通道：评论句柄捕获了也不能发送，不再指向捕获弹窗。
+        guard sns.enabled, store.settings.hook.enableNativeSend, !snsWriteSuppressed else { return false }
         if moments.status?.isPrimed != true { return true }
         return !store.settings.bot.dryRun && moments.status?.commentReady != true
     }
@@ -1065,6 +1081,16 @@ struct MomentsSettingsPanel: View {
             }
         ) {
             VStack(spacing: 0) {
+                if snsWriteSuppressed {
+                    InlineNotice(
+                        kind: .warning,
+                        title: "写链路仅只读",
+                        message: "当前微信版本的朋友圈写链路尚未通过真机验证；自动发布已强制关闭（演练草稿不受影响），读取不受影响。"
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    SettingsDivider()
+                }
                 SettingsRow(
                     title: "允许发布（写操作）",
                     subtitle: "开启后才能自动发布；改动需重启机器人后生效",
@@ -1103,7 +1129,7 @@ struct MomentsSettingsPanel: View {
         ) {
             HStack(spacing: 8) {
                 PillLabel(text: writeChannelText, color: writeChannelTint)
-                if !store.settings.bot.dryRun, moments.status?.writeReady != true {
+                if !snsWriteSuppressed, !store.settings.bot.dryRun, moments.status?.writeReady != true {
                     Button(L("查看捕获步骤…")) {
                         store.presentCaptureSetupPrompt()
                     }
@@ -1118,6 +1144,9 @@ struct MomentsSettingsPanel: View {
     }
 
     private var writeChannelText: String {
+        // 写链路被强制只读的版本（见 snsWriteSuppressedVersions）：bridge 强制
+        // snsWrite=false，捕获了样本也不能发布；当前集合为空时本分支不会命中。
+        if snsWriteSuppressed { return L("仅只读（适配中）") }
         // 演练只生成草稿，不要求写通道；不要把「未就绪」显示成阻塞。
         if store.settings.bot.dryRun, moments.status?.writeReady != true { return L("演练不需要") }
         guard let status = moments.status else { return L("未检测") }
@@ -1125,6 +1154,7 @@ struct MomentsSettingsPanel: View {
     }
 
     private var writeChannelTint: Color {
+        if snsWriteSuppressed { return Theme.warning }
         if store.settings.bot.dryRun, moments.status?.writeReady != true { return .secondary }
         guard let status = moments.status else { return .secondary }
         return status.writeReady ? Theme.success : Theme.warning
@@ -1142,7 +1172,7 @@ struct MomentsSettingsPanel: View {
         ) {
             HStack(spacing: 8) {
                 PillLabel(text: commentChannelText, color: commentChannelTint)
-                if !store.settings.bot.dryRun {
+                if !snsWriteSuppressed, !store.settings.bot.dryRun {
                     Button(L("查看捕获步骤…")) {
                     store.presentCaptureSetupPrompt()
                 }
@@ -1157,12 +1187,14 @@ struct MomentsSettingsPanel: View {
     }
 
     private var commentChannelText: String {
+        if snsWriteSuppressed { return L("仅只读（适配中）") }
         if store.settings.bot.dryRun, moments.status?.commentReady != true { return L("演练不需要") }
         guard let status = moments.status else { return L("未检测") }
         return status.commentReady ? L("已就绪") : L("未就绪")
     }
 
     private var commentChannelTint: Color {
+        if snsWriteSuppressed { return Theme.warning }
         if store.settings.bot.dryRun, moments.status?.commentReady != true { return .secondary }
         guard let status = moments.status else { return .secondary }
         return status.commentReady ? Theme.success : Theme.warning
@@ -1311,7 +1343,9 @@ struct MomentsSettingsPanel: View {
             items.append(L("朋友圈配置待生效（重启机器人后同步）"))
         }
         // 演练模式只生成只读草稿，不需要写通道；真正发布时才需要。
-        if !store.settings.bot.dryRun {
+        if snsWriteSuppressed, !store.settings.bot.dryRun {
+            items.append(L("当前微信版本的朋友圈写链路尚未验证（强制只读）"))
+        } else if !store.settings.bot.dryRun {
             if let status = moments.status {
                 if !status.writeReady { items.append(L("写通道未就绪（发布通道未打通或未捕获发布样本）")) }
             } else {
@@ -1333,7 +1367,8 @@ struct MomentsSettingsPanel: View {
 
     private var targetsRow: some View {
         // 「发布对象」同时承载可见性语义：自动发布固定部分可见，只发给勾选的好友。
-        // 不再单独放一行只读的「谁可以看」，避免两处表达同一件事。
+        // 不再单独放一行只读的「谁可以看」，避免两处表达同一件事；选择入口统一在
+        // 「机器人 → 名单 → 朋友圈对象」，「去名单…」不受发布开关禁用（配置随时可查看）。
         SettingsRow(
             title: "发布对象",
             subtitle: "部分可见：只发给已选好友；未选择时不发布",
@@ -1345,13 +1380,13 @@ struct MomentsSettingsPanel: View {
                 Text(Lf("已选 %d 人", publish.sanitized.targetUserIDs.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                Button(L("选择…")) {
-                    isTargetsPresented = true
+                Button(L("去名单…")) {
+                    botSubTabID = BotTab.lists.rawValue
                 }
                 .buttonStyle(.glass)
                 .controlSize(.small)
-                .disabled(!publishEditable)
-                .accessibilityLabel(L("选择发布对象"))
+                .help(L("切换到「机器人 → 名单」管理朋友圈对象"))
+                .accessibilityLabel(L("去名单分栏管理朋友圈对象"))
             }
         }
     }
@@ -2362,169 +2397,5 @@ private enum MomentsSettingsSection: String, CaseIterable, Identifiable, PageTab
         case .interaction: Theme.info
         case .publish: Theme.warning
         }
-    }
-}
-
-// MARK: - 发布对象选择
-
-/// 自动发布可选对象：私聊 + 开启 AI 自动回复（与调度器 `targetsProvider` / 发布前置条件一致）。
-/// 会话列表尚未加载时调用方自行决定是否使用。
-private func snsPublishCandidateIDs(_ conversations: [Conversation]) -> Set<String> {
-    Set(conversations
-        .filter { $0.kind == .direct && $0.aiEnabled }
-        .map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty && !$0.hasSuffix("@chatroom") })
-}
-
-/// 自动发布的发布对象选择：只列出发送者/会话都是私聊且开启 AI 自动回复的会话，
-/// 避免旧版「对所有 AI 私聊扇出」的隐私问题。
-private struct MomentsTargetsSheet: View {
-    @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-
-    private var candidates: [Conversation] {
-        store.conversations
-            .filter { $0.kind == .direct && $0.aiEnabled }
-            .filter { !$0.id.hasSuffix("@chatroom") }
-            .sorted {
-                $0.displayTitle.localizedStandardCompare($1.displayTitle) == .orderedAscending
-            }
-    }
-
-    private var selectedIDs: [String] {
-        store.settings.bot.snsSettings.publish.targetUserIDs
-    }
-
-    /// 已选但当前不在候选里的对象（会话已删除或关闭了 AI 自动回复）。
-    /// 调度器会直接跳过这些人，但旧 UI 里看不见也删不掉，只能「清空」。
-    private var unavailableSelectedIDs: [String] {
-        guard !store.conversations.isEmpty else { return [] }
-        let available = snsPublishCandidateIDs(store.conversations)
-        return selectedIDs.filter { !available.contains($0) }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                IconTile(symbol: "person.2.circle", tint: Theme.info, size: 30)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L("选择发布对象"))
-                        .font(.headline)
-                    Text(L("只列出开启 AI 自动回复的私聊会话；自动发布只发给这些好友。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                IconActionButton(symbol: "xmark", help: "关闭") { dismiss() }
-            }
-
-            if candidates.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "person.2.slash")
-                        .font(.system(size: 24, weight: .light))
-                        .foregroundStyle(.tertiary)
-                    Text(L("还没有可发布的私聊对象"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Text(L("先在「会话」里开启某个私聊会话的 AI 自动回复，再回来选择。"))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(candidates) { conversation in
-                            row(conversation)
-                            if conversation.id != candidates.last?.id {
-                                SettingsDivider()
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 340)
-            }
-
-            if !unavailableSelectedIDs.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    InlineNotice(
-                        kind: .warning,
-                        title: "部分已选对象不可用",
-                        message: Lf("已选的 %d 人当前不在可发布列表（会话已删除或未开启 AI 自动回复），自动发布会跳过。",
-                                    unavailableSelectedIDs.count)
-                    )
-                    Button(L("移除不可用对象")) {
-                        let available = snsPublishCandidateIDs(store.conversations)
-                        setTargets(selectedIDs.filter { available.contains($0) })
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Text(Lf("已选 %d 人", selectedIDs.count))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(L("清空")) {
-                    setTargets([])
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(selectedIDs.isEmpty)
-                Button(L("完成")) { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-            }
-        }
-        .padding(20)
-        .frame(width: 460)
-        .background(.regularMaterial)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(L("选择发布对象"))
-    }
-
-    private func row(_ conversation: Conversation) -> some View {
-        HStack(spacing: 10) {
-            AvatarView(title: conversation.displayTitle, size: 26)
-            Text(conversation.displayTitle)
-                .font(.callout)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Toggle("", isOn: selectedBinding(for: conversation.id))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .accessibilityLabel(conversation.displayTitle)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 7)
-    }
-
-    private func selectedBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { store.settings.bot.snsSettings.publish.targetUserIDs.contains(id) },
-            set: { on in
-                var ids = selectedIDs
-                if on {
-                    if !ids.contains(id) { ids.append(id) }
-                } else {
-                    ids.removeAll { $0 == id }
-                }
-                setTargets(ids)
-            }
-        )
-    }
-
-    private func setTargets(_ ids: [String]) {
-        var settings = store.settings.bot.snsSettings
-        settings.publish.targetUserIDs = ids
-        store.settings.bot.snsSettings = settings
-        store.persist()
     }
 }

@@ -23,11 +23,11 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   衍生说明见 [`bridge/NOTICE`](../bridge/NOTICE)）
 - 本项目以上游 `onebot/` 为基线，**Go 源码有修改与新增**（自消息方向、入站归一化、
   通讯录目录、原生发送状态持久化等）；逐文件清单与原因见 [`bridge/NOTICE`](../bridge/NOTICE)。
-  `script.js` 同步 `hook/script.js` 的微信版本化适配（4.1.12 / 4.1.15 / 4.2.0.5 / 4.2.0.9 /
-  4.2.0.12 / 4.2.0.17，见 §5）。
+  `script.js` 同步 `hook/script.js` 的微信版本化适配（4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 /
+  4.2.0.5；4.1.x 自 2026-11-20 起移除，见 §5）。
 
-> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含朋友圈 `/sns/*` 与 4.2.0.17 适配；
-> 下载用户见 [`install.md`](install.md) 与 [`releases/4.1.0.md`](releases/4.1.0.md)。
+> **发布状态（2026-11-22）**：本文描述 **4.2.0**，包含朋友圈 `/sns/*` 与 4.2.1.3 适配；下载用户见
+> [`install.md`](install.md) 与 [`releases/4.2.0.md`](releases/4.2.0.md)。
 
 ---
 
@@ -140,7 +140,7 @@ scripts/run_bridge.sh [选项]
 
 | 环境变量 | 命令行参数 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `WECHAT_CONF` | `--wechat-conf` | `hook/versions/4_2_0_17_mac.json` | Hook 版本 JSON |
+| `WECHAT_CONF` | `--wechat-conf` | `hook/versions/4_2_1_3_mac.json` | Hook 版本 JSON |
 | `PORT` | `--port` | `58080` | HTTP/WS 监听端口；`run_bridge.sh` 固定只绑定 `127.0.0.1`（App 用设置里的 host，默认 `127.0.0.1`） |
 | `TOKEN` | `--token` | 随机生成 64 字符 hex | OneBot token；HTTP 鉴权用 |
 | `IMAGE_PATH` | `--image-path` | 无（**必填**） | 微信图片/语音/视频/文件临时目录，必须已存在 |
@@ -148,14 +148,14 @@ scripts/run_bridge.sh [选项]
 | `GADGET_ADDR` | `--gadget-addr` | `127.0.0.1:27042` | Frida Gadget 地址 |
 | `LOG_LEVEL` | `--log-level` | `info` | `debug` / `info` / `warn` / `error` |
 | `BRIDGE_BIN` | `--bin` | `bridge/onebot` | 自定义可执行文件 |
-| `HOOK_SEND_DISABLED` | —（仅环境变量） | `true` | 强制关闭 4.1.15 主动发送；显式 `false` 才允许 Hook/JSON 决定 |
+| `HOOK_SEND_DISABLED` | —（仅环境变量） | `true` | 强制关闭主动发送；显式 `false` 才允许 Hook/JSON 决定 |
 
 除 `HOOK_SEND_DISABLED`（仅环境变量）外，每个环境变量都有等价的命令行参数，示例：
 
 ```bash
 IMAGE_PATH="$HOME/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_xxxxxxxx/temp/2026-10/Img" \
   scripts/run_bridge.sh --port 58081 --token "$(openssl rand -hex 32)" \
-  --wechat-conf hook/versions/4_2_0_17_mac.json
+  --wechat-conf hook/versions/4_2_1_3_mac.json
 ```
 
 脚本会先做前置检查（二进制、`script.js`、版本 JSON、`IMAGE_PATH`、端口占用），
@@ -198,10 +198,15 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
   强制关闭主动发送；只有显式 `HOOK_SEND_DISABLED=false` 才允许 Hook 脚本按 JSON 的
   `enableSend`/`req2bufSendMode` 执行。App 直接启动 binary 时建议同样注入
   `HOOK_SEND_DISABLED=true`（安全默认，需开发送时再关）。
+- **hook 脚本渲染校验**：`script.js` 由 Go `text/template` 用版本 JSON 渲染（`bridge/hook_template.go`）。
+  渲染后若在 JS **代码位置**出现裸 `<no value>`（地址占位符缺键），bridge 以 `Fatal`（退出码 1）拒绝注入，
+  错误信息列出缺失键与渲染偏移；字符串/注释中的 `<no value>` 只按可选字段降级（Debug 记录，hook 侧走旧行为），
+  避免注入一份语法错误、所有 hook 静默失效的脚本。`bridge/hook_template_test.go` 与
+  `scripts/check_hook_template.py` 覆盖模板键、版本表与默认版本一致性。
 - 朋友圈（SNS）没有独立命令行参数：`/sns/*` 是否可用由 `-wechat_conf` 指向的版本 JSON 的
   `snsEnable` / `snsWrite` / `snsProbe` / `snsReadMode` 决定，App 启动 bridge 前按设置合并生成运行期
   配置；仓库 JSON 默认 `snsEnable=false`，因此默认所有 `/sns/*` 返回 404。当前只有
-  `hook/versions/4_2_0_12_mac.json` 与 `4_2_0_17_mac.json` 含 SNS 锚点；其它版本即使被 App 运行期
+  `hook/versions/4_2_0_12_mac.json`、`4_2_0_17_mac.json` 与 `4_2_1_3_mac.json` 含 SNS 锚点；其它版本即使被 App 运行期
   写入 `snsEnable=true`，具体 op 也会返回 503 `sns_channel_unconfigured`（见 [`sns.md`](sns.md) §6.1）。
 
 ---
@@ -224,13 +229,13 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
 - `message[]` 类型：`text`（`data.text`）、`image`（`data.url` 为 `file://...`，
   `data.text` 保留微信 XML）、`record`/`voice`、`video`、`file`、`face`。
   legacy `HandleMsg` 路径的媒体事件在推送前会同步下载/落盘，失败时整条事件可能被丢弃（见 §6）。
-- 入站图片（4.1.15 起）：hook 只给文本占位 `[图片]`，图片 XML 在 `raw_message`。
+- 入站图片（4.2.x）：hook 只给文本占位 `[图片]`，图片 XML 在 `raw_message`。
   bridge 在推送前解析 `<img>` 的 `aeskey` / `cdnmidimgurl` / `cdnthumburl` /
   `cdnthumbaeskey` / `md5` / `length`，按 `message_id` 登记 mid → thumb 下载候选，并把
   文本占位替换成**无 data 的** `{"type":"image","data":{}}`。新增结构化字段不携带
   aeskey/CDN key，运行日志也不打印；`raw_message` 仍保留原始图片 XML（与历史行为一致）。
   实际下载发生在 App 调用 `POST /fetch_image` 时（按需，见 §3.4），不会阻塞事件推送；该链路已在
-  微信 4.2.0.5 真机验证。4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15 的入站路径不再同步下载媒体，
+  微信 4.2.0.5 真机验证。4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的入站路径不再同步下载媒体，
   推送只带结构化占位，下载由 App 按需发起。
 
 ### 3.2 WebSocket 动作（App → bridge）
@@ -272,7 +277,16 @@ Content-Type: application/json
 - 文本分片会被拼接后一次发送；`at` 元素仅群聊且能解析到该成员昵称时生效
   （进程内缓存未命中会回退通讯录目录），否则被忽略；
   媒体元素使用 `data.file`（支持 `base64://...`）；`record` 会转成 `voice` 发送。
+- 出站媒体（图片/语音/文件）落盘用 `filepath.Join(-image_path, 文件名)`：`-image_path` 末尾有没有 `/` 都可以。
+  旧实现直接字符串拼接，App 从目录 URL 取 path 时 macOS 会去掉尾部斜杠，导致文件名被拼到目录名上、
+  在微信账号目录同级生成散落文件。
 - HTTP handler 会把消息交给发送 worker 并等待结果；`conn_type=websocket` 不影响 HTTP 发送。
+  等待有**总预算 60s**（`sendResultTimeout`）：worker 自身 15s 超时，图片/视频/语音还要等 hook 的
+  `upload_*_finish` 异步回包，这个预算只兜底「永远等不到」；超时返回 HTTP 500
+  `{"status":"failed","error":"send result timeout"}`（`errSendResultTimeout`），不会让连接与 goroutine 永久挂起。
+- `/send_*` 请求体上限为 **64 MiB**（`sendBodyMaxBytes`，`http.MaxBytesReader`）：覆盖 40 MiB 文件的 base64
+  （约 53 MB）与最长语音段的 base64；超限返回 **413**（`请求体过大`）。不是 1 MiB——旧值会拒掉常见图片/视频/
+  文件与 >15s 语音段。仅 `/sns/*` 使用 1 MiB 级上限，两者互不影响。
 - 额外的未鉴权调试端点：`/test_ws`（向当前 WS 连接写任意 body）以及
   `net/http/pprof` 注册的 `/debug/pprof/*`。它们只在 127.0.0.1 上暴露，详见 §7。
 
@@ -319,7 +333,7 @@ Content-Type: application/json
 | POST | `/sns/sync` | 增量同步；返回 `events` / `commands` / `cursor`。`CmdBuf` 先剥外层信封 `{1: len, 2: payload}`：cmd45（SnsObject）正常解为新动态；cmd46（SnsActionGroup）的 Type 1/2/3 解为点赞/评论，**Type=11 只产 `sns_comment_hint`**（无正文，不写缓存；hint 本身不能直接自动回复）。Mac UI 不触发 0xd2，回复正文由 sns.db 只读补全，32 位 comment_id 已确认可作 reply_comment_id；其余未知命令计入 `unsupported_cmd_count` |
 | POST | `/sns/db/schema` | sns.db 只读 schema 探针（仅 `snsProbe=true` 或版本 JSON `snsDbRead=true`）；返回脱敏 `tables`/`page_count`/`key_source`/`decrypt_ms`/`wal_applied`，不返回 key/内容；解密切到容器 tmp、查完删除。冷启动无 key 时 `sns_db_key_missing`（打开朋友圈触发 CCCrypt 后回灌）；timeline 补全在 `snsEnable=true` 时自动启用，`snsDbRead=true` 支持仅 DB 模式；真机已端到端验证（读到回复正文，P7 自动回复 c<id3>、页面评论闭环；仅 4.2.0.17） |
 | POST | `/sns/db/comments` | 仅 `snsProbe=true` 的调试卷；请求 `{"post_ids":["<uint64>"]}`（1–50），返回 `comments{post_id:[snsCommentJSON]}`；不返回 key/原始行。timeline 自动补全不依赖该端点 |
-| POST | `/sns/post`、`/sns/comment`、`/sns/like`、`/sns/objectop` | 写接口：写开关默认关时 404。post 文字发布（partial/public 联调）已真机验证；comment 为 App 评论/回复入口（`confirm:true`，需 0xD5 句柄，缺失时 503 `sns_comment_unavailable`），回包与写前缓存合并并尽力返回 `comment_id`；like/objectop 只有接口与用例，App 暂不调用（hook 任务表未配置 0xDA objectop 锚点，取消赞/删除类请求当前返回 503 `sns_channel_unconfigured`） |
+| POST | `/sns/post`、`/sns/comment`、`/sns/like`、`/sns/objectop` | 写接口：写开关默认关时 404。post 文字发布已真机验证（partial/public 联调；2026-11-22 在 4.2.1.3 回包 `post_id`、动态可见）；comment 为 App 评论/回复入口（`confirm:true`，需 0xD5 句柄，缺失时 503 `sns_comment_unavailable`），回包与写前缓存合并并尽力返回 `comment_id`，4.2.1.3 真机评论与回复均通过（回复带 `reply_comment_id`；回复自己的评论被微信拒绝 `ret=-2`，属服务端语义）；like/objectop 只有接口与用例，App 暂不调用（hook 任务表未配置 0xDA objectop 锚点，取消赞/删除类请求当前返回 503 `sns_channel_unconfigured`）。hook 对 SNS 合成任务保留 `task_layout_mismatch` 安全闸（捕获 vtable 与版本表不一致时拒绝发送，防未来版本漂移） |
 
 - 所有 `/sns/*` 仅支持 POST、要求 Bearer token；功能关闭时 404，未授权 401，微信未就绪映射
   503、回包/发送失败 502、超时 504（响应统一 `{"status":"failed","code":...,"error":"..."}`）。
@@ -329,6 +343,19 @@ Content-Type: application/json
   comment_id 为空。原生评论直接信任服务端 ID（短数字 ID 正常）。
 - **评论/点赞句柄**：hook 的 slot13 捕获覆盖 0xD3/0xD6/0xD1/0xD5；首次评论前需用户在微信里手动点一次
   评论一次（点赞也可能），`comment_ready` 才会变 true（样本随 `sns-capture.json` 持久化，同一微信进程内可恢复）。
+- **评论模板捕获与健康检查（2026-11-22）**：hook 在 `autoBufferWrite` 按返回地址 `snsCommentBodyReturn`
+  （4.2.1.3 `0x2fd46e8`）捕获**原生评论请求体**；仅 `SnsAction` Type==2 且无 field 9/12 才写入模板（点赞体/
+  回复体不覆盖，解析失败保留旧模板），并保留 clientId 前缀兼容（回复 `sns_reply:`、普通评论/点赞 `sns_comment:`）。
+  bridge 复用前健康检查：只有 field 5（Type）== 2 且无 9/12 才用模板；点赞形态/被回复污染的模板用于普通评论/
+  回复时一律忽略并退回自拼，记 Warn 等待下一次干净评论重建。**4.2.1.3 真机**：手动评论后模板为原生 Type=2，
+  `POST /sns/comment` 返回 `comment_id`、timeline comments=5（微信未崩溃），「原生模板 + patch」端到端可用；
+  模板缺失时自拼仅为**兜底**（普通评论可能无回包，自拼回复未真机验证）；点赞仍优先模板。历史污染模板复用会
+  触发 BaseRet=1 / 502 `sns_native_rejected`。
+- **timeline 首屏模板覆盖（2026-11-22）**：hook 对 timeline 请求体解析 protobuf field 3（MaxID）：
+  MaxID==0/缺省视为首屏，允许覆盖已保存模板；MaxID!=0 的分页请求在已有模板时不覆盖，解析失败也保留旧模板。
+  避免用户滚动加载更多后，App 刷新重放分页游标、看不到最新动态。**已知限制**：时间线以最近一次捕获的首屏
+  请求为准；深滚动后重新打开可能捕获到带旧游标的「首屏」，App 刷新会显示「最近动态 + 旧一页」，建议回到
+  朋友圈顶部再刷新/重新打开一次。
 - **不控制微信界面**：读取在主动发送不可用时回退 `source=passive`（用户手动打开一次朋友圈后缓存）；
   bridge 不截图、不点击、不模拟刷新。
 - **WS 事件**：App 已预留 `sns_new_post` / `sns_comment` / `sns_like` 帧解析，但 **bridge 当前不推送**
@@ -346,9 +373,10 @@ Content-Type: application/json
 
 - **构建与测试**：从完全干净状态（删除 `bridge/onebot` 与 `/tmp/chatbot-bridge-cache`）重跑
   `scripts/build_bridge.sh` 成功：下载并校验 Go 1.25.14 与 devkit 17.8.0，编译、`-h` 自检与
-  `bridge/*_test.go` 全部通过（19 个 `_test.go`、Go 312 项用例 = 180 顶层 + 132 子测试，0 失败）；
-  Swift 933 项执行（931 通过 / 2 跳过 / 0 失败，49 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
-  `script.js` 的 4.1.15 / 4.1.12 模板渲染结果 `node --check` 均通过。
+  `bridge/*_test.go` 全部通过（21 个 `_test.go`、Go 348 项用例 = 204 顶层 + 144 子测试，0 失败）；
+  Swift 1010 项执行（1008 通过 / 2 跳过 / 0 失败，58 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
+  `script.js` 的 5 个版本渲染结果由 `scripts/check_hook_template.py` 逐个 `node --check` 通过，
+  模板占位符与版本表一致。
 - **SNS 同步 CmdBuf**：`bridge/sns_sync_envelope_test.go` 覆盖外层信封 `{1: len, 2: payload}`、cmd45 与
   cmd46 的 Type 1/2/3 解码、评论合并去重与 timeline `reply_to_user_id`；解码结构来自 2026-11-09 真机样本。
   真机同时确认 Type=11 回复无正文，只产 `sns_comment_hint`（不计 unsupported、不伪造正文）；这是已知限制，不代表回复已打通。
@@ -388,8 +416,8 @@ Content-Type: application/json
 4. **工程脚本**：`scripts/build_bridge.sh`（下载/校验/离线缓存/Go 工具链隔离/构建自检）
    与 `scripts/run_bridge.sh`（参数化启动与前置检查）。
 5. **`script.js`**：唯一被修改的上游脚本，已同步 `hook/script.js` 的版本化适配（入站消息、原生发送、
-   通讯录、SNS 捕获/发送；4.1.12 / 4.1.15 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 / 4.2.0.17）。
-   其中 4.2.0.17 版本文件自 4.0.0 起随发布包分发。
+   通讯录、SNS 捕获/发送；4.2.1.3 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 / 4.2.0.17）。
+   其中 4.2.1.3 版本文件自 2026-11-20 起成为默认目标，并随此后新构建的发布包分发
    它以 `hook/script.js` 为唯一事实来源，细节见 NOTICE。
 
 ---

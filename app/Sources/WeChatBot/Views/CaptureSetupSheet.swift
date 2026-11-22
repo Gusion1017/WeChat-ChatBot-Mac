@@ -7,7 +7,8 @@ import SwiftUI
 /// - 「发一条文字」常驻；「发一条语音」只在语音回复开启时显示；
 /// - 「打开一次朋友圈」只在朋友圈开启时显示；
 /// - 登录预热不再作为步骤，只在语音开启且剩余 > 0 时作为状态行倒计时；
-/// - 弹窗打开期间约每秒重新检测语音状态与朋友圈 readiness（只查状态，不拉时间线）。
+/// - 弹窗打开期间约每 2 秒重新检测语音状态与朋友圈 readiness（只查状态，不拉时间线）；
+///   所有条目就绪或已判定不可用后自动停止轮询。
 struct CaptureSetupSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -37,6 +38,12 @@ struct CaptureSetupSheet: View {
         let sns = store.settings.bot.snsSettings
         guard sns.enabled, sns.writeEnabled, sns.interaction.enabled,
               !store.settings.bot.dryRun else { return false }
+        // 写链路未验证的版本强制只读：评论句柄无法用于发送，不再要求捕获。
+        guard SnsWriteGate.requiresCommentHandleCapture(
+            version: store.hookStatus.wechatVersion
+        ) else {
+            return false
+        }
         return sns.interaction.isActive && !store.snsInteractionTargetIDs.isEmpty
     }
 
@@ -70,7 +77,7 @@ struct CaptureSetupSheet: View {
             if store.settings.bot.snsSettings.enabled {
                 store.prepareMoments()
             }
-            await pollUntilCancelled()
+            await pollUntilSettled()
         }
     }
 
@@ -260,14 +267,16 @@ struct CaptureSetupSheet: View {
 
     // MARK: - 轮询
 
-    /// 约 1s 重新检测一次：语音开启时刷新 `/voice_status`，朋友圈开启时只查 priming 状态。
-    private func pollUntilCancelled() async {
+    /// 约 2s 重新检测一次：语音开启时刷新 `/voice_status`，朋友圈开启时只查 priming 状态。
+    /// 所有条目就绪或已判定不可用（`plan.isSettled`）后停止轮询；手动「重新检测」仍可用。
+    private func pollUntilSettled() async {
         while !Task.isCancelled {
             if !refreshing {
                 await refreshStatuses()
             }
             tick = Date()
-            try? await Task.sleep(for: .seconds(1))
+            if plan.isSettled { return }
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 

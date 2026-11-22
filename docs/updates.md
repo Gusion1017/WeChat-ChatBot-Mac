@@ -5,8 +5,8 @@
 > [`core-services.md`](core-services.md) §5.12，页面交互见 [`ui-design.md`](ui-design.md) §5.10；
 > 手动下载/覆盖安装的关系见 [`install.md`](install.md) §2.1。
 >
-> 发布状态：应用内更新自 **3.1.0** 起提供，当前 **4.1.0** 已包含；更早版本仍按
-> [`install.md`](install.md) §2 手动下载覆盖安装。
+> 发布状态：应用内更新自 **3.1.0** 起提供；Releases **4.2.0 (build 38)** 已包含；
+> 更早版本仍按 [`install.md`](install.md) §2 手动下载覆盖安装。
 
 ## 1. 用户可感知行为
 

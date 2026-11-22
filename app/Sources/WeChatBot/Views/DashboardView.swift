@@ -216,7 +216,10 @@ struct DashboardView: View {
                 symbol: "link",
                 tint: Theme.info,
                 statusText: hookStatusText,
-                statusTint: store.hookStatus.matchedVersion ? Theme.success : Theme.warning,
+                // 版本表未验证时启动会被阻止，不能显示为成功色。
+                statusTint: (store.hookStatus.matchedVersion && store.hookStatus.versionConfigVerified)
+                    ? Theme.success
+                    : Theme.warning,
                 isLive: store.hookStatus.state == .connected
             ) {
                 store.sidebarSelection = .settings
@@ -241,6 +244,9 @@ struct DashboardView: View {
         guard store.hookStatus.gadgetInstalled else { return nil }
         if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
             return "版本未适配"
+        }
+        if store.hookStatus.matchedVersion, !store.hookStatus.versionConfigVerified {
+            return "地址表未验证"
         }
         return store.hookStatus.matchedVersion ? "版本匹配" : "待匹配"
     }
@@ -281,10 +287,8 @@ struct DashboardView: View {
             parts.append(L(store.hookStatus.r3Seeded ? "R3 发送句柄已就绪" : "R3 发送句柄未就绪"))
         }
         if !store.hookStatus.detail.isEmpty { parts.append(L(store.hookStatus.detail)) }
-        if !store.hookStatus.wechatVersion.isEmpty {
-            if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
+        if !store.hookStatus.wechatVersion.isEmpty, !store.hookStatus.wechatVersionKnown {
             parts.append(Lf("适配列表 %@", WeChatVersionSupport.compactList()))
-        }
         }
         return parts.joined(separator: " · ")
     }
@@ -427,14 +431,14 @@ struct DashboardView: View {
 /// runtime appends on the MainActor invalidate *only this card* instead of the whole
 /// dashboard (which contains four `.glassEffect` surfaces, two grids and metrics).
 ///
-/// The rows are sampled from the store on a low-frequency timer; a high-rate log
-/// stream therefore never rebuilds the dashboard's layout each frame.
+/// The rows are sampled from the store on log revisions (debounced) instead of a
+/// constant timer; a high-rate log stream therefore never rebuilds the dashboard
+/// layout each frame, and an idle app performs no periodic work.
 private struct DashboardRecentLogsCard: View {
     @Environment(AppStore.self) private var store
     @State private var entries: [LogEntry] = []
-    /// 上次采样对应的 `store.logRevision`：revision 未变时跳过重新取尾部日志，
-    /// 空闲时不再每 750ms 做一次无意义的数组复制。
-    @State private var sampledRevision: UInt64?
+    /// 合并连续日志批次的防抖任务（事件驱动刷新，替代 750ms 常驻轮询）。
+    @State private var refreshTask: Task<Void, Never>?
 
     var body: some View {
         SectionCard(title: "最近活动", subtitle: "最新的运行日志", symbol: "text.alignleft", tint: Theme.info) {
@@ -463,23 +467,23 @@ private struct DashboardRecentLogsCard: View {
                 }
             }
         }
-        .task { await refreshLoop() }
+        .task { refresh() }
+        .onChange(of: store.logRevision) { _, _ in scheduleRefresh() }
+        .onDisappear { refreshTask?.cancel() }
     }
 
-    private func refreshLoop() async {
-        // 首次必须刷新；之后只在 revision 变化时重新采样（750ms 采样节奏保持不变）。
-        refresh()
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(750))
-            if Task.isCancelled { return }
-            guard sampledRevision != store.logRevision else { continue }
+    /// 事件驱动刷新：日志批次到达后短暂防抖再采样，日志风暴时也不会重建多次。
+    private func scheduleRefresh() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
             refresh()
         }
     }
 
     @MainActor
     private func refresh() {
-        sampledRevision = store.logRevision
         entries = Array(store.logs.suffix(7))
     }
 }

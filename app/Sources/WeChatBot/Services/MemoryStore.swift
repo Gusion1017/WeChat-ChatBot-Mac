@@ -344,6 +344,54 @@ actor MemoryStore {
         if version < 4 {
             try execute("PRAGMA user_version=4;")
         }
+
+        // v5: 修复 4.2.1.3 早期适配写入的异常消息时间戳（1970/2031 等），
+        // 让会话内历史按真实 serverId 时间排序。
+        if version < 5 {
+            try repairHistoricalMessageTimestamps()
+            try execute("PRAGMA user_version=5;")
+        }
+    }
+
+    /// 4.2.1.3 早期版本把消息创建时间按旧偏移 +0x114 读取，写入了 1970/2031 等
+    /// 异常 timestamp，导致会话内历史顺序混乱。真实时间在 message_id（serverId）
+    /// 的高 32 位；只对明显越界的行做一次回填，正常行保持不动。
+    private func repairHistoricalMessageTimestamps() throws {
+        let now = Date().timeIntervalSince1970
+        let upper = now + 86_400
+        let statement = try prepare("""
+        SELECT rowid, id FROM messages
+        WHERE timestamp < 946684800 OR timestamp > ?;
+        """)
+        defer { sqlite3_finalize(statement) }
+        try bind(statement, 1, upper)
+        var repairs: [(Int64, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let rowid = sqlite3_column_int64(statement, 0)
+            guard let idText = sqlite3_column_text(statement, 1) else { continue }
+            let id = String(cString: idText)
+            let numeric = id.hasPrefix("ob-") ? String(id.dropFirst(3)) : id
+            guard let serverId = UInt64(numeric) else { continue }
+            let epoch = Double(serverId >> 32)
+            guard epoch >= 946_684_800, epoch <= upper else { continue }
+            repairs.append((rowid, epoch))
+        }
+        for (rowid, epoch) in repairs {
+            try execute("UPDATE messages SET timestamp = \(epoch) WHERE rowid = \(rowid);")
+        }
+        if !repairs.isEmpty {
+            // 会话列表按 last_message_at 排序，历史行修正后需要同步重算。
+            try execute("""
+            UPDATE conversations
+            SET last_message_at = (
+                SELECT MAX(timestamp) FROM messages m
+                WHERE m.conversation_id = conversations.id
+            )
+            WHERE last_message_at IS NULL
+               OR last_message_at < 946684800
+               OR last_message_at > \(upper);
+            """)
+        }
     }
 
     // MARK: - Conversations

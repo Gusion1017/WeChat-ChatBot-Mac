@@ -61,16 +61,72 @@ var isReq2bufLayout415 = (req2bufLayout === "v4_1_15");
 // vtable 0x9eb04f0 仅作诊断; 读取失败时用字段健全性兜底。
 var messageFinalizerAddr = "{{.messageFinalizerAddr}}";
 var messageVtableAddr = "{{.messageVtable}}";
+// 消息正文 std::string 偏移：4.1.15/4.2.0.x 为 0x130；4.2.1.3 实测消息对象
+// 的 SSO 字符串位于 +0x118（+0x12F 为长度字节）。缺键时保持旧偏移。
+var messageContentOffset = "{{.messageContentOffset}}";
+// 消息创建时间 u32 偏移：4.1.15/4.2.0.x 为 +0x114；4.2.1.3 实测在 +0xFC
+// （与 serverId 高 32 位重叠）。缺键时保持旧偏移。
+var messageCreatedOffset = "{{.messageCreatedOffset}}";
 var messageFinalizerEnabled = (typeof messageFinalizerAddr === "string" && messageFinalizerAddr.indexOf("0x") === 0);
 // 入站去重窗口（2026-10-23 内存优化）。
 // 旧实现把 serverId 永久写进普通对象：长时间运行或历史回放（上滑聊天记录会重复
 // finalize 同一条消息）后，微信进程里的去重表会单调增长，属于纯内存泄漏。
-// 现在用固定长度的环形窗口覆盖：窗口外的重复由 App 侧 message_id 去重 + SQLite
-// upsert 幂等兜底，语义不变。
+// 现在用固定长度的环形窗口覆盖：窗口外的重复由下面的稳定键去重 + App 侧
+// 投递指纹去重 + SQLite upsert 幂等兜底，语义不变。
 var INCOMING_SEEN_LIMIT = 4096;
 var incomingMessageSeen = {};
 var incomingSeenOrder = new Array(INCOMING_SEEN_LIMIT);
 var incomingSeenCursor = 0;
+
+// 入站消息「稳定身份」去重（2026-11-22 真机修复重复自动回复）。
+//
+// 4.2.1.3 的 message_id 是 (created 秒 << 32) | 序号：同一条消息被重复 finalize
+// 时序号会变（实测序号会变化；例如收到的语音在稍后打开会话时再次回调），
+// 只按 message_id 去重拦不住。旧实现用 from/to/正文做 1500ms 短窗口，
+// 只够挡住同一次回调里的重复，挡不住几分钟后「打开会话」的历史回放：App 会把它
+// 当成新消息，再自动回复一遍（2026-11-22 真机复现）。
+//
+// created/from/to/type/正文在同一条消息的多次回调中稳定，因此用
+// `from|to|created|type|正文指纹` 作为稳定键，环形表只保留最近 N 条：
+//   - 同一条消息的重复 finalize / 历史回放 → 命中跳过；
+//   - 用户真的在别的秒再发一条相同文本 → created 不同，不会误伤；
+//   - 更早的历史回放（已被环形表淘汰）由 App 的「历史回放 120s 不回复」兜底。
+// created 正常取版本表的 created 偏移（4.2.1.3 即 message_id 高 32 位）；读到 0 时
+// 先用 message_id 高位兜底，仍为 0 才退回 1.5s 时间片（见 shouldSkipIncomingDuplicate）。
+// 正文可能很大（图片/语音 XML），键里只存长度 + 64 位指纹，避免重复占内存。
+var INCOMING_DEDUP_LIMIT = 4096;
+var incomingDedupSeen = {};
+var incomingDedupOrder = new Array(INCOMING_DEDUP_LIMIT);
+var incomingDedupCursor = 0;
+
+// contentFingerprint 返回 "长度:散列1:散列2"：djb2 + sdbm 两个 32 位散列拼成
+// 64 位，几乎不可能把两条不同正文误判成同一条；只遍历一次 content。
+// 用 `>>> 0` 归一化到 uint32（h1*33 < 2^37、h2 组合 < 2^33，都在 double 精确范围内）。
+function contentFingerprint(s) {
+    var h1 = 5381;
+    var h2 = 0;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        h1 = ((h1 * 33) + c) >>> 0;
+        h2 = (c + (h2 << 6) + (h2 << 16) - h2) >>> 0;
+    }
+    return s.length + ":" + h1.toString(16) + ":" + h2.toString(16);
+}
+
+// shouldSkipIncomingDuplicate 判断这条消息此前是否已 finalize 过；首次出现时登记。
+function shouldSkipIncomingDuplicate(from, to, created, type, content) {
+    // created 缺失（旧版本/个别事件读到 0）时退回 1.5s 时间片：同一次回调里的重复
+    // 仍能拦住，不同时间片的相同文本不会被误删（与修复前的短窗口行为一致）。
+    var createdKey = created > 0 ? created : "t" + Math.floor(Date.now() / 1500);
+    var key = from + "|" + to + "|" + createdKey + "|" + type + "|" + contentFingerprint(content);
+    if (incomingDedupSeen[key]) return true;
+    var evictedKey = incomingDedupOrder[incomingDedupCursor];
+    if (evictedKey) delete incomingDedupSeen[evictedKey];
+    incomingDedupOrder[incomingDedupCursor] = key;
+    incomingDedupSeen[key] = true;
+    incomingDedupCursor = (incomingDedupCursor + 1) % INCOMING_DEDUP_LIMIT;
+    return false;
+}
 
 function rememberIncomingMessage(serverId) {
     var evicted = incomingSeenOrder[incomingSeenCursor];
@@ -310,7 +366,11 @@ setImmediate(function () {
 });
 
 function resolveBaseByScan() {
-var ranges = Process.enumerateRanges("r--").filter(function(r) {
+// 只扫可执行段: 真身 wechat.dylib 的 __TEXT 是 r-x(含 __cstring), 而堆里的
+// "req2buf" 字符串拷贝在 rw- 段。旧实现 enumerateRanges("r--") 却在命中后再要求
+// protection 含 "x", 两个条件互斥 -> 回退扫描永远找不到基址, 模块表一旦失败就是
+// 静默不可用(只抛一条无法命中的错误)。这里直接枚举 r-x。
+var ranges = Process.enumerateRanges("r-x").filter(function(r) {
     var rangeEnd = r.base.add(r.size);
     return r.base.compare(searchEnd) < 0 && rangeEnd.compare(moduleBase) > 0;
 });
@@ -429,6 +489,36 @@ function hexToByteArray(hexStr) {
         bytes.push(parseInt(hexStr.substr(i, 2), 16));
     }
     return bytes;
+}
+
+// 任务对象隔离带：版本 JSON 的 task size 一旦偏小，ctor 会写坏微信的 malloc
+// 元数据（2026-11-20 4.2.1.3 朋友圈 sync 任务实测：JSON 标 0xd0，真实对象 0x100，
+// ctor 在 +0xc8 构造内嵌字段，直接越界 0x2c 字节，最终以
+// "BUG IN CLIENT OF LIBMALLOC: memory corruption of free block" 崩溃）。
+// 构造任务时多分配 R3_TASK_GUARD_BYTES，写入哨兵，ctor 返回后检查；这样即使
+// 版本表尺寸有误也不会破坏微信堆，同时能第一时间在 bridge 日志里暴露问题。
+var R3_TASK_GUARD_BYTES = 0x40;
+function r3AllocGuardedTask(operatorNew, size, label) {
+    var task = operatorNew(size + R3_TASK_GUARD_BYTES);
+    if (task && !task.isNull()) {
+        try {
+            task.add(size).writeByteArray(new Array(R3_TASK_GUARD_BYTES).fill(0xAA));
+        } catch (e) { }
+    }
+    return task;
+}
+function r3CheckGuardedTask(task, size, label) {
+    try {
+        var guard = new Uint8Array(task.add(size).readByteArray(R3_TASK_GUARD_BYTES));
+        var hit = 0;
+        for (var i = 0; i < guard.length; i++) if (guard[i] !== 0xAA) hit++;
+        if (hit > 0) {
+            console.error("[!] " + label + ": task ctor 写过版本 JSON 尺寸 0x" +
+                size.toString(16) + "（隔离带被改写 " + hit +
+                " 字节）；本次已由预留内存兜住，但请修正版本 JSON 的 size 字段");
+        }
+        return hit;
+    } catch (e) { return -1; }
 }
 
 function patchString(addr, plainStr) {
@@ -645,15 +735,32 @@ function attachMessageFinalizer() {
                     if (!isReadablePointer(obj)) return;
                     // 定长字段先读并按 serverId 去重：历史回放时同一条消息可能被重复
                     // finalize，重复命中直接返回，不再做字符串拷贝/正则/JSON。
+                    // 注意 4.2.1.3 的 serverId 低 32 位会随重复 finalize 变化（见
+                    // INCOMING_DEDUP_LIMIT 上方说明），所以这里只能挡住「ID 完全相同」
+                    // 的重复；换 ID 的重复由下面的稳定键去重兜住。
                     var type = obj.add(0x0c).readU32();
-                    var created = obj.add(0x114).readU32();
+                    var createdOff = (typeof messageCreatedOffset === "string" &&
+                        messageCreatedOffset.indexOf("0x") === 0)
+                        ? parseInt(messageCreatedOffset, 16) : 0x114;
+                    var created = obj.add(createdOff).readU32();
                     var serverId = obj.add(0xf8).readU64().toString();
+                    if (created === 0) {
+                        // 个别消息（自消息/旧版本）在版本表给的 created 偏移上读到 0。
+                        // message_id 是 (created 秒 << 32) | 序号，高 32 位就是真实创建
+                        // 时间（App 侧 MemoryStore 的历史时间戳修复也用同一规则）；用
+                        // +0xFC 兜底，稳定去重键里才能始终带正确的 created。
+                        created = obj.add(0xfc).readU32();
+                    }
                     if (serverId !== "0" && incomingMessageSeen[serverId]) return;
                     var from = readStdStringCompat(obj.add(0x18), 256);
                     var to = readStdStringCompat(obj.add(0x30), 256);
-                    var content = readStdStringCompat(obj.add(0x130), 4 * 1024 * 1024);
+                    var contentOff = (typeof messageContentOffset === "string" &&
+                        messageContentOffset.indexOf("0x") === 0)
+                        ? parseInt(messageContentOffset, 16) : 0x130;
+                    var content = readStdStringCompat(obj.add(contentOff), 4 * 1024 * 1024);
                     if (from === null || to === null || content === null) return;
                     if (!from || !to) return;
+                    if (shouldSkipIncomingDuplicate(from, to, created, type, content)) return;
                     // 能 finalize 出真实消息 = 已登录且消息链路稳定。提前解除 CdnManager
                     // 冷启动的「登录稳定门禁」，避免 bridge 启动 60s 内收到图片时
                     // triggerDownload 直接返回 fail（图片获取失败）。
@@ -2170,8 +2277,10 @@ function patchCdnOnComplete() {
                 const videoFileId = videoIdAddr.readUtf8String();
                 const voiceFileId = voiceIdAddr.readUtf8String();
                 const fileUploadFileId = uploadFileIdAddr.readUtf8String();
+                // 不是本项目发起的上传（用户自己发图/文件）：每条 console.log 都会经
+                // bridge → App 落盘；降到 HOOK_DEBUG 才输出，减少无谓 IPC/日志。
                 if (currentFileId !== imageFileId && currentFileId !== videoFileId && currentFileId !== voiceFileId && currentFileId !== fileUploadFileId) {
-                    console.log("[-] CndOnComplete x2: " + x2 + " currentFileId: " + currentFileId +
+                    hookDebug("[-] CndOnComplete x2: " + x2 + " currentFileId: " + currentFileId +
                         " imageFileId: " + imageFileId + " videoFileId:" + videoFileId + " voiceFileId:" + voiceFileId + " fileUploadFileId:" + fileUploadFileId);
                     return;
                 }
@@ -2271,8 +2380,9 @@ function attachGetCallbackFromWrapper() {
                 const videoFileId = videoIdAddr.readUtf8String();
                 const voiceFileId = voiceIdAddr.readUtf8String();
                 const fileUploadFileId = uploadFileIdAddr.readUtf8String();
+                // 非本项目上传的逐条日志同样降为 debug（perf P2-8）。
                 if (tmpFileId !== imageFileId && tmpFileId !== videoFileId && tmpFileId !== voiceFileId && tmpFileId !== fileUploadFileId) {
-                    console.log("[+] GetCallbackFromWrapper tmpFileId: " + tmpFileId + " imageFileId: " + imageFileId + " videoFileId:" + videoFileId + " voiceFileId:" + voiceFileId + " fileUploadFileId:" + fileUploadFileId);
+                    hookDebug("[+] GetCallbackFromWrapper tmpFileId: " + tmpFileId + " imageFileId: " + imageFileId + " videoFileId:" + videoFileId + " voiceFileId:" + voiceFileId + " fileUploadFileId:" + fileUploadFileId);
                     return
                 }
 
@@ -2292,8 +2402,9 @@ function attachGetCallbackFromWrapper() {
                 const videoFileId = videoIdAddr.readUtf8String();
                 const voiceFileId = voiceIdAddr.readUtf8String();
                 const fileUploadFileId = uploadFileIdAddr.readUtf8String();
+                // 同上：仅本项目的上传（fileId 匹配）保留 info 日志。
                 if (tmpFileId !== imageFileId && tmpFileId !== videoFileId && tmpFileId !== voiceFileId && tmpFileId !== fileUploadFileId) {
-                    console.log("[+] OnComplete tmpFileId: " + tmpFileId + " imageFileId: " + imageFileId + " videoFileId:" + videoFileId + " voiceFileId:" + voiceFileId + " fileUploadFileId:" + fileUploadFileId);
+                    hookDebug("[+] OnComplete tmpFileId: " + tmpFileId + " imageFileId: " + imageFileId + " videoFileId:" + videoFileId + " voiceFileId:" + voiceFileId + " fileUploadFileId:" + fileUploadFileId);
                     return
                 }
 
@@ -2426,6 +2537,9 @@ function triggerSendVoiceMessage(taskId, sender, receiver, protoHex, payloadHex)
 // 前置: 先捕获一次真实 newsendmsg 闭包(人工发一条文本), 否则发送安全 fail。
 // 4.2.0.5(270341) 沿用同一 R3 布局, 但任务类 ctor/vtable/闭包 vtable 与各地址全部不同,
 // 一律以版本 JSON 为准; task 尺寸同为 0xE0, 仍由 newSendMsgTaskSize 显式给出。
+// 评论原生请求体捕获锚点（4.2.1.3+ 可选；缺键时为空，仍保留 clientId marker 兜底）。
+var snsCommentBodyReturn = "{{.snsCommentBodyReturn}}";
+
 var r3Cfg = {
     classAVtable: "{{.classAVtable}}",
     globalServiceHolder: "{{.globalServiceHolder}}",
@@ -2495,7 +2609,8 @@ var r3Cfg = {
     // timeline / sync slot2 调用 autoBufferWrite 后的返回地址；用它从函数入口安全抓 body。
     snsTimelineBodyReturn: "{{.snsTimelineBodyReturn}}",
     snsSyncBodyReturn: "{{.snsSyncBodyReturn}}",
-    snsPostBodyReturn: "{{.snsPostBodyReturn}}"
+    snsPostBodyReturn: "{{.snsPostBodyReturn}}",
+    snsCommentBodyReturn: snsCommentBodyReturn
 };
 var r3State = {
     cfg: null,
@@ -2546,6 +2661,23 @@ var r3State = {
     lastScan: null,
     lastError: null
 };
+
+// 闭包捕获去重表（2026-11-22 内存/正确性修正）。
+// 旧实现 captureSeen 只增不减：长时间运行时每个手动发送的闭包地址都会留下一条，
+// 且闭包释放后 malloc 复用同一地址时会被永久误判为"已捕获"，seed 不再刷新。
+// 改成固定窗口环形表；同一闭包的多次回调仍能命中去重。
+var R3_CAPTURE_SEEN_LIMIT = 512;
+var r3CaptureSeenOrder = new Array(R3_CAPTURE_SEEN_LIMIT);
+var r3CaptureSeenCursor = 0;
+function r3CaptureSeenMark(key) {
+    if (r3State.captureSeen[key]) return false;
+    var evicted = r3CaptureSeenOrder[r3CaptureSeenCursor];
+    if (evicted) delete r3State.captureSeen[evicted];
+    r3CaptureSeenOrder[r3CaptureSeenCursor] = key;
+    r3State.captureSeen[key] = true;
+    r3CaptureSeenCursor = (r3CaptureSeenCursor + 1) % R3_CAPTURE_SEEN_LIMIT;
+    return true;
+}
 
 function r3ParseAddr(v) {
     // 返回数值偏移: 后续统一用 baseAddr.add(offset), 避免 NativePointer 参与加法
@@ -2658,6 +2790,7 @@ function r3Ready() {
     cfg.snsTimelineBodyReturn = r3ParseAddr(r3Cfg.snsTimelineBodyReturn);
     cfg.snsSyncBodyReturn = r3ParseAddr(r3Cfg.snsSyncBodyReturn);
     cfg.snsPostBodyReturn = r3ParseAddr(r3Cfg.snsPostBodyReturn);
+    cfg.snsCommentBodyReturn = r3ParseAddr(r3Cfg.snsCommentBodyReturn);
     if (missing.length) {
         r3State.lastError = "R3 JSON 缺少地址键: " + missing.join(",");
         console.error("[!] R3: " + r3State.lastError + " (需要与当前微信版本对应的版本 JSON)");
@@ -2741,8 +2874,10 @@ function r3ConsiderTask(task) {
         var cvt = closure.readPointer();
         if (!cvt.equals(baseAddr.add(cfg.closureVtable))) return 2;
         var key = closure.toString();
-        if (r3State.captureSeen[key]) return 3;
-        r3State.captureSeen[key] = true;
+        if (!r3CaptureSeenMark(key)) return 3;
+        // 已有 seed 时不再 clone：闭包 clone 是微信堆上的独立对象（0x38B，无释放路径），
+        // 旧实现每次真实发送都 clone 一个，maxClones 只限制数组长度、限制不了分配。
+        if (r3State.seed) return 3;
         var cloneFn = cvt.add(0x10).readPointer();       // __clone()
         var clone = new NativeFunction(cloneFn, 'pointer', ['pointer'])(closure);
         if (!clone || clone.isNull()) return 2;
@@ -3087,9 +3222,141 @@ function snsBodyNameForReturn(ret) {
         ret.equals(baseAddr.add(r3State.cfg.snsSyncBodyReturn))) return "sync";
     if (r3State.cfg.snsPostBodyReturn &&
         ret.equals(baseAddr.add(r3State.cfg.snsPostBodyReturn))) return "post";
+    if (r3State.cfg.snsCommentBodyReturn &&
+        ret.equals(baseAddr.add(r3State.cfg.snsCommentBodyReturn))) return "comment";
     return null;
 }
-// 评论请求（0xD5）没有 bodyReturn 锚点（版本 JSON 不带 snsCommentBodyReturn）；
+// 轻量 protobuf varint 读取（只读，不构造对象）；返回 {value,pos} 或 null。
+// 供 timeline MaxID 与 comment SnsAction 过滤使用，不进入日志。
+function snsProtoReadVarint(dataPtr, len, offset) {
+    var value = 0;
+    var shift = 0;
+    var pos = offset;
+    for (var i = 0; i < 10; i++) {
+        if (pos >= len) return null;
+        var b = dataPtr.add(pos).readU8();
+        pos++;
+        value += (b & 0x7f) * Math.pow(2, shift);
+        if ((b & 0x80) === 0) return { value: value, pos: pos };
+        shift += 7;
+    }
+    return null;
+}
+
+// 跳过非目标字段；支持 varint/fixed64/length-delimited/fixed32。
+// 返回下一个字段的 offset，失败返回 -1（不修改任何内存）。
+function snsProtoSkipField(dataPtr, len, wireType, offset) {
+    if (wireType === 0) {
+        var v = snsProtoReadVarint(dataPtr, len, offset);
+        return v ? v.pos : -1;
+    }
+    if (wireType === 1) return offset + 8 <= len ? offset + 8 : -1;
+    if (wireType === 2) {
+        var l = snsProtoReadVarint(dataPtr, len, offset);
+        if (!l) return -1;
+        var end = l.pos + l.value;
+        return end <= len ? end : -1;
+    }
+    if (wireType === 5) return offset + 4 <= len ? offset + 4 : -1;
+    return -1; // groups/deprecated wire types: 不猜测
+}
+
+// 解析 SnsTimeLineRequest 的 field 3(MaxID，varint)：
+//   true  = MaxID==0（含 field 3 缺省，protobuf 默认 0）→ 首屏请求
+//   false = MaxID!=0 → 分页请求
+//   null  = 无法解析（已有模板时保留旧模板；无模板时仍保存样本）
+function snsTimelineMaxIDIsZero(dataPtr, len) {
+    try {
+        var pos = 0;
+        while (pos < len) {
+            var tag = snsProtoReadVarint(dataPtr, len, pos);
+            if (!tag) return null;
+            var field = Math.floor(tag.value / 8);
+            var wire = tag.value % 8;
+            pos = tag.pos;
+            if (field === 0) return null;
+            if (field === 3) {
+                if (wire !== 0) return null;
+                var v = snsProtoReadVarint(dataPtr, len, pos);
+                if (!v) return null;
+                return v.value === 0;
+            }
+            pos = snsProtoSkipField(dataPtr, len, wire, pos);
+            if (pos < 0) return null;
+        }
+        return true; // field 3 缺省 = 默认值 0 = 首屏
+    } catch (e) {
+        return null;
+    }
+}
+
+// 在 [start,end) 中找第一个指定 field number 的 length-delimited 字段。
+// 返回 {start:payload偏移, len:payload长度} 或 null；不复制 payload。
+function snsProtoFindBytesField(dataPtr, start, end, fieldNo) {
+    try {
+        var pos = start;
+        while (pos < end) {
+            var tag = snsProtoReadVarint(dataPtr, end, pos);
+            if (!tag) return null;
+            var field = Math.floor(tag.value / 8);
+            var wire = tag.value % 8;
+            pos = tag.pos;
+            if (field === 0) return null;
+            if (field === fieldNo && wire === 2) {
+                var l = snsProtoReadVarint(dataPtr, end, pos);
+                if (!l || l.value > end - l.pos) return null;
+                return { start: l.pos, len: l.value };
+            }
+            pos = snsProtoSkipField(dataPtr, end, wire, pos);
+            if (pos < 0) return null;
+        }
+    } catch (e) { }
+    return null;
+}
+
+// 解析评论请求是否"普通评论"（可重建模板）：
+//   SnsCommentRequest.field 2 = SnsActionGroup (length-delimited)
+//   SnsActionGroup.field 3   = SnsAction      (length-delimited)
+//   SnsAction.field 5        = Type (varint，2=评论)
+//   SnsAction.field 9/12     = ReplyCommentID / ReplyCommentID2（存在即回复体）
+// 返回 {type: number, hasReply: boolean} 或 null（无法解析/缺 Type）。
+function snsCommentActionShape(dataPtr, len) {
+    try {
+        var group = snsProtoFindBytesField(dataPtr, 0, len, 2);
+        if (!group) return null;
+        var groupEnd = group.start + group.len;
+        var action = snsProtoFindBytesField(dataPtr, group.start, groupEnd, 3);
+        if (!action) return null;
+        var end = action.start + action.len;
+        var pos = action.start;
+        var type = null;
+        var hasReply = false;
+        while (pos < end) {
+            var tag = snsProtoReadVarint(dataPtr, end, pos);
+            if (!tag) return null;
+            var field = Math.floor(tag.value / 8);
+            var wire = tag.value % 8;
+            pos = tag.pos;
+            if (field === 0) return null;
+            if (field === 5) {
+                if (wire !== 0) return null;
+                var v = snsProtoReadVarint(dataPtr, end, pos);
+                if (!v) return null;
+                type = v.value;
+            } else if (field === 9 || field === 12) {
+                hasReply = true;
+            }
+            pos = snsProtoSkipField(dataPtr, end, wire, pos);
+            if (pos < 0) return null;
+        }
+        if (type === null) return null;
+        return { type: type, hasReply: hasReply };
+    } catch (e) {
+        return null;
+    }
+}
+
+// 评论请求（0xD5）优先按 bodyReturn 锚点识别；旧版本/缺键时仍用 clientId 标记兜底。
 // 用真实报文里的 clientId 标记 "sns_comment:" 兜底识别，只保存含该标记的请求体，
 // 不复制/不记录其它报文（聊天消息、上传等）的内容。
 function snsBodyContainsMarker(dataPtr, len, marker) {
@@ -3123,9 +3390,41 @@ function snsInstallTimelineBodyHook() {
                     var len = args[2].toUInt32();
                     if (!dataPtr || dataPtr.isNull() || len <= 0 || len > 64 * 1024) return;
                     if (!name) {
-                        // 评论/点赞请求：没有 bodyReturn 锚点，按 clientId 标记识别。
+                        // 评论请求在 bodyReturn 未命中（旧版本/缺键）时，按 clientId
+                        // 标记兜底识别；两条路径共用下面的评论模板过滤。
                         if (!snsBodyContainsMarker(dataPtr, len, "sns_comment:")) return;
                         name = "comment";
+                    }
+                    // timeline 模板优先保留首屏请求：用户向下滚动会产生 MaxID!=0 的
+                    // 分页请求体，若覆盖模板，App refresh:true 会重放旧分页游标。
+                    // 只在已有模板时拒绝分页覆盖；无模板时仍保存，后续首屏会覆盖它。
+                    if (name === "timeline") {
+                        var maxIDIsZero = snsTimelineMaxIDIsZero(dataPtr, len);
+                        // 已有模板时，只有确认 MaxID==0 的首屏请求才允许覆盖；分页
+                        // (false) 和无法解析(null) 都保留旧模板。无模板时仍保存样本。
+                        if (maxIDIsZero !== true && snsState.bodies && snsState.bodies.timeline) {
+                            hookDebug("[sns] body timeline 非首屏请求(" +
+                                (maxIDIsZero === false ? "MaxID!=0" : "解析失败") +
+                                ") 不覆盖首屏模板");
+                            return;
+                        }
+                    }
+                    // 评论模板只接受「普通评论」：Type==2 且无 ReplyCommentID/2。
+                    // 点赞(Type=1)和回复体也走同一 marshal；不能让它们覆盖干净模板。
+                    if (name === "comment") {
+                        var actionShape = snsCommentActionShape(dataPtr, len);
+                        var hasCommentTemplate = !!(snsState.bodies && snsState.bodies.comment);
+                        if (actionShape && (actionShape.type !== 2 || actionShape.hasReply)) {
+                            hookDebug("[sns] body comment 非纯评论(type=" + actionShape.type +
+                                ", reply=" + actionShape.hasReply + ") 丢弃");
+                            return;
+                        }
+                        if (!actionShape && hasCommentTemplate) {
+                            hookDebug("[sns] body comment 解析失败，保留旧模板");
+                            return;
+                        }
+                        // actionShape==null 且无模板：保留旧行为先存样本，由 bridge
+                        // 模板健康检查兜底。
                     }
                     var hex = snsHexFromPtr(dataPtr, len);
                     if (!hex) return;
@@ -3229,18 +3528,66 @@ function snsWriteStdString(addr, value) {
     addr.add(16).writeU64(uint64("0x8000000000000000").add(text.length + 1));
 }
 
+// SNS 请求表回收：requests 保存 responseHex（整包 hex），若不清理，长期运行会
+// 单调增长；pending 在回包丢失/发送失败时也永不释放。这里只保留最近窗口：
+//   - 已完成/失败请求保留 60s（足够 bridge 一次 150ms 轮询读到）；
+//   - 未完成请求保留 10 分钟（bridge 单次超时 ≤12s，超时后可安全丢弃引用）；
+//   - 总条目上限 64，超出按 sentAt 淘汰最旧。
+var SNS_REQUEST_KEEP_MS = 60 * 1000;
+var SNS_REQUEST_PENDING_KEEP_MS = 10 * 60 * 1000;
+var SNS_REQUEST_MAX = 64;
+function snsPruneRequests() {
+    var now = Date.now();
+    var id, req;
+    for (id in snsSendState.requests) {
+        if (!Object.prototype.hasOwnProperty.call(snsSendState.requests, id)) continue;
+        req = snsSendState.requests[id];
+        if (!req) { delete snsSendState.requests[id]; continue; }
+        var age = now - (req.sentAt || 0);
+        var finished = (req.state === "done" || req.state === "error");
+        if ((finished && age > SNS_REQUEST_KEEP_MS) ||
+            (!finished && age > SNS_REQUEST_PENDING_KEEP_MS)) {
+            delete snsSendState.requests[id];
+        }
+    }
+    var ids = Object.keys(snsSendState.requests);
+    if (ids.length > SNS_REQUEST_MAX) {
+        ids.sort(function (a, b) {
+            return (snsSendState.requests[a].sentAt || 0) - (snsSendState.requests[b].sentAt || 0);
+        });
+        while (ids.length > SNS_REQUEST_MAX) {
+            delete snsSendState.requests[ids.shift()];
+        }
+    }
+    for (var key in snsSendState.pending) {
+        if (!Object.prototype.hasOwnProperty.call(snsSendState.pending, key)) continue;
+        var pendingReq = snsSendState.pending[key];
+        if (!pendingReq || now - (pendingReq.sentAt || 0) > SNS_REQUEST_PENDING_KEEP_MS) {
+            if (pendingReq && pendingReq.taskId) delete snsSendState.pendingById[pendingReq.taskId];
+            delete snsSendState.pending[key];
+        }
+    }
+}
+
 function snsSendRequest(opName, bodyHex) {
     try {
+        snsPruneRequests();
         if (!snsEnableEnabled) return JSON.stringify({ ok: false, error: "sns_disabled" });
         if (!r3ModeActive || !r3State.cfg) return JSON.stringify({ ok: false, error: "r3_not_ready" });
+        // 捕获 tick 在 seed 到手后会停；classA 可能还没 resolve，这里按需补一次
+        // （否则下方 slot13(classA, task) 会拿到 null）。
+        if (!r3State.resolved && !r3TryResolve(true)) {
+            return JSON.stringify({ ok: false, error: "r3_not_ready" });
+        }
         var anchor = snsAnchorFor(opName);
         if (!anchor) return JSON.stringify({ ok: false, error: "not_configured" });
         var capName = SNS_OP_NAMES[r3State.cfg.snsOpcode[opName]];
+        var cap = snsState.captured[capName];
         var seed = (snsState.seeds || {})[capName];
         // 没有 seed 时尝试从捕获到的真实 closure 现场 clone（RPC 线程调用 native 是安全的；
         // 绝不能在 slot13 onEnter 里做）。
         if (!seed) {
-            var capForSeed = snsState.captured[capName];
+            var capForSeed = cap;
             if (capForSeed && capForSeed.closure) {
                 try {
                     var cloPtr = ptr(capForSeed.closure);
@@ -3265,6 +3612,28 @@ function snsSendRequest(opName, bodyHex) {
         var bytes = [];
         try { bytes = hexToByteArray(bodyHex || ""); } catch (e) { bytes = []; }
         if (!bytes.length) return JSON.stringify({ ok: false, error: "empty_body" });
+        // 任务类安全闸（2026-11-22 崩溃分析）：捕获记录里的 taskVtable 是真实任务类的
+        // vtable；若与版本 JSON 的 ctor/vtable 不是同一个类，绝对不能把真实 closure 塞进
+        // 合成任务——真实 completion callback 会按真实类布局读取 B2，导致 protobuf 类型
+        // 混淆和 SIGSEGV（4.2.1.3 comment: JSON 0x8561798 / 真实 0x8562f08；
+        // sync 也疑似错类：JSON 0x85e1690 / 真实 0x85e2178）。
+        // 因此对**所有** SNS 合成任务生效：不匹配时在分配任务前直接返回错误。
+        // 2026-11-22 修正 comment/sync 锚点后，4.2.1.3 四个已捕获 op 的 taskVtable 均与
+        // JSON 一致 → 放行；若后续捕获仍不一致则继续拒绝（不得放宽比较来绕过）。
+        if (cap && typeof cap.taskVtable === "string" && cap.taskVtable) {
+            var expectedTaskVt = baseAddr.add(anchor.vtable).toString().toLowerCase();
+            if (String(cap.taskVtable).toLowerCase() !== expectedTaskVt) {
+                console.error("[sns] " + opName + " 任务布局不匹配，拒绝发送以避免微信崩溃: 捕获 " +
+                    cap.taskVtable + " / 版本 JSON " + expectedTaskVt);
+                return JSON.stringify({
+                    ok: false,
+                    error: "task_layout_mismatch",
+                    op: opName,
+                    captured: String(cap.taskVtable),
+                    expected: expectedTaskVt
+                });
+            }
+        }
         if (!snsEnsureFakeVt()) return JSON.stringify({ ok: false, error: "fake_vt_failed" });
         var opcode = r3State.cfg.snsOpcode[opName];
         var url = r3State.cfg.snsSnsUrl[opName];
@@ -3279,15 +3648,15 @@ function snsSendRequest(opName, bodyHex) {
             desc.add(0x18), Memory.allocUtf8String(url));
         desc.add(0x30).writeU8(1);
         var operatorNew = new NativeFunction(baseAddr.add(r3State.cfg.operatorNewAddr), "pointer", ["size_t"]);
-        var task = operatorNew(anchor.size);
+        var task = r3AllocGuardedTask(operatorNew, anchor.size, "sns " + opName);
         if (!task || task.isNull()) throw new Error("operator new failed");
         new NativeFunction(baseAddr.add(anchor.ctor), "void", ["pointer", "pointer"])(task, desc);
+        r3CheckGuardedTask(task, anchor.size, "sns " + opName);
         var taskVt = task.readPointer();
         if (!taskVt.equals(baseAddr.add(anchor.vtable))) {
             throw new Error("task vtable mismatch: " + taskVt + " expect=" + baseAddr.add(anchor.vtable));
         }
         // R3 直调 ctor 绕过 factory：把捕获到的路由字段补回 task（slot13 会读 +0x70/+0x74）。
-        var cap = snsState.captured[SNS_OP_NAMES[opcode]];
         if (cap) {
             try {
                 if (cap.p70 !== null && cap.p70 !== undefined) task.add(0x70).writeU8(cap.p70);
@@ -3306,7 +3675,8 @@ function snsSendRequest(opName, bodyHex) {
         snsSendState.writeCalls = 0;
         // 合成任务在 slot13 前的内存快照（与真实任务同偏移比对）。
         var preMem = null;
-        try { preMem = snsHexFromPtr(task, 0x110); } catch (eMem2) { preMem = null; }
+        // 仅取任务真实尺寸内的快照：隔离带（0xAA）不属于任务对象，不写进日志。
+        try { preMem = snsHexFromPtr(task, Math.min(0x110, anchor.size)); } catch (eMem2) { preMem = null; }
         // 安全路线：继续使用 fake B1 伪 vtable（与文本 R3 同构）；不碰真实 B1
         // ParseFromArray（4.2.0.17 实测该路线会让微信卡死，已禁用）。
         task.add(0x78).writePointer(snsSendState.fakeVt);
@@ -3338,9 +3708,15 @@ function snsSendRequest(opName, bodyHex) {
         snsSendState.window = true;
         var pendingBefore = "";
         var pendingAfter = "";
-        try { pendingBefore = svc.add(0x78).readU64().toString(); } catch (ePb) { }
-        var ret = slot13(svc, task);
-        snsSendState.window = false;
+        var ret;
+        try {
+            try { pendingBefore = svc.add(0x78).readU64().toString(); } catch (ePb) { }
+            ret = slot13(svc, task);
+        } finally {
+            // native 调用抛异常时也必须复位：否则 SNS body hook 会永久认为
+            // 「合成请求进行中」，之后所有真实请求体都捕获不到。
+            snsSendState.window = false;
+        }
         try { pendingAfter = svc.add(0x78).readU64().toString(); } catch (ePa) { }
         var cloneMem = null;
         try { cloneMem = snsHexFromPtr(closure, 0x80); } catch (eCm) { }
@@ -3457,6 +3833,7 @@ function snsInit() {
 
 // bridge RPC：状态/初始化/发送/轮询
 function snsStatus() {
+    snsPruneRequests();
     var seeds = snsState.seeds || {};
     var captured = snsState.captured || {};
     var timelineSeed = !!seeds["mmsnstimeline"];
@@ -3516,6 +3893,7 @@ function snsRequest(opName, bodyHex) {
 }
 
 function snsPoll(requestId) {
+    snsPruneRequests();
     var req = snsSendState.requests[String(requestId || "")];
     if (!req) return JSON.stringify({ ok: false, error: "unknown_request" });
     var out = {
@@ -3710,8 +4088,9 @@ function r3StartSlot13Capture(quiet) {
                         var cvt = closure.readPointer();
                         if (!cvt.equals(baseAddr.add(r3State.cfg.closureVtable))) return;
                         var key = closure.toString();
-                        if (r3State.captureSeen[key]) return;
-                        r3State.captureSeen[key] = true;
+                        if (!r3CaptureSeenMark(key)) return;
+                        // seed 已存在时跳过 clone（原因同 r3ConsiderTask）。
+                        if (r3State.seed) return;
                         var cloneFn = cvt.add(0x10).readPointer();
                         var clone = new NativeFunction(cloneFn, 'pointer', ['pointer'])(closure);
                         if (!clone || clone.isNull()) return;
@@ -3738,8 +4117,7 @@ function r3StartSlot13Capture(quiet) {
                         var vCvt = vClosure.readPointer();
                         if (!vCvt.equals(baseAddr.add(r3State.cfg.voiceClosureVtable))) return;
                         var vKey = "v:" + vClosure.toString();
-                        if (r3State.captureSeen[vKey]) return;
-                        r3State.captureSeen[vKey] = true;
+                        if (!r3CaptureSeenMark(vKey)) return;
                         try {
                             var voser = task.add(0x78);
                             var vosVt = voser.readPointer();
@@ -3761,6 +4139,9 @@ function r3StartSlot13Capture(quiet) {
                                 }
                             }
                         } catch (eVP) { }
+                        // 已知 seed 且已有 header 时不再 clone（避免每次真实语音发送
+                        // 都在微信堆上留一个 0x38B 闭包对象）。
+                        if (r3State.voiceSeed && r3State.voiceHeaderHex) return;
                         var vCloneFn = vCvt.add(0x10).readPointer();
                         var vClone = new NativeFunction(vCloneFn, 'pointer', ['pointer'])(vClosure);
                         if (!vClone || vClone.isNull()) return;
@@ -3782,6 +4163,16 @@ function r3StartSlot13Capture(quiet) {
         r3State.lastError = "slot13 hook: " + e.message;
         console.error("[!] R3: slot13 捕获 hook 安装失败: " + e.message);
     }
+}
+
+// 发送前 r3SendProtoTask 会临时卸载 slot13 捕获 hook（避免我们自己的 slot13 调用
+// 触发 onEnter 里的 __clone）。无论发送成功还是失败都必须恢复，否则一次失败会让
+// 后续手动发送再也捕获不到文本/语音/SNS 句柄，直到微信重启。
+function r3ResumeSlot13Capture() {
+    if (!r3State.cfg || !r3State.cfg.slot13Capture) return;
+    setImmediate(function () {
+        try { r3StartSlot13Capture(true); } catch (e) { }
+    });
 }
 
 // 闭包捕获调度参数（2026-10-23 能耗优化）。
@@ -3867,6 +4258,12 @@ function r3ScheduleCaptureTick(delayMs) {
 function r3CaptureTick() {
     r3State.captureTimer = null;
     if (!r3ModeActive) return;
+    // perf P2-6: seed 已到手（含 slot13 在 classA resolve 前捕获）时连一次
+    // resolve/scan 都不做，直接把周期任务收尾掉；发送路径会按需 resolve。
+    if (r3State.seed) {
+        try { r3FlushPendingLogs(); } catch (e) { }
+        return;
+    }
     try {
         r3State.captureTicks++;
         r3FlushPendingLogs();
@@ -3879,8 +4276,10 @@ function r3CaptureTick() {
         r3State.lastError = "capture tick: " + e.message;
     }
     if (!r3ModeActive) return;
-    // seed 到手：发送句柄已经持久化，没有任何周期任务需要继续；收尾后停止。
-    if (r3State.resolved && r3State.seed) {
+    // seed 到手即停止所有周期工作（perf P2-6）：slot13 捕获可以在 classA 尚未
+    // resolve 时就拿到 seed；旧条件要求 resolved && seed，导致 classA 一直
+    // resolve 不了时 250/500ms 定时器常驻。发送路径自身会按需 r3TryResolve()。
+    if (r3State.seed) {
         try { r3FlushPendingLogs(); } catch (e) { }
         return;
     }
@@ -3911,7 +4310,7 @@ function r3StartCaptureLoop() {
 function r3KickSeedScan() {
     if (!r3ModeActive || !r3State.cfg) return;
     if (!r3State.cfg.closureCapture) return;
-    if (r3State.resolved && r3State.seed) return;
+    if (r3State.seed) return;
     r3State.seedBoostUntil = Date.now() + R3_SEED_BOOST_MS;
     r3ScheduleCaptureTick(0);
 }
@@ -4149,10 +4548,12 @@ function r3SendProtoTask(taskId, protoHex, opcode, url, label, opts) {
         // task := operator new(cfg.taskSize); ctor(task, desc)
         // 尺寸来自版本 JSON(4.1.15/4.2.0.5 均为 0xE0), opts.size 仅 sendpat 等特殊路径覆盖。
         var operatorNew = new NativeFunction(baseAddr.add(cfg.operatorNewAddr), 'pointer', ['size_t']);
-        var task = operatorNew(taskSize);
+        var task = r3AllocGuardedTask(operatorNew, taskSize, "r3 " + label);
         if (!task || task.isNull()) throw new Error("operator new(0x" + taskSize.toString(16) + ") 失败");
-        console.log("[r3] step4 (" + label + ") task=" + task + " size=0x" + taskSize.toString(16));
+        console.log("[r3] step4 (" + label + ") task=" + task + " size=0x" + taskSize.toString(16) +
+            " alloc=0x" + (taskSize + R3_TASK_GUARD_BYTES).toString(16));
         new NativeFunction(baseAddr.add(ctorAddr), 'void', ['pointer', 'pointer'])(task, desc);
+        r3CheckGuardedTask(task, taskSize, "r3 " + label);
         console.log("[r3] step5 (" + label + ") ctor done");
         var tv = task.readPointer();
         if (!tv.equals(baseAddr.add(taskVtable))) {
@@ -4195,15 +4596,14 @@ function r3SendProtoTask(taskId, protoHex, opcode, url, label, opts) {
         console.log("[+] R3 " + label + ": slot13(classA=" + r3State.classA + ", task=" + task + ") -> " + ret +
             " (proto=" + bytes.length + "B, clone=" + closure + ", taskIdArg=" + taskId +
             ", nativeTaskId=" + nativeTaskId + ")");
-        if (cfg.slot13Capture) {
-            setImmediate(function () {
-                try { r3StartSlot13Capture(true); } catch (e) { }
-            });
-        }
+        r3ResumeSlot13Capture();
         return "1";
     } catch (e) {
         r3State.lastError = label + " send: " + e.message;
         console.error("[!] R3 " + label + " 发送失败: " + e.message + "\n" + (e.stack || ""));
+        // 失败路径同样恢复 slot13 捕获：否则首次发送失败后，手动发消息也再无法
+        // 捕获句柄（文本 seed 已有，但语音/SNS 句柄会一直缺失）。
+        r3ResumeSlot13Capture();
         return "fail";
     }
 }
@@ -4307,9 +4707,22 @@ function r3RestoreVoiceHeader(pid, headerHex) {
 }
 
 function r3SetVoiceSeed(seedHex) {
+    if (!r3ModeActive) return "off";
+    if (!r3State.cfg) r3Ready();
+    if (!r3State.cfg || r3State.cfg.voiceClosureVtable === null) return "fail";
     if (typeof seedHex !== "string" || seedHex.indexOf("0x") !== 0) return "fail";
-    r3State.voiceSeed = ptr(seedHex);
-    return "1";
+    try {
+        // 与文本 seed 同样校验：持久化文件损坏/微信重启后指针失效时，直接拒绝，
+        // 避免在 NativeFunction(cloneFn)(seed) 里解引用野指针导致微信崩溃。
+        var seed = ptr(seedHex);
+        if (!r3IsHeapPtr(seed)) return "invalid";
+        var vptr = seed.readPointer();
+        if (!vptr.equals(baseAddr.add(r3State.cfg.voiceClosureVtable))) return "invalid";
+        r3State.voiceSeed = seed;
+        return "1";
+    } catch (e) {
+        return "invalid: " + e.message;
+    }
 }
 
 // 语音发送运行时诊断（App 倒计时/句柄检查用）。
@@ -4418,6 +4831,11 @@ var contactState = {
     installed: false,
     ccCrypt: null,
     pbkdf2: null,
+    // CommonCrypto 捕获 listener（perf P2-1）：拿到一把通过页 1 校验的 DB key 后
+    // 全部 detach，避免用户正常收发图片/文件时每条 CCCrypt 都进 JS；账号切换/
+    // key_missing 时再 arm。
+    cryptoArmed: false,
+    cryptoListeners: [],
     unlinkFn: null,
     inCrypto: false,
     keysBySalt: {},      // saltHex -> keyHex（已用页 1 校验）
@@ -4495,7 +4913,12 @@ function contactNoteCandidate(hex, source) {
     try {
         if (!hex || hex.length !== 64) return;
         if (contactState.candidateSet[hex]) return;
-        if (contactState.candidates.length >= CONTACT_MAX_CANDIDATES) return;
+        // 账号切换时旧账号的候选 key 可能占满 128 上限；按 FIFO 淘汰最旧的，
+        // 保证重新 arm 后新账号的 key 仍能进入候选集（只改内存候选，不动已验证 key）。
+        if (contactState.candidates.length >= CONTACT_MAX_CANDIDATES) {
+            var evicted = contactState.candidates.shift();
+            if (evicted) delete contactState.candidateSet[evicted];
+        }
         contactState.candidateSet[hex] = source || "aes";
         contactState.candidates.push(hex);
         contactDebug("新 key 候选 source=" + (source || "aes") + " total=" + contactState.candidates.length);
@@ -4514,8 +4937,100 @@ function contactCaptureAesKey(keyPtr, keyLen, source) {
     }
 }
 
+// CommonCrypto 捕获 listener 的挂载/卸载（perf P2-1）。
+// 四个 hook 只在“还没有可用 DB key”时需要：一旦有 key 通过页 1 校验，
+// 用户后续每次图片/文件/视频加解密都不再进 JS（这个进程的 DB key 不会再变）。
+function contactArmCryptoHooks() {
+    if (!dbKeyCaptureEnabled || contactState.cryptoArmed || !contactState.installed) return false;
+    var create = contactFindExport("CCCryptorCreate");
+    var createMode = contactFindExport("CCCryptorCreateWithMode");
+    var crypt = contactFindExport("CCCrypt");
+    var pbkdf2 = contactFindExport("CCKeyDerivationPBKDF");
+    var listeners = [];
+    try {
+        if (create) {
+            listeners.push(Interceptor.attach(create, {
+                onEnter: function (args) {
+                    try {
+                        var alg = args[1].toInt32();
+                        if (alg !== 0) return; // kCCAlgorithmAES
+                        contactCaptureAesKey(args[3], args[4].toInt32(), "create");
+                    } catch (e) { contactState.lastError = String(e); }
+                }
+            }));
+        }
+        if (createMode) {
+            listeners.push(Interceptor.attach(createMode, {
+                onEnter: function (args) {
+                    try {
+                        if (args[2].toInt32() !== 0) return; // kCCAlgorithmAES
+                        contactCaptureAesKey(args[5], args[6].toInt32(), "createMode");
+                    } catch (e) { contactState.lastError = String(e); }
+                }
+            }));
+        }
+        if (crypt) {
+            listeners.push(Interceptor.attach(crypt, {
+                onEnter: function (args) {
+                    try {
+                        if (args[1].toInt32() !== 0) return; // kCCAlgorithmAES
+                        contactCaptureAesKey(args[3], args[4].toInt32(), "crypt");
+                    } catch (e) { contactState.lastError = String(e); }
+                }
+            }));
+        }
+        if (pbkdf2) {
+            // 登录期：rounds=256000 输出 32 字节 → passphrase 与 enc_key。
+            listeners.push(Interceptor.attach(pbkdf2, {
+                onEnter: function (args) {
+                    try {
+                        if (contactState.inCrypto) return;
+                        if (args[6].toInt32() !== 256000) return;
+                        if (args[2].toInt32() !== 32 || args[8].toInt32() !== 32) return;
+                        var pw = contactPtrHex(args[1], 32);
+                        var out = contactPtrHex(args[7], 32);
+                        var salt = contactPtrHex(args[3], 16);
+                        if (pw) contactState.passphraseHex = pw;
+                        if (out) contactNoteCandidate(out, "pbkdf2");
+                        if (salt && out) contactState.derivedBySalt[salt] = out;
+                        contactDebug("捕获 PBKDF2 passphrase/enc_key salt=" + (salt ? salt.substring(0, 8) : "?"));
+                    } catch (e) { contactState.lastError = String(e); }
+                }
+            }));
+        }
+    } catch (e) {
+        for (var i = 0; i < listeners.length; i++) {
+            try { listeners[i].detach(); } catch (eDetach) { }
+        }
+        contactState.lastError = "arm crypto hooks: " + e;
+        console.log("[!] [contact] CommonCrypto 捕获 hook 挂载失败: " + e);
+        return false;
+    }
+    contactState.cryptoListeners = listeners;
+    contactState.cryptoArmed = true;
+    console.log("[+] [contact] CommonCrypto 捕获 hook 已挂载(" + listeners.length + " 个; 校验到 DB key 后自动卸载)");
+    return true;
+}
+
+function contactDisarmCryptoHooks() {
+    if (!contactState.cryptoArmed && !contactState.cryptoListeners.length) return false;
+    var detached = 0;
+    for (var i = 0; i < contactState.cryptoListeners.length; i++) {
+        try { contactState.cryptoListeners[i].detach(); detached++; } catch (e) { }
+    }
+    contactState.cryptoListeners = [];
+    contactState.cryptoArmed = false;
+    console.log("[+] [contact] 已获得页校验通过的 DB key, 卸载 CommonCrypto 捕获 hook(" +
+        detached + " 个)");
+    return true;
+}
+
 function contactSetupHooks() {
-    if (contactState.installed) return;
+    if (contactState.installed) {
+        // 已安装但可能因拿到 DB key 而卸载；账号切换/key_missing 时由调用方重新 arm。
+        contactArmCryptoHooks();
+        return;
+    }
     if (!dbKeyCaptureEnabled) {
         console.log("[contact] DB key 捕获未启用（contactDirectory/snsDbRead/snsProbe 均为 false）");
         return;
@@ -4537,60 +5052,8 @@ function contactSetupHooks() {
             contactState.pbkdf2 = new NativeFunction(pbkdf2, "int",
                 ["uint32", "pointer", "ulong", "pointer", "ulong", "uint32", "uint32", "pointer", "ulong"]);
         }
-        var create = contactFindExport("CCCryptorCreate");
-        var createMode = contactFindExport("CCCryptorCreateWithMode");
-        var crypt = contactFindExport("CCCrypt");
-        if (create) {
-            Interceptor.attach(create, {
-                onEnter: function (args) {
-                    try {
-                        var alg = args[1].toInt32();
-                        if (alg !== 0) return; // kCCAlgorithmAES
-                        contactCaptureAesKey(args[3], args[4].toInt32(), "create");
-                    } catch (e) { contactState.lastError = String(e); }
-                }
-            });
-        }
-        if (createMode) {
-            Interceptor.attach(createMode, {
-                onEnter: function (args) {
-                    try {
-                        if (args[2].toInt32() !== 0) return; // kCCAlgorithmAES
-                        contactCaptureAesKey(args[5], args[6].toInt32(), "createMode");
-                    } catch (e) { contactState.lastError = String(e); }
-                }
-            });
-        }
-        if (crypt) {
-            Interceptor.attach(crypt, {
-                onEnter: function (args) {
-                    try {
-                        if (args[1].toInt32() !== 0) return; // kCCAlgorithmAES
-                        contactCaptureAesKey(args[3], args[4].toInt32(), "crypt");
-                    } catch (e) { contactState.lastError = String(e); }
-                }
-            });
-        }
-        if (pbkdf2) {
-            // 登录期：rounds=256000 输出 32 字节 → passphrase 与 enc_key。
-            Interceptor.attach(pbkdf2, {
-                onEnter: function (args) {
-                    try {
-                        if (contactState.inCrypto) return;
-                        if (args[6].toInt32() !== 256000) return;
-                        if (args[2].toInt32() !== 32 || args[8].toInt32() !== 32) return;
-                        var pw = contactPtrHex(args[1], 32);
-                        var out = contactPtrHex(args[7], 32);
-                        var salt = contactPtrHex(args[3], 16);
-                        if (pw) contactState.passphraseHex = pw;
-                        if (out) contactNoteCandidate(out, "pbkdf2");
-                        if (salt && out) contactState.derivedBySalt[salt] = out;
-                        contactDebug("捕获 PBKDF2 passphrase/enc_key salt=" + (salt ? salt.substring(0, 8) : "?"));
-                    } catch (e) { contactState.lastError = String(e); }
-                }
-            });
-        }
         contactState.installed = true;
+        contactArmCryptoHooks();
         console.log("[+] [contact] 通讯录 Hook 已安装（AES key + PBKDF2 passphrase 捕获）");
     } catch (e) {
         console.log("[!] [contact] Hook 安装失败: " + e);
@@ -4667,15 +5130,20 @@ function contactResolveKeyByPage1(page1) {
         if (!page1 || page1.length < CONTACT_PAGE_SIZE) return null;
         var salt = contactBytesToHex(page1.subarray(0, 16));
         var cached = contactState.keysBySalt[salt];
-        if (cached && contactPage1MatchesKey(cached, page1)) return { salt: salt, keyHex: cached, source: "cached" };
+        if (cached && contactPage1MatchesKey(cached, page1)) {
+            contactDisarmCryptoHooks();
+            return { salt: salt, keyHex: cached, source: "cached" };
+        }
         var provided = contactState.providedKeys[salt];
         if (provided && contactPage1MatchesKey(provided, page1)) {
             contactState.keysBySalt[salt] = provided;
+            contactDisarmCryptoHooks();
             return { salt: salt, keyHex: provided, source: "provided" };
         }
         var derived = contactState.derivedBySalt[salt];
         if (derived && contactPage1MatchesKey(derived, page1)) {
             contactState.keysBySalt[salt] = derived;
+            contactDisarmCryptoHooks();
             return { salt: salt, keyHex: derived, source: "derived" };
         }
         for (var i = 0; i < contactState.candidates.length; i++) {
@@ -4683,6 +5151,7 @@ function contactResolveKeyByPage1(page1) {
             if (contactPage1MatchesKey(candidate, page1)) {
                 contactState.keysBySalt[salt] = candidate;
                 contactDebug("页 1 校验通过 salt=" + salt.substring(0, 8) + " source=candidate");
+                contactDisarmCryptoHooks();
                 return { salt: salt, keyHex: candidate, source: "candidate" };
             }
         }
@@ -4691,6 +5160,7 @@ function contactResolveKeyByPage1(page1) {
             if (k && contactPage1MatchesKey(k, page1)) {
                 contactState.keysBySalt[salt] = k;
                 contactDebug("页 1 校验通过 salt=" + salt.substring(0, 8) + " source=passphrase");
+                contactDisarmCryptoHooks();
                 return { salt: salt, keyHex: k, source: "passphrase" };
             }
         }
@@ -4931,6 +5401,9 @@ function snsDbOpenPlaintext(dbStoragePath) {
         if (dbBytes.length > SNS_DB_MAX_BYTES) return { ok: false, reason: "db_too_large" };
         var resolved = contactResolveKeyByPage1(dbBytes.subarray(0, CONTACT_PAGE_SIZE));
         if (!resolved) {
+            // 与 getContactDirectory 的 key_missing 同路径：sns.db 可能使用另一个 salt，
+            // 重新 arm 才能捕获到对应 key（账号切换/首次打开朋友圈时）。
+            contactArmCryptoHooks();
             return { ok: false, reason: "key_missing", key_status: snsDbKeyStatus() };
         }
         var dec = contactDecryptDatabase(dbBytes, resolved.keyHex, dbPath);
@@ -5295,6 +5768,9 @@ function getContactDirectory(dbStoragePath) {
         }
         var resolved = contactResolveKeyByPage1(dbBytes.subarray(0, CONTACT_PAGE_SIZE));
         if (!resolved) {
+            // 账号切换后新 DB 的 salt 会变：之前卸载的 CommonCrypto hook 必须重新挂上，
+            // 否则新账号的 key 永远不会被捕获。
+            contactArmCryptoHooks();
             console.log("[!] [contact] 缺少 contact.db 密钥（需登录期 Hook 或打开一次通讯录/聊天触发页读）");
             return JSON.stringify({ ok: false, reason: "key_missing" });
         }
@@ -5364,9 +5840,17 @@ function setDbKeys(keysJson) {
 
 function getDbKeyStatus() {
     try {
+        var validated = Object.keys(contactState.keysBySalt).length;
+        // bridge 重启/账号切换后若缓存未恢复，validated=0 是唯一能触发重新捕获的
+        // 信号之一（另一个是 getContactDirectory 的 key_missing）。
+        if (validated === 0) {
+            if (!contactState.installed) contactSetupHooks();
+            else contactArmCryptoHooks();
+        }
         return JSON.stringify({
             installed: contactState.installed,
-            validated: Object.keys(contactState.keysBySalt).length,
+            validated: validated,
+            cryptoArmed: contactState.cryptoArmed,
             candidates: contactState.candidates.length,
             passphrase: !!contactState.passphraseHex,
             last_error: contactState.lastError

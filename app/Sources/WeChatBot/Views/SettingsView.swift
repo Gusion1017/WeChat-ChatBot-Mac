@@ -12,6 +12,10 @@ struct SettingsView: View {
     @State private var hookAction: HookAction?
     @State private var showToken = false
     @State private var isWorking = false
+    /// 最近一次 Hook 安装失败；用于把 App 管理权限等问题变成可操作提示。
+    @State private var installFailure: HookError?
+    /// 最近一次从备份还原失败；还原同样要写微信 App，App 管理拒绝时给同一条可操作提示。
+    @State private var restoreFailure: HookError?
     @State private var progress: Double?
     @State private var progressMessage: String?
     @State private var sleepCenter = SleepPreventionCenter.shared
@@ -25,6 +29,21 @@ struct SettingsView: View {
     @State private var launchAtLoginError: String?
     /// 导出配置前确认：默认隐藏 OneBot Token，避免误分享。
     @State private var isConfirmingConfigExport = false
+
+    // 数据与备份：微信官方备份 / 数据占用统计 / 导出 / 清理
+    @State private var backupService = BackupService()
+    @State private var weChatBackupSnapshot: WeChatBackupSnapshot?
+    @State private var dataStorageBreakdown: DataStorageBreakdown?
+    @State private var runtimeLogCleanupPlan: BackupCleanupPlan?
+    @State private var temporaryFilesCleanupPlan: BackupCleanupPlan?
+    @State private var isScanningBackupData = false
+    @State private var isWeChatBackupRunning = false
+    @State private var isBackupCleanupRunning = false
+    @State private var commandLineToolsReady: Bool?
+    @State private var weChatBackupError: String?
+    @State private var backupMaintenanceError: String?
+    @State private var pendingWeChatBackupDelete: WeChatBackupEntry?
+    @State private var pendingBackupCleanup: BackupCleanupPrompt?
 
     enum SettingsCategory: String, CaseIterable, Identifiable {
         case general
@@ -79,6 +98,18 @@ struct SettingsView: View {
         case restore
 
         var id: String { rawValue }
+    }
+
+    /// 清理确认弹窗的三种来源；共用同一个 sheet(item:)。
+    private struct BackupCleanupPrompt: Identifiable {
+        enum Kind {
+            case weChat(WeChatBackupCleanupPlan)
+            case runtimeLogs(BackupCleanupPlan)
+            case temporaryFiles(BackupCleanupPlan)
+        }
+
+        let id = UUID()
+        let kind: Kind
     }
 
     var body: some View {
@@ -165,6 +196,25 @@ struct SettingsView: View {
                     restoreBackup()
                 }
             }
+        }
+        .sheet(item: $pendingWeChatBackupDelete) { entry in
+            ConfirmSheet(
+                title: "删除微信备份",
+                message: Lf(
+                    "将删除 %@ 的官方微信备份。",
+                    entry.versionDisplay.isEmpty ? L("未知版本") : entry.versionDisplay
+                ),
+                details: [
+                    Lf("文件 %@，占用 %@。", entry.fileName, BackupFormatting.bytes(entry.byteCount)),
+                    "删除后无法用该版本备份还原微信；需要时可重新备份。"
+                ],
+                confirmTitle: "删除"
+            ) {
+                deleteWeChatBackup(entry)
+            }
+        }
+        .sheet(item: $pendingBackupCleanup) { prompt in
+            backupCleanupSheet(prompt)
         }
     }
 
@@ -697,6 +747,41 @@ struct SettingsView: View {
                     symbol: "checkmark.shield",
                     tint: store.hookStatus.matchedVersion ? Theme.success : Theme.warning
                 )
+                SettingsDivider()
+                hookStatusRow(
+                    "适配验证",
+                    value: store.hookStatus.matchedVersion
+                        ? (store.hookStatus.versionConfigVerified ? "已验证" : "未验证")
+                        : "缺少版本表",
+                    symbol: "checkmark.seal",
+                    // 缺少版本表时 versionConfigVerified 仍是默认 true，不能据此显示成功色。
+                    tint: (store.hookStatus.matchedVersion && store.hookStatus.versionConfigVerified)
+                        ? Theme.success
+                        : Theme.warning
+                )
+                SettingsDivider()
+                hookStatusRow(
+                    "微信签名",
+                    value: store.hookStatus.signatureValid ? "有效" : "无效",
+                    symbol: "signature",
+                    tint: store.hookStatus.signatureValid ? Theme.success : Theme.danger
+                )
+                SettingsDivider()
+                hookStatusRow(
+                    "当前版本备份",
+                    value: store.hookStatus.backupExists ? "已就绪" : "缺失",
+                    symbol: "archivebox",
+                    tint: store.hookStatus.backupExists ? Theme.success : Theme.warning
+                )
+                if SnsWriteGate.showsReadOnlyUI(version: store.hookStatus.wechatVersion) {
+                    SettingsDivider()
+                    hookStatusRow(
+                        "朋友圈写链路",
+                        value: "仅只读（适配中）",
+                        symbol: "eye",
+                        tint: Theme.warning
+                    )
+                }
                 if store.hookStatus.r3Active || store.hookStatus.r3Seeded || !store.settings.hook.enableNativeSend {
                     SettingsDivider()
                     hookStatusRow(
@@ -738,6 +823,18 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .padding(.leading, 2)
                 }
+            }
+
+            if store.hookStatus.matchedVersion, !store.hookStatus.versionConfigVerified {
+                InlineNotice(
+                    kind: .warning,
+                    title: "Hook 地址表未验证，已禁止启动",
+                    message: "当前微信版本的版本表标记为未真机验证；启动机器人会注入错误地址并导致微信崩溃，因此已阻止启动。请换回已验证的微信版本（如 4.2.1.3），或等待该版本适配完成。"
+                )
+            }
+
+            if let failure = installFailure ?? restoreFailure, failure.isAppManagementPermissionDenied {
+                AppManagementPermissionNotice()
             }
 
             if isWorking {
@@ -834,7 +931,12 @@ struct SettingsView: View {
                                 .controlSize(.small)
                         }
                     }
-                    SettingsRow(title: "Gadget 端口", symbol: "number", tint: .secondary) {
+                    SettingsRow(
+                        title: "Gadget 端口",
+                        subtitle: "Hook 监听端口；修改后需重新安装 Hook 才会生效，bridge 会连接该端口",
+                        symbol: "number",
+                        tint: .secondary
+                    ) {
                         Stepper("\(store.settings.hook.gadgetPort)", value: bind(\.hook.gadgetPort), in: 1024...65_535)
                             .font(.caption)
                             .frame(width: 106)
@@ -852,7 +954,7 @@ struct SettingsView: View {
                         subtitle: "首次使用需在本机微信手动发一条消息，以捕获发送句柄。",
                         symbol: "paperplane",
                         tint: .secondary,
-                        help: "支持微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55。捕获后排队消息会自动重发；仅支持文本。"
+                        help: "支持微信 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5。捕获后排队消息会自动重发；仅支持文本。"
                     ) {
                         HStack(spacing: 8) {
                             Button(L("查看捕获步骤…")) {
@@ -1174,7 +1276,11 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsSection(title: "备份与还原") {
+            weChatBackupSettings
+
+            dataBackupMaintenanceSettings
+
+            SettingsSection(title: "配置与还原") {
                 VStack(alignment: .leading, spacing: 11) {
                     HStack(spacing: 8) {
                         Button {
@@ -1199,11 +1305,11 @@ struct SettingsView: View {
                         .buttonStyle(.glass)
                         Spacer()
                     }
-                    Text(L("完整备份请复制数据目录；微信官方备份由 Hook 安装流程创建。"))
+                    Text(L("导出配置只包含设置；完整数据请用上方「导出数据备份…」。"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                     if !store.settings.hook.lastBackupPath.isEmpty {
-                        PathRow(label: "微信备份", path: store.settings.hook.lastBackupPath, revealInFinder: true)
+                        PathRow(label: "最近微信备份", path: store.settings.hook.lastBackupPath, revealInFinder: true)
                     }
                 }
                 .padding(14)
@@ -1212,6 +1318,12 @@ struct SettingsView: View {
             SettingsSection(title: "维护") {
                 LogBufferMaintenanceRow()
             }
+        }
+        .task {
+            await refreshBackupOverview()
+        }
+        .onChange(of: store.activeAccountID) { _, _ in
+            Task { await refreshBackupOverview() }
         }
     }
 
@@ -1270,6 +1382,29 @@ struct SettingsView: View {
                 aboutRow("应用路径", Bundle.main.bundlePath)
             }
 
+            SettingsSection(
+                title: "帮助与反馈",
+                footer: "反馈前请对日志中的 wxid、昵称与聊天内容脱敏；App 不会自动上传日志。",
+                help: "会在默认浏览器打开 GitHub Issues，不读取或上传本机数据。"
+            ) {
+                SettingsRow(
+                    title: "问题反馈",
+                    subtitle: "附 macOS、微信版本与脱敏日志更快定位",
+                    symbol: "exclamationmark.bubble",
+                    tint: Theme.info
+                ) {
+                    Button {
+                        openFeedbackPage()
+                    } label: {
+                        Label(L("反馈问题"), systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .help(L("在默认浏览器打开 GitHub Issues"))
+                    .accessibilityLabel(L("反馈问题（在默认浏览器打开 GitHub Issues）"))
+                }
+            }
+
             SettingsSection(title: "技术栈与许可") {
                 TechLinkRow(
                     title: "SwiftUI / Swift 6 · macOS 26 Liquid Glass",
@@ -1324,7 +1459,7 @@ struct SettingsView: View {
                 )
                 SettingsDivider()
                 researchRow(
-                    "4.1.15 / 4.2 收发适配",
+                    "微信 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 收发适配",
                     "入站只读消息钩子；出站走原生发送，与旧版 legacy 隔离。",
                     symbol: "arrow.left.arrow.right",
                     tint: Theme.warning
@@ -1519,6 +1654,8 @@ struct SettingsView: View {
     }
 
     private func installHook() {
+        installFailure = nil
+        restoreFailure = nil
         isWorking = true
         progress = 0.02
         progressMessage = "正在准备安装…"
@@ -1534,6 +1671,7 @@ struct SettingsView: View {
                 progressMessage = "安装完成"
                 toast.show("Hook 安装完成", tone: .success)
             } catch {
+                installFailure = error as? HookError
                 toast.show("安装失败：\(error.localizedDescription)", tone: .error)
             }
             await store.refreshStatus()
@@ -1545,6 +1683,8 @@ struct SettingsView: View {
 
     private func restoreBackup() {
         isWorking = true
+        installFailure = nil
+        restoreFailure = nil
         progress = nil
         progressMessage = "正在从备份还原微信…"
         Task {
@@ -1552,6 +1692,7 @@ struct SettingsView: View {
                 try await store.restoreWeChatBackup()
                 toast.show("已从备份还原官方微信", tone: .success)
             } catch {
+                restoreFailure = error as? HookError
                 toast.show("还原失败：\(error.localizedDescription)", tone: .error)
             }
             await store.refreshStatus()
@@ -1651,6 +1792,540 @@ struct SettingsView: View {
                 toast.show("未检测到账号变化", tone: .info)
             }
         }
+    }
+
+    // MARK: Data & backup sections
+
+    private var weChatBackupSettings: some View {
+        SettingsSection(
+            title: "微信备份",
+            footer: "备份用于还原官方微信；删除后需要重新备份才能还原。",
+            help: "安装 Hook 前会自动完整备份官方微信（约 670 MB）。备份按微信版本与 build 命名，还原时使用当前版本的备份。"
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let snapshot = weChatBackupSnapshot {
+                    weChatBackupSummary(snapshot)
+                    ForEach(snapshot.backups) { backup in
+                        SettingsDivider()
+                        weChatBackupRow(backup, isCurrent: snapshot.currentBackup?.id == backup.id)
+                    }
+                    if snapshot.backups.isEmpty {
+                        SettingsDivider()
+                        Text(L("还没有官方微信备份。安装 Hook 会自动备份，也可以点「立即备份」。"))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(14)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    SettingsDivider()
+                    weChatBackupActions(snapshot)
+                    if isWeChatBackupRunning {
+                        ProgressPanel(
+                            title: "正在备份微信",
+                            detail: "正在打包官方微信 App，约 670 MB；请勿退出微信或关闭 App。"
+                        )
+                        .padding(12)
+                    }
+                    if let weChatBackupError {
+                        InlineNotice(kind: .danger, title: "微信备份失败", message: weChatBackupError)
+                            .padding(12)
+                    }
+                } else {
+                    LoadingState(title: "正在统计微信备份…")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func weChatBackupSummary(_ snapshot: WeChatBackupSnapshot) -> some View {
+        SettingsRow(
+            title: "备份占用",
+            subtitle: Lf("共 %d 份 · 当前微信 %@", snapshot.backups.count, backupVersionText(snapshot)),
+            symbol: "archivebox",
+            tint: Theme.info
+        ) {
+            Text(BackupFormatting.bytes(snapshot.totalBytes))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        if let available = snapshot.availableBytes, BackupService.isLowDiskSpace(available) {
+            InlineNotice(
+                kind: .warning,
+                title: "磁盘空间不足",
+                message: Lf("备份目录所在磁盘仅剩 %@，低于建议的 1.5 GB；备份可能失败，请先清理空间。", BackupFormatting.bytes(available))
+            )
+            .padding(12)
+        }
+        if snapshot.currentBackup == nil, !snapshot.currentVersion.isEmpty {
+            InlineNotice(
+                kind: .warning,
+                title: "当前版本未备份",
+                message: Lf("当前微信 %@ 还没有官方备份；安装 Hook 或还原前请先「立即备份」。", backupVersionText(snapshot))
+            )
+            .padding(12)
+        }
+        if commandLineToolsReady == false {
+            InlineNotice(
+                kind: .warning,
+                title: "未安装 Command Line Tools",
+                message: "仅备份微信不依赖它；安装 Hook 前需要先安装 Command Line Tools。"
+            )
+            .padding(12)
+        }
+    }
+
+    private func weChatBackupRow(_ backup: WeChatBackupEntry, isCurrent: Bool) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "archivebox.fill")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.info)
+                .frame(width: 18, alignment: .center)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(backup.versionDisplay.isEmpty ? L("未知版本") : backup.versionDisplay)
+                        .font(.callout)
+                    if isCurrent {
+                        PillLabel(text: "当前版本", color: Theme.success, symbol: "checkmark")
+                    }
+                }
+                Text(Lf("%@ · %@", BackupFormatting.bytes(backup.byteCount), UIFormat.relative(backup.modifiedAt)))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text(backup.fileName)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(backup.url.path)
+            }
+            Spacer(minLength: 8)
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([backup.url])
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(L("在 Finder 中显示"))
+            .accessibilityLabel(Lf("在 Finder 中显示 %@", backup.fileName))
+            Button {
+                pendingWeChatBackupDelete = backup
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.danger)
+            }
+            .buttonStyle(.plain)
+            .disabled(isWeChatBackupRunning || isBackupCleanupRunning)
+            .help(L("删除该备份"))
+            .accessibilityLabel(Lf(
+                "删除备份 %@",
+                backup.versionDisplay.isEmpty ? L("未知版本") : backup.versionDisplay
+            ))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
+
+    private func weChatBackupActions(_ snapshot: WeChatBackupSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    startWeChatBackup()
+                } label: {
+                    Label(L(isWeChatBackupRunning ? "正在备份…" : "立即备份"), systemImage: "archivebox")
+                }
+                .buttonStyle(.glassProminent)
+                .tint(Theme.info)
+                .disabled(isWeChatBackupRunning || isBackupCleanupRunning || store.isHookOperationInFlight)
+                .help(L("完整备份当前官方微信 App"))
+                .accessibilityHint(L("备份当前版本的官方微信，约需 1–2 分钟"))
+
+                Button {
+                    prepareWeChatCleanup(snapshot)
+                } label: {
+                    Label(L("清理旧备份…"), systemImage: "trash")
+                }
+                .buttonStyle(.glass)
+                .disabled(isWeChatBackupRunning || isBackupCleanupRunning || snapshot.cleanupPlan.isEmpty)
+                .help(snapshot.cleanupPlan.isEmpty ? L("没有可清理的旧备份") : L("保留最新一份与当前微信版本备份，删除更旧的备份"))
+
+                Button {
+                    openBackupsDirectory()
+                } label: {
+                    Label(L("打开备份目录"), systemImage: "folder")
+                }
+                .buttonStyle(.glass)
+
+                Spacer()
+            }
+            if store.isHookOperationInFlight {
+                Text(L("Hook 安装或还原进行中；完成后可备份微信。"))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if snapshot.cleanupPlan.isEmpty {
+                Text(L("没有可清理的旧备份、残留 .part 或孤立的 entitlements 文件。"))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text(Lf(
+                    "可清理 %d 个文件，预计释放 %@。",
+                    snapshot.cleanupPlan.itemCount,
+                    BackupFormatting.bytes(snapshot.cleanupPlan.freedBytes)
+                ))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(14)
+    }
+
+    private var dataBackupMaintenanceSettings: some View {
+        SettingsSection(
+            title: "数据备份与清理",
+            footer: "数据目录：~/Library/Application Support/WeChatAI。",
+            help: "导出为 zip，根目录含 backup-manifest.json（App 版本、时间、包含项与 schema）。不会打包 cosyvoice/models、venv 或运行日志。"
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let breakdown = dataStorageBreakdown {
+                    ForEach(breakdown.items) { item in
+                        storageRow(item)
+                        SettingsDivider()
+                    }
+                    SettingsRow(
+                        title: "合计",
+                        subtitle: Lf("%d 个文件", breakdown.totalFiles),
+                        symbol: "externaldrive.fill",
+                        tint: .secondary
+                    ) {
+                        Text(BackupFormatting.bytes(breakdown.totalBytes))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    LoadingState(title: "正在统计数据占用…")
+                }
+
+                SettingsDivider()
+                VStack(alignment: .leading, spacing: 10) {
+                    DataBackupExportButton()
+                    HStack(spacing: 8) {
+                        Button {
+                            prepareRuntimeLogCleanup()
+                        } label: {
+                            Label(L("清理运行日志…"), systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(.glass)
+                        .disabled(isBackupCleanupRunning || isScanningBackupData || (runtimeLogCleanupPlan?.isEmpty ?? true))
+                        .help(L("删除崩溃报告、bridge 日志与账号日志；不可恢复"))
+
+                        Button {
+                            prepareTemporaryFileCleanup()
+                        } label: {
+                            Label(L("清理临时文件…"), systemImage: "clock.arrow.circlepath")
+                        }
+                        .buttonStyle(.glass)
+                        .disabled(isBackupCleanupRunning || isScanningBackupData || (temporaryFilesCleanupPlan?.isEmpty ?? true))
+                        .help(L("删除 updates/ 与 runtime/ 下超过 24 小时的文件"))
+
+                        Spacer()
+                    }
+                    if let plan = runtimeLogCleanupPlan {
+                        Text(plan.isEmpty
+                             ? L("没有可清理的运行日志。")
+                             : Lf("运行日志可清理 %d 个文件，约 %@。", plan.itemCount, BackupFormatting.bytes(plan.freedBytes)))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let plan = temporaryFilesCleanupPlan {
+                        Text(plan.isEmpty
+                             ? L("没有超过 24 小时的临时文件。")
+                             : Lf("临时文件可清理 %d 项，约 %@。", plan.itemCount, BackupFormatting.bytes(plan.freedBytes)))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if isBackupCleanupRunning {
+                        ProgressPanel(title: "正在清理", detail: "删除所选文件并统计实际释放空间…")
+                    }
+                    if let backupMaintenanceError {
+                        InlineNotice(kind: .warning, title: "部分操作未完成", message: backupMaintenanceError)
+                    }
+                }
+                .padding(14)
+            }
+        }
+    }
+
+    private func storageRow(_ item: DataStorageItem) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: item.category.symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.category.title)
+                    .font(.callout)
+                Text(UIFormat.compactPath(item.url.path))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(item.url.path)
+            }
+            Spacer(minLength: 8)
+            Text(BackupFormatting.bytes(item.byteCount))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func backupVersionText(_ snapshot: WeChatBackupSnapshot) -> String {
+        guard !snapshot.currentVersion.isEmpty else { return L("未检测到微信") }
+        return snapshot.currentBuild.isEmpty
+            ? snapshot.currentVersion
+            : "\(snapshot.currentVersion) (\(snapshot.currentBuild))"
+    }
+
+    private var resolvedWeChatAppPath: String {
+        BackupService.resolveWeChatAppPath(
+            configuredPath: store.settings.hook.wechatPath,
+            detectedPath: store.hookStatus.wechatDetectedPath,
+            installedPaths: HookManager.discoveredWeChatPaths()
+        )
+    }
+
+    private var bridgeRuntimeFiles: [String] {
+        let path = store.hookStatus.versionConfigFile
+        return path.isEmpty ? [] : [path]
+    }
+
+    // MARK: Data & backup actions
+
+    private func refreshBackupOverview() async {
+        guard !isScanningBackupData else { return }
+        isScanningBackupData = true
+        let appPath = resolvedWeChatAppPath
+        let installation = WeChatInstallation.inspect(path: appPath)
+        let version = installation.version.isEmpty ? store.hookStatus.wechatVersion : installation.version
+        let build = installation.build.isEmpty ? store.hookStatus.wechatBuild : installation.build
+        let inUsePaths = bridgeRuntimeFiles
+
+        async let snapshotRequest = backupService.scanWeChatBackups(currentVersion: version, currentBuild: build)
+        async let storageRequest = backupService.dataStorageBreakdown()
+        async let logsRequest = backupService.scanRuntimeLogs()
+        async let tempRequest = backupService.scanTemporaryFiles(inUsePaths: inUsePaths)
+        let (snapshot, storage, logs, temporary) = await (snapshotRequest, storageRequest, logsRequest, tempRequest)
+
+        weChatBackupSnapshot = snapshot
+        dataStorageBreakdown = storage
+        runtimeLogCleanupPlan = logs
+        temporaryFilesCleanupPlan = temporary
+        let tools = await CommandLineTools.status()
+        commandLineToolsReady = tools.isReady
+        isScanningBackupData = false
+    }
+
+    private func startWeChatBackup() {
+        guard !isWeChatBackupRunning else { return }
+        isWeChatBackupRunning = true
+        weChatBackupError = nil
+        let appPath = resolvedWeChatAppPath
+        Task {
+            do {
+                guard let script = AppResources.manageScript else {
+                    throw BackupServiceError.scriptMissing
+                }
+                let tools = await CommandLineTools.status()
+                commandLineToolsReady = tools.isReady
+                let entry = try await backupService.backupWeChat(appPath: appPath, scriptURL: script)
+                toast.show(
+                    Lf("微信已备份：%@", BackupFormatting.bytes(entry.byteCount)),
+                    tone: .success,
+                    symbol: "archivebox"
+                )
+                await refreshBackupOverview()
+            } catch {
+                weChatBackupError = error.localizedDescription
+                toast.show(Lf("备份失败：%@", error.localizedDescription), tone: .error)
+            }
+            isWeChatBackupRunning = false
+        }
+    }
+
+    private func deleteWeChatBackup(_ entry: WeChatBackupEntry) {
+        Task {
+            do {
+                let result = try await backupService.deleteWeChatBackup(entry)
+                toast.show(
+                    Lf("已删除微信备份，释放 %@", BackupFormatting.bytes(result.freedBytes)),
+                    tone: .success,
+                    symbol: "trash"
+                )
+                await refreshBackupOverview()
+            } catch {
+                toast.show(Lf("删除失败：%@", error.localizedDescription), tone: .error)
+            }
+        }
+    }
+
+    private func prepareWeChatCleanup(_ snapshot: WeChatBackupSnapshot) {
+        let plan = snapshot.cleanupPlan
+        guard !plan.isEmpty else {
+            toast.show("没有可清理的旧备份", tone: .info)
+            return
+        }
+        pendingBackupCleanup = BackupCleanupPrompt(kind: .weChat(plan))
+    }
+
+    private func prepareRuntimeLogCleanup() {
+        guard let plan = runtimeLogCleanupPlan, !plan.isEmpty else {
+            toast.show("没有可清理的运行日志", tone: .info)
+            return
+        }
+        pendingBackupCleanup = BackupCleanupPrompt(kind: .runtimeLogs(plan))
+    }
+
+    private func prepareTemporaryFileCleanup() {
+        guard let plan = temporaryFilesCleanupPlan, !plan.isEmpty else {
+            toast.show("没有超过 24 小时的临时文件", tone: .info)
+            return
+        }
+        pendingBackupCleanup = BackupCleanupPrompt(kind: .temporaryFiles(plan))
+    }
+
+    private func runBackupCleanup(_ prompt: BackupCleanupPrompt) {
+        guard !isBackupCleanupRunning else { return }
+        isBackupCleanupRunning = true
+        backupMaintenanceError = nil
+        Task {
+            let result: BackupCleanupResult
+            let successMessage: String
+            switch prompt.kind {
+            case .weChat(let plan):
+                result = await backupService.cleanWeChatBackups(plan)
+                successMessage = Lf("已清理旧备份，释放 %@", BackupFormatting.bytes(result.freedBytes))
+            case .runtimeLogs(let plan):
+                result = await backupService.cleanRuntimeLogs(plan)
+                successMessage = Lf("已清理运行日志，释放 %@", BackupFormatting.bytes(result.freedBytes))
+            case .temporaryFiles(let plan):
+                result = await backupService.cleanTemporaryFiles(plan)
+                successMessage = Lf("已清理临时文件，释放 %@", BackupFormatting.bytes(result.freedBytes))
+            }
+            if result.failures.isEmpty {
+                toast.show(successMessage, tone: .success, symbol: "trash")
+            } else {
+                let message = Lf(
+                    "有 %d 个文件未能删除；已释放 %@。",
+                    result.failures.count,
+                    BackupFormatting.bytes(result.freedBytes)
+                )
+                backupMaintenanceError = message
+                toast.show(message, tone: .warning, symbol: "exclamationmark.triangle")
+            }
+            await refreshBackupOverview()
+            isBackupCleanupRunning = false
+        }
+    }
+
+    private func openBackupsDirectory() {
+        try? FileManager.default.createDirectory(
+            at: AppPaths.backupsDirectory,
+            withIntermediateDirectories: true
+        )
+        NSWorkspace.shared.open(AppPaths.backupsDirectory)
+    }
+
+    private func openFeedbackPage() {
+        guard let url = URL(string: "https://github.com/Gusion1017/WeChat-ChatBot-Mac/issues") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    @ViewBuilder
+    private func backupCleanupSheet(_ prompt: BackupCleanupPrompt) -> some View {
+        switch prompt.kind {
+        case .weChat(let plan):
+            ConfirmSheet(
+                title: "清理旧备份",
+                message: Lf(
+                    "将删除 %d 个文件，释放约 %@；最新一份备份会保留。",
+                    plan.itemCount,
+                    BackupFormatting.bytes(plan.freedBytes)
+                ),
+                details: weChatCleanupDetails(plan),
+                confirmTitle: "清理"
+            ) {
+                runBackupCleanup(prompt)
+            }
+        case .runtimeLogs(let plan):
+            ConfirmSheet(
+                title: "清理运行日志",
+                message: Lf(
+                    "将删除 %d 个日志文件，释放约 %@。",
+                    plan.itemCount,
+                    BackupFormatting.bytes(plan.freedBytes)
+                ),
+                details: [
+                    "包括崩溃报告、bridge 日志与各账号的日志目录。",
+                    "日志用于排查问题，删除后不可恢复。"
+                ],
+                confirmTitle: "清理"
+            ) {
+                runBackupCleanup(prompt)
+            }
+        case .temporaryFiles(let plan):
+            ConfirmSheet(
+                title: "清理临时文件",
+                message: Lf(
+                    "将删除 %d 个超过 24 小时的文件或目录，释放约 %@。",
+                    plan.itemCount,
+                    BackupFormatting.bytes(plan.freedBytes)
+                ),
+                details: [
+                    "包括 updates/ 与 runtime/ 下的旧文件。",
+                    "当前 bridge 正在使用的配置不会被删除。"
+                ],
+                confirmTitle: "清理"
+            ) {
+                runBackupCleanup(prompt)
+            }
+        }
+    }
+
+    private func weChatCleanupDetails(_ plan: WeChatBackupCleanupPlan) -> [String] {
+        var details: [String] = []
+        if let kept = plan.keptBackup {
+            details.append(Lf(
+                "保留最新备份：%@（%@）",
+                kept.versionDisplay.isEmpty ? L("未知版本") : kept.versionDisplay,
+                BackupFormatting.bytes(kept.byteCount)
+            ))
+        }
+        if let current = plan.keptCurrentBackup {
+            details.append(Lf(
+                "保留当前版本备份：%@（%@）",
+                current.versionDisplay.isEmpty ? L("未知版本") : current.versionDisplay,
+                BackupFormatting.bytes(current.byteCount)
+            ))
+        }
+        if !plan.backups.isEmpty {
+            details.append(Lf("删除 %d 份更旧的官方备份。", plan.backups.count))
+        }
+        if !plan.staleParts.isEmpty {
+            details.append(Lf("删除 %d 个未完成的 .part 文件。", plan.staleParts.count))
+        }
+        if !plan.orphanEntitlements.isEmpty {
+            details.append(Lf("删除 %d 个没有对应备份的 entitlements 文件。", plan.orphanEntitlements.count))
+        }
+        details.append("清理后无法撤销；需要时可在「微信备份」重新备份当前版本。")
+        return details
     }
 
     // MARK: Info
@@ -1838,6 +2513,94 @@ private struct LogBufferMaintenanceRow: View {
             } message: {
                 Text(L("只清空内存与当前界面的日志缓冲；磁盘历史日志文件不受影响。"))
             }
+        }
+    }
+}
+
+// MARK: - Data backup export control
+
+/// 「导出数据备份…」入口：设置页与首次向导共用同一套保存面板、进度与错误展示。
+///
+/// 真正的文件整理、zip 与清单生成由 BackupService 完成；本控件只负责选择位置、
+/// 展示进度与结果，避免两个页面各写一份导出逻辑。
+struct DataBackupExportButton: View {
+    @Environment(ToastCenter.self) private var toast
+    @State private var service = BackupService()
+    @State private var isExporting = false
+    @State private var progress: DataBackupProgress?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                chooseDestinationAndExport()
+            } label: {
+                Label(L("导出数据备份…"), systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.glass)
+            .disabled(isExporting)
+            .help(L("导出配置、账号数据、记忆、媒体与音色为 zip"))
+            .accessibilityHint(L("选择保存位置后开始导出；不含运行日志、模型与虚拟环境"))
+
+            if isExporting || progress != nil {
+                ProgressPanel(
+                    title: progressTitle,
+                    detail: progressDetail,
+                    progress: progress?.fraction
+                )
+            }
+            if let errorMessage {
+                InlineNotice(kind: .danger, title: "数据备份导出失败", message: errorMessage)
+            }
+        }
+    }
+
+    private var progressTitle: String {
+        switch progress?.stage {
+        case .preparing: L("正在准备导出")
+        case .copying: L("正在整理数据")
+        case .writingManifest: L("正在写入备份清单")
+        case .compressing: L("正在压缩备份")
+        case .finished: L("导出完成")
+        case nil: L("正在导出数据备份")
+        }
+    }
+
+    private var progressDetail: String? {
+        guard let stage = progress?.stage,
+              case .copying(let path, _, _) = stage else { return nil }
+        return Lf("正在复制 %@", path)
+    }
+
+    private func chooseDestinationAndExport() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "wechatai-backup-\(UIFormat.fileDate.string(from: Date())).zip"
+        panel.title = L("导出数据备份")
+        panel.message = L("包含配置、账号数据、记忆、媒体与音色；不含运行日志、模型与虚拟环境。")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isExporting = true
+        errorMessage = nil
+        progress = DataBackupProgress(fraction: 0, stage: .preparing)
+        Task {
+            do {
+                let result = try await service.exportDataBackup(to: url) { value in
+                    Task { @MainActor in progress = value }
+                }
+                progress = DataBackupProgress(fraction: 1, stage: .finished)
+                toast.show(
+                    Lf("数据备份已导出：%@", BackupFormatting.bytes(result.byteCount)),
+                    tone: .success,
+                    symbol: "archivebox"
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+                toast.show(Lf("导出失败：%@", error.localizedDescription), tone: .error)
+            }
+            isExporting = false
+            progress = nil
         }
     }
 }

@@ -4,7 +4,210 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
-## [Unreleased]
+## [4.2.0] — 2026-11-22
+
+### 修复
+
+- **重复投递导致重复自动回复（2026-11-22，微信 4.2.1.3 真机）**：4.2.1.3 的 `message_id` 是
+  `(created 秒 << 32) | 序号`，同一条消息被历史回放重新 finalize 时序号会变（打开/点击会话后同一条
+  语音/文字被再次推送），旧实现只按 `message_id` 去重，于是同一条消息入库两次并**再次触发自动回复**
+  （真机：某次语音在稍后被重复回复，同一条测试文本也被重复回复）。修复：
+  - `hook/script.js` 入站去重改为 `from|to|created|type|正文指纹` 稳定键（4096 条环形窗口；原来是
+    `from/to/正文` 的 1500ms 短窗口）。分钟级历史回放同样命中；用户在不同秒再发相同文本不会误伤。
+  - App 新增 `Services/InboundDeliveryDedupe.swift`（`InboundDeliveryFingerprint` + 4096 条 FIFO 窗口），
+    `OneBotClient` 在 `message_id` 去重之前先按稳定指纹丢弃重复投递；媒体事件缺 `raw_message` 或
+    `created` 为 0 时不做指纹去重（避免误丢同一秒连续转发的图片或用户真的重发的相同文本）。
+    单测：`InboundDeliveryDedupeTests`（13 项）。
+  - 文档：`architecture.md` §9.1、`core-services.md` §3/§5.2。
+
+### 新增
+
+- **备份与清理（2026-11-20）**：设置 → 数据与备份新增「微信备份」与「数据备份与清理」。微信备份列出
+  `backups/WeChat-<version>-<build>-official.zip`（版本/build、大小、时间、当前版本徽标与总占用），支持
+  立即备份（调用 `tools/manage_wechat.sh backup`）、逐条删除（二次确认）、「清理旧备份」（保留最新一份与当前版本，
+  同时清理残留 `*.part` 与孤立 entitlements）、打开备份目录与磁盘不足提示。数据备份按分类统计占用，
+  可导出含 `backup-manifest.json` 的完整 zip（配置、账号、记忆、媒体与自定义音色；不含运行日志、
+  TTS 模型与 venv），并支持清理运行日志与 `updates/` / `runtime/` 下超过 24 小时的临时文件。
+  新服务 `BackupService`（actor、依赖可注入）与 18 项单测见 `BackupServiceTests`。
+- **首次向导备份引导（2026-11-20）**：Hook 步骤新增「备份」卡（备份目录、当前版本已备份状态、磁盘余量、
+  CLT 状态、「仅备份微信」与进度/失败原因）；启动步骤新增「数据与备份」卡（数据目录、导出数据备份、
+  打开数据目录）。
+- **关于页反馈入口（2026-11-20）**：设置 → 关于新增「帮助与反馈」，「反馈问题」在默认浏览器打开
+  GitHub Issues，并提示附 macOS / 微信版本与脱敏日志。
+- **微信 4.2.1.3 (270595) 适配（2026-11-20，已真机验证）**：新增 `hook/versions/4_2_1_3_mac.json`；
+  版本检测继续优先读 `WeChatBundleVersion`（4.2.1.3 的 `CFBundleShortVersionString` 只是 `4.2.1`）；
+  安装脚本默认目标与 `run_bridge.sh` 默认配置切到 4.2.1.3。**Hook 地址表由 4.2.0.17 → 4.2.1.3 静态重定位生成：
+  send/req2buf/blrX8/buf2Resp/autoBufferWrite/cdn/string/proto/messageFinalizer、上传回调与上传下载等锚点
+  已按函数邻接、字符串引用与逐指令比对；R3/SNS 任务锚点仍沿用候选值。**安装后的真机验证结果见下方「修复」条目：
+  入站、R3 文本发送、通讯录与朋友圈 timeline 只读通过；朋友圈发布/评论写链路当时未验证（2026-11-22
+  真机更新：任务类锚点修正后发布/评论/回复/同步全部验证通过，见「修复」。）**
+- **朋友圈对象统一到名单（2026-11-20）**：「机器人 → 名单」新增「朋友圈对象」卡：发布对象多选、
+  不可用对象提示与移除、互动对象只读计数（取聊天白名单私聊对象）；「机器人 → 朋友圈」的发布/互动对象行
+  改为只读摘要 + 「去名单…」跳转，不再在朋友圈面板打开第二份选择 sheet。
+
+### 变更
+
+- **版本号 4.2.0 (build 38)（2026-11-22）**：`app/Packaging/Info.plist` 升到 `4.2.0` / build `38`，
+  发布包名相应为 `WeChat-AI-4.2.0.zip`；`scripts/package_release.sh` / `scripts/build_app.sh` 的版本与
+  build 一律从 Info.plist 读取，不在脚本或文档写死旧版本。Releases 最新仍是 4.1.0（其包**不含 4.2.1.3 适配**），
+  **4.2.0 是第一个包含该适配的发布版本**，尚待上传。
+- **微信 4.2.1.5 (270597) 不在适配列表（2026-11-22）**：该版本由微信 Sparkle 自动更新装入，官方签名会覆盖
+  Gadget 注入、Hook 失效；App 显示「未适配」并阻止安装/启动 Hook。请回退到 4.2.1.3 (270595) 使用，不要强装。
+- **移除微信 4.1.x 支持（2026-11-20）**：删除 `hook/versions/4_1_15_55_mac.json` 与 `4_1_12_53_mac.json`；
+  `WeChatVersionSupport` / `NativeSendVersionSupport`、安装与管理脚本、构建/打包脚本、README/CONTRIBUTING/
+  SECURITY/安装文档与单测统一为 4.2.1.3 + 4.2.0.x 列表。4.1 的协议格式测试与历史 CHANGELOG/发布说明保留，
+  用于解析旧消息，不再作为可安装/可发送版本。
+- **R3 版本门禁（2026-11-20）**：`NativeSendVersionSupport` 直接复用已知版本列表，不再为 4.1.12 单独排除；
+  hook 运行日志改用实际检测到的版本/build，不再硬编码版本串。
+- **安装脚本版本口径（2026-11-20）**：`manage_wechat.sh` / `install_gadget.sh` 默认 4.2.1.3 (270595)，
+  `KNOWN_VERSION_PAIRS` 与 `run_bridge.sh`/`build_app.sh`/`package_release.sh` 的默认版本文件保持一致，
+  `scripts/check.sh` 继续校验默认版本与版本 JSON 存在。
+- **Hook 模板/版本表深度校验（2026-11-22）**：`scripts/check.sh` 新增 `scripts/check_hook_template.py`
+  （`--docs` 同样运行）：校验 `hook/script.js` 占位符与 `hook/versions/*.json` 必需键、SNS 锚点组完整性、
+  消息偏移成对、BodyReturn 4 字节对齐、布尔开关格式，以及默认版本与安装/构建/打包脚本、App `knownPairs`
+  一致；有 `node` 时逐版本 `node --check` 渲染结果。
+- **性能与功耗（2026-11-22）**：
+  - **TTS 生命周期**：不再 App 启动即常驻（GB 级模型）；机器人启动成功后预热，停止机器人时按设置回收；
+    首条语音最多等预热 30s，超时按既有策略降级文字。
+  - **页面轮询改事件驱动**：Dashboard「最近活动」与日志页按日志版本/批次刷新（200ms / 250ms 防抖），
+    空闲时零常驻轮询（原 750ms / 500ms 定时采样）；捕获发送句柄弹窗约 2s 轮询并在全部就绪后停止；
+    VoiceSettingsPanel 轮询分档（安装/启动 1s，空闲 2s）；MainThreadWatchdog 在机器人停止或 App 非活跃时
+    从 1s/1.5s 降到 5s/7.5s，避免空闲每秒唤醒主队列。
+  - **Hook**：R3 捕获在 seed 到手后立即停止 250/500ms 周期任务（不再等 classA resolve）；CommonCrypto DB key
+    捕获 listener 在拿到通过页 1 校验的 key 后全部 detach，正常收发图片/文件不再进入 JS；非本项目上传的
+    逐条日志降为 debug；SNS 请求轮询对已完成/失败请求保留 60s（足够 bridge 的 150ms 轮询读取）。
+  - **Bridge**：发送请求等待增加 60s 总预算，避免永久等待与 goroutine/连接泄漏。
+
+### 修复
+
+- **4.2.1.3 SNS 任务类锚点修正（comment/sync）+ 安全闸（2026-11-22）**：旧版本表把 0xD5 评论与 0xD6 同步
+  的任务类锚点填成了同版本其它子系统的任务类（comment 旧值对应广告 `AdChannelMsgReq`，vtable `0x8561798`；
+  sync 旧值对应 `NewSyncRequest`，vtable `0x85e1690`），导致评论提交后微信 SIGSEGV（`mars::stn` 线程）。
+  已改为真机捕获一致的任务类：comment ctor `0x2fd4590` / vtable `0x8562f08` / decoder `0x2fd473c` /
+  size `0xC0`（B1/B2 `+0x78`/`+0xA0`）；sync ctor `0x3bbccb4` / vtable `0x85e2178` / decoder `0x3bbce7c` /
+  size `0xD0` / bodyReturn `0x3bbce28`。修正后发布、评论、回复、主动同步与 timeline 主动刷新全部真机通过，
+  微信未崩溃。hook 的 `snsSendRequest` 仍对**所有** SNS 合成任务校验捕获 `taskVtable` 与版本 JSON `vtable`，
+  不一致时分配前返回 `task_layout_mismatch`、不进入 slot13——这是防未来版本漂移的安全闸，不是功能限制。
+  `snsWriteSuppressedVersions` 清空，App 恢复 4.2.1.3 的发布/评论/回复/自动发布/自动互动。
+- **bridge 拒绝注入缺键渲染的 hook 脚本（2026-11-22）**：`hook/script.js` 由 `text/template` 渲染，缺键会
+  变成 `<no value>`；落在 JS 代码位置时整份脚本 `SyntaxError`、注入后所有 hook 静默失效。现在
+  `bridge/hook_template.go` 区分字符串/注释（容忍并 Debug 记录）与代码位置（拒绝注入），后者以 `Fatal`
+  退出并列出缺失键与渲染偏移；`bridge/hook_template_test.go` 覆盖字符串、模板字符串、行/块注释四种容忍场景。
+- **`/send_*` 等待发送结果增加 60s 总预算（2026-11-22）**：并发发往同一会话时 `pendingResultMap` 后写覆盖
+  先写、hook 不回 `upload_*_finish` 时 handler 会永久挂起（连接与 goroutine 一起泄漏）。现在
+  `waitSendResults` 按 `sendResultTimeout=60s` 兜底，超时返回 500 `{"status":"failed","error":"send result timeout"}`。
+- **出站媒体落盘不再依赖 `-image_path` 尾斜杠（2026-11-22）**：旧实现 `config.ImagePath + fileName` 直接拼接，
+  App 从目录 URL 取 path 时 macOS 去掉尾部斜杠，文件被写成「目录名 + 文件名」的同级散落文件；现统一用
+  `bridge/utils.go` 的 `outgoingMediaPath`（`filepath.Join`）。
+- **4.2.1.3 朋友圈写链路真机验证通过（2026-11-22）**：R3 文本发送通过（接收方确认收到测试消息）；`POST /sns/post`
+  返回 `post_id`、动态在朋友圈可见（文字、partial 仅指定好友可见）；`POST /sns/comment` 返回 `comment_id`、
+  微信未崩溃；回复带 `reply_comment_id` 时返回 `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确
+  （回复**自己**的评论会被微信拒绝 `ret=-2`，属服务端语义）；`POST /sns/sync` 返回 cmd 45/46 与
+  `sns_new_post`/`sns_comment` 事件；timeline `source=native`、评论合并正常。App 已恢复写开关/自动发布/自动互动，
+  只读 UI 与强制 `snsWrite=false` 均已移除。赞/取消赞与 objectop 写接口仍未打通（503），userpage 主动发送
+  未验证（保持 passive）。App 端到端：安装 4.2.0 后启动机器人，运行期 JSON 为 `snsWrite=true`，comment
+  ctor/vtable、sync ctor/vtable/bodyReturn 与真机捕获一致，`task_layout_mismatch` 安全闸正常放行。
+- **评论模板污染修复 + timeline 首屏捕获策略（2026-11-22）**：回复请求 clientId 前缀改为 `sns_reply:`
+  （普通评论/点赞仍 `sns_comment:`），hook 只把 `sns_comment:` 请求体存为评论模板，回复体不再覆盖干净模板。
+  hook 新增 `snsCommentBodyReturn`（4.2.1.3 JSON `0x2fd46e8`）：在 `autoBufferWrite` 处按返回地址捕获
+  **原生评论请求体**，仅 `SnsAction` Type==2 且无 field 9/12 时写入 `bodies.comment`，点赞体（Type=1）与
+  回复体不会覆盖模板，解析失败保留旧模板；`check_hook_template.py` 将其作为可选键校验 4 字节对齐，模板
+  占位符 96→97。模板健康检查收紧为：只有 `SnsAction` **field 5（Type）== 2 且无 field 9/12** 时才复用。
+  点赞形态模板（Type=1）或被回复污染的模板（field 9 `ReplyCommentID` / field 12 `ReplyCommentID2`）用于
+  普通评论/回复时一律忽略并退回自拼报文，同时记 Warn 等待下一次干净评论重建。普通评论自拼在 4.2.1.3 真机
+  确认服务端接受（但可能无回包，仅兜底）；**自拼回复未真机验证**；回复在模板干净时仍优先 patch，点赞保持
+  优先模板。4.2.1.3 真机：手动评论后模板为原生 Type=2/无回复字段，`POST /sns/comment` 返回 `comment_id`、
+  timeline comments=5，微信未崩溃，「原生模板 + patch」端到端可用。旧污染模板复用会触发 BaseRet=1 /
+  502 `sns_native_rejected`。
+  hook 对 timeline 请求体解析 protobuf field 3（MaxID）：MaxID==0/缺省视为首屏，允许覆盖模板；分页
+  MaxID!=0 在已有模板时不覆盖，解析失败保留旧模板——避免用户滚动加载更多后 App 刷新重放分页游标、看不到
+  最新动态。
+- **侧栏布局残留修复（2026-11-22）**：`NavigationSplitView` 固定列宽、详情列用 `GeometryReader` 约束、
+  hover 状态清理，切换页面/悬停后不再出现列宽跳动或残留高亮；用户已确认真机正常。
+- **Sparkle 自动更新导致 Hook 失效与回退改进（2026-11-22）**：本次微信被官方 Sparkle 自动升级到
+  **4.2.1.5 (270597，未适配)**，官方签名覆盖后 Gadget 注入消失、Hook 失效。`manage_wechat.sh install` 会尽力
+  关闭 `SUEnableAutomaticChecks` / `SUAutomaticallyUpdate`，但已下载的更新仍可能生效；`restore` 新增
+  `--backup-zip <path>`：当前版本没有备份时列出最近可用备份并提示用它回退。文档同时建议在微信设置里关闭
+  自动更新，并在未适配版本上不要强装。
+- **`/send_*` 请求体上限明确为 64 MiB（2026-11-22）**：`http.MaxBytesReader` 上限 `sendBodyMaxBytes = 64<<20`，
+  覆盖 40 MiB 文件的 base64（约 53 MB）与最长语音段；超限返回 **413**（`请求体过大`），不是 1 MiB。
+- **4.2.1.3 SNS 三个 BodyReturn 修正为真实 BL 返回点（2026-11-22）**：此前误填 vtable 槽位函数入口，
+  `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` 不是可返回的调用点，导致 timeline
+  请求体捕获失败、只能读被动缓存；现修正为真实调用返回地址。**2026-11-22 真机确认**：timeline 首页刷新
+  走主动刷新，`source=native`、`body_captured=true`、`ready=true`。`scripts/check_hook_template.py` 校验三者
+  必须 4 字节对齐，避免再次漂移。
+- **4.2.1.3 捕获弹窗恢复评论条目（2026-11-22）**：写链路验证通过、`snsWriteSuppressedVersions` 清空后，
+  「评论或点赞一次」（0xD5）条目在自动互动已开启、有互动对象且非演练时重新显示（4.2.0.12 / 4.2.0.17 /
+  4.2.1.3 一致）；`task_layout_mismatch` 安全闸保留。
+- **4.2.1.3 朋友圈 sync 任务越界写导致微信堆损坏崩溃（2026-11-20）**：真机运行几分钟后微信以
+  `EXC_BREAKPOINT` / `EXC_BAD_ACCESS` / `EXC_BAD_INSTRUCTION` 退出，crash report 的 `asi` 为
+  `BUG IN CLIENT OF LIBMALLOC: memory corruption of free block`。反汇编 4.2.1.3 `wechat.dylib`
+  确认 `mmsnssync` 任务 ctor（`0x3baef00`）在 `+0xC8` 构造内嵌字段、deleting dtor（`0x3baefac`）
+  按 **`0x100`** 释放；4.2.1.3 版本 JSON 的 `snsSyncSize` 误沿用了 4.2.0.17 的 `0xd0`
+  （4.2.0.17 的 ctor 只构造到 `+0xA0`、delete 0xd0，本身正确）。每次 `/sns/sync` 都会越界写约
+  `0x2C` 字节，破坏相邻 malloc 块元数据，最终在任意线程（包括微信退出析构）崩溃。4.2.1.3 现修正为
+  `0x100`，并给 R3/SNS 任务构造增加 `0x40` 字节隔离带与哨兵检查：版本表尺寸再次写错时只会在
+  bridge 日志报 `task ctor 写过版本 JSON 尺寸`，不再破坏微信堆。（2026-11-22 任务类修正后 sync 使用真机
+  一致类 ctor `0x3bbccb4` / size `0xD0` / bodyReturn `0x3bbce28`，见上条；隔离带与哨兵检查保留。）
+- **4.2.1.3 启动崩溃与启动门禁（2026-11-20）**：真机复现发现启动 bridge 时微信以
+  `EXC_BAD_INSTRUCTION / SIGILL` 崩溃，日志显示 `Message finalizer` / `downloadImag` 的
+  `Interceptor.attach` 失败、SNS 回调在错误的 `snsUserpageDecoder` 地址执行。根因是 4.2.1.3 版本表
+  仍有未重定位的锚点。现在版本 JSON 增加 `hookVerified` 标记（4.2.0.x 为 `true`，4.2.1.3 为
+  `false`）；`WeChatVersionSupport.unverifiedHookVersions` 同时把 4.2.1.3 列为强制未验证，防止用户用自定义
+  `versionConfigPath` 绕过标记；`RuntimeCoordinator.startRuntime` 在启动 bridge 前强制校验，未验证时抛出
+  `hookAdaptationUnverified` 并阻止启动，避免再次把错误地址注入微信。设置 → Hook 新增
+  **适配验证 / 微信签名 / 当前版本备份** 状态行与未验证警告；首次向导同步提示。新增
+  `HookVerificationTests` 覆盖门禁与标记解析。继续适配（2026-11-20）：修正 Message finalizer、Message vtable、
+  ClassA vtable 与全局 service holder 的 4.2.1.3 地址；用「仅接收」临时配置启动 bridge 已验证不再崩溃。
+  R3 任务构造/vtable 与 SNS 任务锚点仍未可靠定位，因此 4.2.1.3 继续保持 `hookVerified=false`，启动门禁不放行。
+  （该状态在同日后续适配中解除：4.2.1.3 已移出 `unverifiedHookVersions` 并置 `hookVerified=true`，见下条。）
+- **4.2.1.3 R3/SNS 运行时适配（2026-11-20）**：用 Frida 对真实发送任务做 slot13 现场采样，确认
+  `newSendMsgTask` 的真实 ctor/vtable/尺寸/closure vtable，并修正 `slot13Addr`、`operatorNewAddr`；
+  R3 闭包 seed 捕获成功，slot13 返回 0（发送任务已提交，但实际到达仍需复测）。同时从 slot13 的
+  opcode 0xD3 任务采样出朋友圈 timeline 的 ctor/vtable/size/decoder/BodyReturn 与 sync 任务锚点；
+  再按对象析构尺寸与 ctor helper 定位 post（0x240）、userpage（0x190）和 comment（0xc0）任务锚点。
+  R3 任务已能提交；用户确认测试账号已收到「R3 自动发送测试」，R3 文本发送链路通过。另修正图片下载 hook
+  锚点（原命中 BL 指令导致 Frida 无法 attach，改为同一调用前的 mov 指令）并验证安装不再报错；
+  SNS timeline 被动解码成功（19127B、时间线接口可返回帖子）。入站消息实测正文为空后，用 Frida 采样定位到
+  4.2.1.3 的消息正文 std::string 偏移为 +0x118（旧版 +0x130），并发现 bridge 读取的是
+  `bridge/script.js` 而非 `hook/script.js` 的旧副本；现已通过 `scripts/sync_hook_script.sh` 在
+  `run_bridge.sh` 启动前自动同步。入站文本已由真机确认，另对 finalizer 双回调增加 1.5s
+  内容去重，避免 App 收到重复消息。2026-11-20 起 4.2.1.3 移出 `unverifiedHookVersions` 并设置
+  `hookVerified=true`，允许启动；朋友圈写链路（发布/评论）仍未验证，`snsWriteSuppressedVersions`
+  对 4.2.1.3 强制下发 `snsWrite=false`，只保留 timeline 只读。（2026-11-22 真机更新：任务类锚点修正后
+  发布/评论/回复/同步全部验证通过，见「修复」。）
+- **Hook 安装被 macOS「App 管理」拦截的提示（2026-11-20）**：微信升级/重装后 bundle 带
+  `com.apple.provenance`，未在「系统设置 → 隐私与安全性 → App 管理」允许 WeChat AI 时，安装脚本写入
+  `/Applications/WeChat.app` 返回 `Operation not permitted`，此前只显示「脚本退出码 1」。现在
+  `HookError` 新增 `appManagementPermissionDenied`，`HookManager` 从 ditto/codesign 的 stderr 识别该错误；
+  设置 → Hook 与首次向导显示可操作提示和「打开 App 管理设置」按钮，安装脚本也输出同名中文错误。
+  新增 `HookInstallFailureTests` 覆盖识别与错误文案。
+
+### 已知限制
+
+- **回复自己的评论返回 ret=-2**：微信服务端语义会拒绝回复自己的评论，不是协议/配置错误；回复他人评论正常。
+- **深滚动后时间线首屏请求可能带旧游标**：时间线以最近一次捕获的首屏请求为准；若在朋友圈滚动到很靠后的位置
+  再重新打开，捕获到的「首屏」请求可能仍带旧游标，App 刷新显示「最近动态 + 旧一页」；回到顶部再刷新/重新
+  打开一次即可重捕。
+- **赞/取消赞与 objectop 写接口**：仍未打通（缺 0xDA 任务锚点，返回 503 `sns_channel_unconfigured`）；
+  userpage 主动发送未验证（保持 passive）。
+- **微信 4.2.1.5 (270597) 未适配**：Sparkle 自动更新可能把它装上，升级后 Gadget 注入被官方签名覆盖、Hook
+  失效；App 显示未适配并阻止启动，需用适配版本备份（`restore --backup-zip`）回退后重新安装，不要强装。
+- **Releases 最新仍是 4.1.0**：该包不含 4.2.1.3 适配；4.2.0 发布包待构建上传。
+
+### 文档
+
+- 新增 [`docs/releases/4.2.0.md`](docs/releases/4.2.0.md) 发布说明；README 中英、`docs/install.md`、
+  `docs/updates.md`、`docs/README.md` 同步 4.2.0 版本口径（Releases 最新仍为 4.1.0，4.2.0 待上传）。
+- 更新 README 中英功能/兼容性表、`docs/install.md`、`docs/architecture.md`（备份 §8.3）、
+  `docs/core-services.md`（BackupService §5.15）、`docs/accounts.md` §9.1、`docs/bridge.md`、
+  `docs/sns.md` 与 `docs/ui-design.md`（数据与备份、关于、名单/朋友圈、向导；4.2.1.3 发布/评论/回复/同步
+  已验证，移除只读表述）。
+- 文档同步本轮行为：hook 模板 `<no value>` 拒注入、`/send_*` 60s 预算与 64 MiB/413 上限、出站媒体尾斜杠、
+  `check_hook_template.py`、4.2.1.3 BodyReturn 主动刷新（真机确认）与写链路任务类锚点修正；README/install
+  补充 Sparkle 自动升级、4.2.1.5 未适配与 `restore --backup-zip` 说明；sns.md/architecture/ui-design 记录发布/
+  评论/回复/同步验证与 `task_layout_mismatch` 安全闸；测试基线同步为 Swift 1010 / Go 348。
+- `app/Packaging/en.lproj/Localizable.strings` 补充本轮新增中文串的英文翻译。
 
 ## [4.1.0] — 2026-11-12
 
@@ -1430,4 +1633,5 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 发送绕过微信本地 DB，Mac 端不回显；R3 首次使用需本机手动发一条消息捕获句柄。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
-[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...v4.2.0

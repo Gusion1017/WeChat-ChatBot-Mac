@@ -17,11 +17,11 @@ struct LogsView: View {
 
     /// 节流后的日志缓冲快照：运行时在 MainActor 上以每秒数条到十几条的频率追加日志，
     /// 若 `body` 直接读取 `store.logs`，整个 2000 行日志页会为每一行日志重建一次。
-    /// 这里以约 2 Hz 采样，既保持「实时」观感，又让布局更新频率与日志追加频率解耦。
+    /// 这里按 `logRevision` 事件驱动刷新并做 250ms 防抖：既保持「实时」观感，
+    /// 又让布局更新频率与日志追加频率解耦，空闲时零轮询。
     @State private var feed = LogFeedSnapshot()
-    /// 上次快照对应的 `store.logRevision`：空闲时 revision 不变，采样循环直接跳过
-    /// 重算（不复制、不遍历 2000 条日志），避免后台常驻的 O(n) 主线程开销。
-    @State private var feedRevision: UInt64?
+    /// 合并连续日志批次的防抖任务：事件驱动刷新，空闲时不再每 500ms 遍历 2000 条日志。
+    @State private var feedRefreshTask: Task<Void, Never>?
     /// 合并自动到底部滚动。在布局更新过程中调用 `scrollTo` 会再次弄脏 lazy 布局，
     /// 是 AppKit display-cycle 布局次数超限（崩溃栈 LazyLayoutViewCache.signalPrefetch）
     /// 的已知触发路径，因此滚出当前布局周期后再执行。
@@ -39,8 +39,12 @@ struct LogsView: View {
             logList(displayLogs: displayLogs)
         }
         .background(PageBackground())
-        .task { await runFeedLoop() }
-        .onDisappear { scrollTask?.cancel() }
+        .task { refreshFeed() }
+        .onChange(of: store.logRevision) { _, _ in scheduleFeedRefresh() }
+        .onDisappear {
+            scrollTask?.cancel()
+            feedRefreshTask?.cancel()
+        }
         .sheet(isPresented: $showClearConfirm) {
             ConfirmSheet(
                 title: "清空运行日志",
@@ -231,7 +235,6 @@ struct LogsView: View {
     @MainActor
     private func refreshFeed() {
         let logs = store.logs
-        feedRevision = store.logRevision
         var counts: [LogLevel: Int] = [:]
         counts.reserveCapacity(LogLevel.allCases.count)
         var sources = Set<String>()
@@ -242,13 +245,12 @@ struct LogsView: View {
         feed = LogFeedSnapshot(logs: logs, levelCounts: counts, sources: sources.sorted())
     }
 
-    private func runFeedLoop() async {
-        // 首次必须刷新；之后只在 revision 变化时重算（500ms 采样节奏保持不变）。
-        refreshFeed()
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(500))
-            if Task.isCancelled { return }
-            guard feedRevision != store.logRevision else { continue }
+    /// 事件驱动刷新：日志批次到达后短暂防抖再重建快照（替代 500ms 常驻轮询）。
+    private func scheduleFeedRefresh() {
+        feedRefreshTask?.cancel()
+        feedRefreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
             refreshFeed()
         }
     }

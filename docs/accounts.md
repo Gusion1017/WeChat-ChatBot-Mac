@@ -437,6 +437,24 @@ bridge `get_login_info` 确认真实账号 `<id>` 后：
 先排队（`store.accountSwitchPending`）并提示。结果分四种：切换成功、无变化（info）、未识别（error）、切换未生效（error，展示
 `store.lastAccountSwitchError` 并回退原账号），不伪造成功。
 
+**微信备份（2026-11-20）**：列出 `backups/WeChat-<version>-<build>-official.zip`，显示版本/build、大小、修改时间、
+当前微信版本徽标与总占用；当前版本没有备份、备份盘可用空间低于 1.5 GB、CLT 缺失都有可见提示。「立即备份」调用
+`tools/manage_wechat.sh backup`（显式传实际检测路径与备份目录，不要求微信退出；安装 Hook 前仍要求微信退出）；
+逐条删除与「清理旧备份」都会二次确认，后者保留最新一份与当前微信版本备份并清理残留 `*.part` 与没有对应 zip 的
+`*-entitlements.plist`。删除只允许发生在 `backups/` 内，失败不伪造成功。
+
+**数据备份与清理（2026-11-20）**：统计 `config.json`、`account-state.json`、账号数据库/媒体/记忆卡/日志/
+其他文件、`cosyvoice/voices`、`backups/` 与运行日志占用并显示合计。「导出数据备份…」生成 zip，根目录含
+`backup-manifest.json`（schema `wechatai.data-backup/v1`、App 版本/build、时间、包含/排除项与大小），
+包含配置、账号目录（排除 `*/logs/*`）、自定义音色与 `voice-clones/`，不包含 `cosyvoice/models`、venv、仓库
+与运行日志；导出先写 `.part` 再替换，失败清理半成品。「清理运行日志」删除 `~/Library/Logs/WeChatAI`、
+旧版 `logs/` 与 `accounts/*/logs/` 中的文件；「清理临时文件」删除 `updates/`、`runtime/` 下超过 24 小时的
+条目（bridge 正在使用的版本配置受保护）。所有清理均二次确认并按实际删除大小显示释放空间。
+
+**首次向导备份引导（2026-11-20）**：Hook 步骤的「备份」卡展示备份目录、当前微信版本是否已备份、磁盘余量与
+CLT 状态，可先「仅备份微信」再安装；安装流程本身仍强制完整备份，备份失败则中止。启动步骤的「数据与备份」卡
+说明数据目录并提供「导出数据备份…」与「打开数据目录」。契约见 [architecture.md](architecture.md) §8.3。
+
 ### 9.2 总览
 
 `store.accountSwitchNotice` 非空时，总览顶部显示 `InlineNotice(kind: .info, title: "微信账号已切换")`，正文为 notice，右侧「知道了」
@@ -540,8 +558,8 @@ python3 scripts/check_docs.py
 bash scripts/check.sh --docs
 ```
 
-当前实测基线：Swift 933 项执行（931 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，49 个测试文件）；
-Go 312 项用例（180 顶层 + 132 子测试，0 失败，19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
+当前实测基线：Swift 1010 项执行（1008 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，58 个测试文件）；
+Go 348 项用例（204 顶层 + 144 子测试，0 失败，21 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）
 72 项 unittest 通过。
 
 ## 12. 排障

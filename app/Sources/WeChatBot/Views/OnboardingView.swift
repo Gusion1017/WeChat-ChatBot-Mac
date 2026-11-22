@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 首次启动向导：欢迎 → 检测微信/安装 Hook → 配置 AI → 启动机器人。
@@ -17,11 +18,19 @@ struct OnboardingView: View {
     @State private var installProgress: Double?
     @State private var installMessage: String?
     @State private var installError: String?
+    @State private var installFailure: HookError?
     @State private var selectedProviderID: String?
     @State private var apiKeyDraft = ""
     @State private var isTestingAI = false
     @State private var aiTestResult: (success: Bool, message: String)?
     @State private var shouldStartBot = true
+
+    // Hook 步骤的备份引导：扫描当前版本备份，并支持「仅备份微信」。
+    @State private var backupService = BackupService()
+    @State private var weChatBackupSnapshot: WeChatBackupSnapshot?
+    @State private var isScanningBackup = false
+    @State private var isBackingUpWeChat = false
+    @State private var weChatBackupError: String?
 
     private let stepTitles = ["欢迎", "微信 Hook", "AI 模型", "启动"]
 
@@ -301,6 +310,8 @@ struct OnboardingView: View {
                 }
             }
 
+            weChatBackupCard
+
             CommandLineToolsCard(onStatusChange: { status in
                 commandLineToolsStatus = status
             })
@@ -322,6 +333,14 @@ struct OnboardingView: View {
                         WeChatStatusPresentation.versionDisplay(store.hookStatus),
                         WeChatVersionSupport.compactList()
                     )
+                )
+            }
+
+            if store.hookStatus.matchedVersion, !store.hookStatus.versionConfigVerified {
+                InlineNotice(
+                    kind: .warning,
+                    title: "Hook 地址表未验证",
+                    message: "当前微信版本的版本表尚未真机验证；安装可以继续，但启动机器人会被阻止，避免错误地址导致微信崩溃。请换回已验证的微信版本（如 4.2.1.3），或等待适配完成。"
                 )
             }
 
@@ -350,7 +369,9 @@ struct OnboardingView: View {
                 )
             }
 
-            if let installError {
+            if let failure = installFailure, failure.isAppManagementPermissionDenied {
+                AppManagementPermissionNotice()
+            } else if let installError {
                 InlineNotice(kind: .danger, title: "安装失败", message: installError)
             }
 
@@ -391,6 +412,105 @@ struct OnboardingView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+        }
+        .task {
+            await refreshWeChatBackupState()
+        }
+        .onChange(of: store.hookStatus.wechatVersion) { _, _ in
+            Task { await refreshWeChatBackupState() }
+        }
+    }
+
+    private var weChatBackupCard: some View {
+        SettingsSection(
+            title: "备份",
+            footer: "安装 Hook 前会自动完整备份官方微信；备份失败时安装会中止。"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L("安装 Hook 前会自动完整备份官方微信（约 670 MB），需要至少 1.5 GB 可用空间；备份保存在本机，可随时删除或重新备份。"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                PathRow(label: "备份目录", path: AppPaths.backupsDirectory.path, revealInFinder: true)
+
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L("当前版本备份"))
+                        .font(.callout)
+                    if let snapshot = weChatBackupSnapshot {
+                        if let backup = snapshot.currentBackup {
+                            PillLabel(text: "已备份", color: Theme.success, symbol: "checkmark")
+                            Text(Lf("%@ · %@", BackupFormatting.bytes(backup.byteCount), UIFormat.relative(backup.modifiedAt)))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            PillLabel(text: "未备份", color: Theme.warning, symbol: "exclamationmark")
+                            Text(L("安装时会先自动备份"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if isScanningBackup {
+                        ProgressView().controlSize(.mini)
+                        Text(L("正在检查备份…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(L("未检测到微信版本"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if let snapshot = weChatBackupSnapshot,
+                   let available = snapshot.availableBytes,
+                   BackupService.isLowDiskSpace(available) {
+                    InlineNotice(
+                        kind: .warning,
+                        title: "磁盘空间不足",
+                        message: Lf("备份目录所在磁盘仅剩 %@，低于 1.5 GB；请先清理空间再安装 Hook。", BackupFormatting.bytes(available))
+                    )
+                }
+
+                if commandLineToolsStatus?.isReady == false {
+                    InlineNotice(
+                        kind: .warning,
+                        title: "未安装 Command Line Tools",
+                        message: "仅备份微信不依赖它；安装 Hook 前需要先安装 Command Line Tools。"
+                    )
+                }
+
+                HStack(spacing: 9) {
+                    Button {
+                        backupWeChatOnly()
+                    } label: {
+                        Label(L(isBackingUpWeChat ? "正在备份…" : "仅备份微信"), systemImage: "archivebox")
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(isBackingUpWeChat || isInstalling || !weChatInstalledForBackup)
+                    .help(L("完整备份当前官方微信 App，不安装 Hook"))
+                    .accessibilityHint(L("备份当前版本的官方微信，约需 1–2 分钟"))
+
+                    if isBackingUpWeChat {
+                        ProgressView().controlSize(.small)
+                        Text(L("正在备份官方微信…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if !weChatInstalledForBackup {
+                    Text(L("未检测到微信，无法备份。请先确认微信路径。"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if let weChatBackupError {
+                    InlineNotice(kind: .danger, title: "备份失败", message: weChatBackupError)
+                }
+            }
+            .padding(14)
         }
     }
 
@@ -525,7 +645,11 @@ struct OnboardingView: View {
                 SettingsDivider()
                 checklistRow(
                     title: "Hook",
-                    detail: store.hookStatus.gadgetInstalled ? (store.hookStatus.matchedVersion ? "已安装 · 版本已匹配" : "已安装 · 待匹配版本") : "尚未安装（可稍后在「设置 → Hook」安装）",
+                    detail: store.hookStatus.gadgetInstalled
+                        ? (store.hookStatus.matchedVersion
+                            ? (store.hookStatus.versionConfigVerified ? "已安装 · 版本已匹配" : "已安装 · 地址表未验证，启动会被阻止")
+                            : "已安装 · 待匹配版本")
+                        : "尚未安装（可稍后在「设置 → Hook」安装）",
                     ready: store.hookStatus.gadgetInstalled,
                     icon: "link"
                 )
@@ -536,6 +660,31 @@ struct OnboardingView: View {
                     ready: selectedProvider != nil,
                     icon: "sparkles"
                 )
+            }
+
+            SettingsSection(
+                title: "数据与备份",
+                footer: "导出前确认磁盘空间；备份不含运行日志、TTS 模型与虚拟环境。"
+            ) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(Lf(
+                        "数据保存在 %@，包含配置、账号、记忆与媒体；换机或重装前建议导出数据备份。",
+                        UIFormat.compactPath(AppPaths.supportDirectory.path)
+                    ))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    DataBackupExportButton()
+
+                    Button {
+                        NSWorkspace.shared.open(AppPaths.supportDirectory)
+                    } label: {
+                        Label(L("打开数据目录"), systemImage: "folder")
+                    }
+                    .buttonStyle(.glass)
+                }
+                .padding(14)
             }
 
             HStack(spacing: 3) {
@@ -658,6 +807,64 @@ struct OnboardingView: View {
         return "\(provider.name) · \(provider.model)"
     }
 
+    // MARK: WeChat backup
+
+    private var resolvedWeChatAppPath: String {
+        BackupService.resolveWeChatAppPath(
+            configuredPath: store.settings.hook.wechatPath,
+            detectedPath: store.hookStatus.wechatDetectedPath,
+            installedPaths: HookManager.discoveredWeChatPaths()
+        )
+    }
+
+    private var weChatInstalledForBackup: Bool {
+        WeChatInstallation.inspect(path: resolvedWeChatAppPath).exists
+    }
+
+    private func refreshWeChatBackupState() async {
+        guard !isScanningBackup else { return }
+        isScanningBackup = true
+        let installation = WeChatInstallation.inspect(path: resolvedWeChatAppPath)
+        let version = installation.version.isEmpty ? store.hookStatus.wechatVersion : installation.version
+        let build = installation.build.isEmpty ? store.hookStatus.wechatBuild : installation.build
+        weChatBackupSnapshot = await backupService.scanWeChatBackups(
+            currentVersion: version,
+            currentBuild: build
+        )
+        if commandLineToolsStatus == nil {
+            commandLineToolsStatus = await CommandLineTools.status()
+        }
+        isScanningBackup = false
+    }
+
+    private func backupWeChatOnly() {
+        guard !isBackingUpWeChat else { return }
+        isBackingUpWeChat = true
+        weChatBackupError = nil
+        let appPath = resolvedWeChatAppPath
+        Task {
+            do {
+                guard let script = AppResources.manageScript else {
+                    throw BackupServiceError.scriptMissing
+                }
+                if commandLineToolsStatus == nil {
+                    commandLineToolsStatus = await CommandLineTools.status()
+                }
+                let entry = try await backupService.backupWeChat(appPath: appPath, scriptURL: script)
+                toast.show(
+                    Lf("微信已备份：%@", BackupFormatting.bytes(entry.byteCount)),
+                    tone: .success,
+                    symbol: "archivebox"
+                )
+                await refreshWeChatBackupState()
+            } catch {
+                weChatBackupError = error.localizedDescription
+                toast.show(Lf("备份失败：%@", error.localizedDescription), tone: .error)
+            }
+            isBackingUpWeChat = false
+        }
+    }
+
     // MARK: Actions
 
     private func goNext() {
@@ -769,6 +976,7 @@ struct OnboardingView: View {
     private func installHook() {
         isInstalling = true
         installError = nil
+        installFailure = nil
         installProgress = 0.02
         installMessage = "正在备份微信…"
         Task {
@@ -783,10 +991,12 @@ struct OnboardingView: View {
                 installMessage = "安装完成"
                 toast.show("Hook 安装完成", tone: .success)
             } catch {
+                installFailure = error as? HookError
                 installError = error.localizedDescription
                 toast.show("安装失败：\(error.localizedDescription)", tone: .error)
             }
             await store.refreshStatus()
+            await refreshWeChatBackupState()
             isInstalling = false
         }
     }

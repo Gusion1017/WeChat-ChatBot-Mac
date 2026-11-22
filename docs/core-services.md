@@ -4,8 +4,8 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含朋友圈（Moments）与 4.2.0.17 适配；
-> 安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.1.0.md`](releases/4.1.0.md)。
+> **发布状态（2026-11-22）**：本文描述 **4.2.0**，包含微信 4.2.1.3 适配、备份与朋友圈（Moments）
+> 入口调整；安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.2.0.md`](releases/4.2.0.md)。
 
 ## 1. 文件清单
 
@@ -19,11 +19,12 @@
 | 微信接入 | `OneBotClient`（WS 收事件、HTTP 发送/取图、媒体落地、去重、重连）、`ImageFetcher`（入站图片串行获取 + 开关/去重/取消）、`MentionText`（结构化 `at` 缺失时的群昵称兜底）、`ContactDirectory`（通讯录快照、会话标题与群昵称解析）、`PatMessage`（拍一拍目标判定与 `{name}` 模板） |
 | 朋友圈 | `Core/AppStore+Moments.swift`（`MomentsStore`：@MainActor 状态机，时间线/详情/同步/媒体/发布/评论回复）、`SnsClient`（`/sns/*` HTTP 客户端，Bearer 复用 OneBot）、`SnsPublishScheduler` + `SnsPublishLedger`（自动发布时机/每对象上限/最小间隔/跨重启计数；跳过原因 `SnsPublishRunSummary.skipNote`、今日配额快照 `SnsPublishTodayUsage`、配额用尽顺延次日/重置今日计数）、`SnsInteractionScheduler` + `SnsInteractionLedger` + `SnsInteractionPlanner`（AI 自动评论/回复：规则规划/频率/去重/退避）、`SnsMomentVision`（朋友圈识图缓存）、`SnsOutboxStore`（账号目录 `sns-outbox.json` 演练草稿，只读、上限 20 条）、`Models/SnsModels.swift`（SNS 模型、`SnsSettings` 与互动设置） |
 | 语音 | `VoiceTranscriptionService`/`VoiceFetcher`（入站语音转写与串行获取）、`VoiceSynthesisService`/`VoiceSynthesisText`/`VoiceSynthesisAudio`（本地 TTS：文本清洗、24k WAV、失败改发文字）、`VoicePreviewController`（音色试听）、`CosyVoiceClient`/`CosyVoiceRuntime`/`CosyVoiceInstaller`（本地 TTS HTTP 合成与 sidecar 安装/启停）、`Models/CosyVoiceVoice.swift`（音色目录与就绪判定）、`VoiceReplyDecision`（语音回复决策） |
-| 模型调用 | `AIClient`（OpenAI 兼容 `/chat/completions`，SSE/非流式/超时/错误映射）、`VisionEngine`（识图候选、缩图编码、多模态请求）、`ChatEngine`（人设/记忆/上下文拼装、重试、拟人化分段）、`RuleEngine`（白黑名单、触发、唤醒窗口、冷却、频率、工作时段） |
-| 设备与电源 | `SleepPreventionService`（空闲睡眠断言 + 电源监听，事件驱动）、`BatteryStatus`（电池快照）、`DeepSeekBalance`（余额查询与通道选择）、`ActivationPolicyController`（主窗口显隐切换 `.regular`/`.accessory`，bundle 以 `LSUIElement` 启动、无用户开关） |
+| 模型调用 | `AIClient`（OpenAI 兼容 `/chat/completions`，SSE/非流式/超时/错误映射）、`VisionSupport`（`Services/VisionEngine.swift`：识图候选、缩图编码、多模态请求）、`ChatEngine`（人设/记忆/上下文拼装、重试、拟人化分段）、`RuleEngine`（白黑名单、触发、唤醒窗口、冷却、频率、工作时段） |
+| 设备与电源 | `SleepPreventionCenter`（`Services/SleepPreventionService.swift`：空闲睡眠断言 + 电源监听，事件驱动）、`BatteryStatus`（电池快照）、`DeepSeekBalance`（余额查询与通道选择）、`ActivationPolicyController`（主窗口显隐切换 `.regular`/`.accessory`，bundle 以 `LSUIElement` 启动、无用户开关） |
 | 编排与进程 | `SchedulerService`（定时任务事件驱动循环）、`HookManager`（微信/Gadget 检测、安装/恢复、bridge 子进程生命周期）、`ProcessRunner`（异步行流封装）、`AppResources`（bundle/开发树资源定位）、`Diagnostics`（`WECHATAI_SELFTEST=1` 服务层自检） |
 | 日志与稳定性 | `LogPipeline`（200ms 批量刷新、ANSI 清理、过滤与入库节流）、`CrashReporter`（布局安全阀、未捕获异常报告、面包屑、主线程看门狗） |
 | 应用内更新 | `Models/AppUpdateModels.swift`（版本解析/比较、Release/Asset、状态与错误、检查策略）、`Models/ReleaseNotes.swift`（Release 正文 → 更新内容）、`GitHubUpdateClient`（Releases 只读、下载、`.sha256`、错误映射）、`UpdateCenter`（更新 UI 唯一状态源）、`UpdateInstaller`（安装门禁、解压/助手/回滚/清理） |
+| 备份与清理 | `BackupService`（actor：微信官方备份扫描/创建/删除/清理旧备份、数据占用统计、完整数据 zip 导出与 manifest、运行日志与临时文件清理；可注入目录/FileManager/时钟，纯函数便于单测） |
 
 本文件聚焦 Services/Core；设置模型、记忆卡页与 App 生命周期（防睡眠 apply/release）分别见
 [memory.md](memory.md)、[ui-design.md](ui-design.md) 与 [architecture.md](architecture.md) §4。
@@ -175,7 +176,7 @@ RuntimeCoordinator.startRuntime
 
 ```
 bridge WS ──► OneBotClient.receive
-                │  解析容错 → 媒体落地 → message_id 去重 + 自消息 echo 匹配
+                │  解析容错 → 媒体落地 → 稳定投递指纹去重 + message_id 去重 + 自消息 echo 匹配
                 ▼
         onEvent（后台线程）──► Task @MainActor
                 ▼
@@ -190,6 +191,8 @@ RuntimeCoordinator.handle(event)
   8. 消息落库后 scheduleMemoryMaintenance（后台、按会话去重）：interactions 同步 → 批量提取 → 归档；不阻塞回复
 ```
 
+- 重复投递在 `OneBotClient` 层直接丢弃（稳定投递指纹，见 §5.2），不进入 `RuntimeCoordinator.handle`，
+  因此不会入库第二次、不会重复回复、也不会重复排队取图/取语音。
 - 回复生成按会话串行（`inFlightConversations`），同一会话不会并发产生多条 AI 回复，不同会话可并行。
 - 记忆维护与回复解耦：同会话重复触发去重，切号/停止机器人时取消并 await；失败不推进提取游标，下次新消息重试
   （见 [memory.md](memory.md) §7）。
@@ -320,9 +323,10 @@ id != active 或 active == _unassigned
 | `CrashReporter` / `MainThreadWatchdog` | 锁保护快照；看门狗独立线程 | 异常与卡顿取证不经过 MainActor，避免死锁 |
 
 禁止事项（已遵守）：MainActor 上无阻塞文件/DB/脚本 IO；无忙轮询；无 `sleep` 轮询循环。`SchedulerService` 只在
-下一个 `nextFireAt` 到来或 `update/stop` 唤醒时继续，属于事件驱动定时器。日志页（500ms）与总览「最近活动」
-（750ms）仍用低频采样把日志追加与 SwiftUI 失效解耦，但采样先比较 `AppStore.logRevision`（`appendLogBatch` /
-`replaceLogs` / `clearLogs` 各自 +1）；revision 未变化时直接跳过，空闲时不做 O(n) 复制/遍历 2000 条日志。
+下一个 `nextFireAt` 到来或 `update/stop` 唤醒时继续，属于事件驱动定时器。日志页与总览「最近活动」已改为
+事件驱动（2026-11-22）：日志批次到达后分别 250ms / 200ms 防抖再采样，空闲时零轮询；捕获发送句柄弹窗约 2s
+轮询并在全部就绪后停止；VoiceSettingsPanel 轮询分档（安装/启动 1s、空闲 2s）；MainThreadWatchdog 在机器人
+停止或 App 非活跃时从 1s/1.5s 降到 5s/7.5s。
 
 ## 5. 服务协议要点
 
@@ -370,6 +374,12 @@ id != active 或 active == _unassigned
 - 解析容错：`message` 可为字符串或段数组；缺字段用默认值；`sender.user_id` 缺失时回退 `user_id`；事件可被
   `{"data": {...}}` 包裹；未知帧忽略并打 debug 日志。入站帧每帧只 `JSONSerialization` 一次，
   `OneBotEventParser.parse(object:rawText:)` 复用已解析对象，`rawJSON` 等于原始帧文本；数组帧逐元素解析。
+- 重复投递去重（2026-11-22）：`message_id` 去重之外，再按 `InboundDeliveryFingerprint`（会话、方向、发送者、
+  `created` 毫秒、消息类型、展示文本、`raw_message` 的 SHA-256）做 4096 条 FIFO 窗口去重。微信 4.2.1.3
+  历史回放会换 `message_id` 重投同一条消息（序号 +1），只按 `message_id` 去重会让同一条消息入库两次并
+  再次触发自动回复；指纹不看 `message_id`/`rawJSON`，媒体事件缺 `raw_message` 或 `created` 为 0 时不去重
+  （避免误丢同秒连续转发的图片/用户真的发过的相同文本）。实现见 `Services/InboundDeliveryDedupe.swift`，
+  契约见 [architecture.md](architecture.md) §9.1。
 - 自消息去重：进程内 `message_id` LRU（1024）；HTTP 发送成功后登记 `(conversationID, text, time)`，20s 内 WS 出现
   同文本 self 事件时标记 `isEchoOfLocal`，运行时把本地 pending 消息更新为 sent 而非重复插入。
 - 媒体：`file://` 复制、`base64://`/裸 base64 解码，落地当前账号目录
@@ -737,13 +747,20 @@ id != active 或 active == _unassigned
   可见性默认 `partial`（仅当前私聊对象），
   无上下文回退 `private`，`public` 仅保留解码兼容、UI 不提供。post 通道未验证时 bridge 返回 503
   `sns_publish_unavailable`，写开关未开时 404；App 明确提示、不伪造成功。
+  **4.2.1.3 真机（2026-11-22）**：发布（`post_id`、动态可见）、评论（`comment_id`）、回复
+  （`reply_comment_id` → `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确）与主动同步均通过；
+  此前 comment/sync 任务类锚点错配（误填同版本其它子系统任务类）已修正，`task_layout_mismatch` 安全闸
+  保留防漂移。App 不再强制只读；回复自己的评论被微信拒绝（`ret=-2`，服务端语义）；赞/取消赞与 objectop
+  仍未打通（503）。评论模板由 hook 在 `autoBufferWrite` 按 `snsCommentBodyReturn` 捕获原生请求体（4.2.1.3
+  `0x2fd46e8`），仅 Type==2 且无 9/12 入库；同时保留 clientId 前缀隔离（回复 `sns_reply:`、普通评论/点赞
+  `sns_comment:`）。普通评论发现模板含 `SnsAction` field 9/12 或点赞形态时忽略模板、回退自拼并等待干净评论重建。
 - **自动发布**：`SnsPublishScheduler` 只编排「何时/对谁/发什么」，内容由 `AppStore+Runtime` 注入：
   会话人格 + 记忆卡 → AI 生成 60–120 字（不暴露聊天原文/昵称、不提及 AI）→ `publish`。两种时机
   （`windows`：时段内确定性随机；`times`：固定时间点）、每对象每日上限与最小间隔（仅 `windows`）由
   `SnsPublishSettings` 计算；只发布 `publish.targetUserIDs` 里显式选择的对象（空 = 不发布），
   目标之间留 ≥61s 避开 bridge 全局最小间隔；`SnsPublishLedger` 按账号命名空间在 UserDefaults
   持久化计数，跨天归零。写通道未就绪时失败并记录，不重试、不伪造。
-- **AI 自动互动（P7，2026-11-09；2026-11-11 起互动对象复用聊天白名单私聊对象）**：`SnsInteractionScheduler`
+- **AI 自动互动（P7，2026-11-09；2026-11-11 起互动对象复用聊天白名单私聊对象；2026-11-22 4.2.1.3 真机闭环）**：`SnsInteractionScheduler`
   只在机器人运行且「朋友圈 + 写开关 + R3 + 互动开关 + 至少一种动作」满足时由 `AppStore+Runtime` 创建，
   与朋友圈页是否可见无关。互动对象每轮从「聊天白名单（`effectiveWhitelist`）+ 私聊会话
   （`Conversation(kind == .direct)`）列表」推导（去空白/去重、排除群聊/服务号 ID），**不落库**；
@@ -756,6 +773,9 @@ id != active 或 active == _unassigned
   同时看 `reply_to_user_id == selfID` 与父评论 ID/账本，避免 native 回包缺少父评论时漏判；**4.2.0.17
   Type=11 hint 本身无正文、不直接进入候选；sns.db 只读补全把正文补进 timeline，32 位 comment_id=<id> 已确认
   可作 reply_comment_id，P7 自动回复已生成 c<id3>、页面闭环（Mac UI 不触发 0xd2）**。
+  **4.2.1.3 真机（2026-11-22）**：安装版 4.2.0 + App 管理 bridge 下，普通评论/回复均成功
+  （`comment_id`、`reply_to`/`reply_to_user_id`/`reply_to_name` 正确），P7 对互动对象新评论自动回复成功、
+  timeline 可见 AI 回复、微信未崩溃。
   → `SnsMomentVision`（整组图片一次分析，失败回退逐张，覆盖全部图片）+ 会话人格/旧 memories → AI 正文 → `SnsClient.comment`。
   `SnsInteractionLedger` 按账号持久化已处理键、自己的评论 ID、每天次数/最近时间/单帖回复数/启用时间，
   失败 10 分钟退避、最多 3 次；只在提交成功后计数。**启用时间跨 App/机器人重启保留**（不再启动重置）：
@@ -788,20 +808,48 @@ id != active 或 active == _unassigned
 
 - **单一状态**：`AppStore.isCaptureSetupPromptPresented` 由 `RootView` 唯一 `.sheet` 消费；纯判定在
   `Models/CaptureSetup.swift` 的 `CaptureSetupPlan`（条目按 `voiceReplyEnabled` / `snsSettings.enabled`
-  裁剪，文字条目常驻，`ready` 来自 `voiceRuntimeStatus.textSeed` / `voiceSeed` / `SnsStatus.isPrimed`，
-  开启发布时朋友圈条目还要求 `writeReady`）。
-- **三处入口**：开启语音回复（`promptCaptureSetupAfterVoiceToggle`）、开启朋友圈
-  （`promptCaptureSetupAfterMomentsToggle`）、机器人启动检测（`startCaptureSetupWatchIfNeeded`）。
-  三处都只置同一状态，不各自建 sheet。
+  裁剪，文字条目常驻，`ready` 来自 `voiceRuntimeStatus.textSeed` / `voiceSeed` / `SnsStatus.isPrimed` /
+  `comment_ready`，开启发布时朋友圈条目还要求 `writeReady`）。评论条目另需同时满足：自动互动已开启且有互动
+  对象、非演练（`WeChatVersionSupport.snsWriteSuppressedVersions` 当前为空，无版本级裁剪）。
+- **四处入口**：开启语音回复（`promptCaptureSetupAfterVoiceToggle`）、开启朋友圈
+  （`promptCaptureSetupAfterMomentsToggle`）、开启自动互动（`promptCaptureSetupAfterInteractionToggle`）与
+  机器人启动检测（`startCaptureSetupWatchIfNeeded`）；语音面板 / 评论面板的「查看步骤…」复用同一状态。
+  各处都只置同一状态，不各自建 sheet。
 - **启动检测**：`startBot` 成功置 `isBotRunning=true` 后统一调 `startCaptureSetupWatchIfNeeded`——
   立即检测一次，bridge/hook 未就绪时每 3s 重试、最多约 60s；判定结果为 `prompt` / `wait` / `done`。
   检测范围：① R3 原生发送开启且文字句柄缺失（即使语音/朋友圈都关闭）；② 语音回复开启且语音句柄
-  `voiceSeed` 缺失；③ 朋友圈开启且 timeline 样本缺失，或开启发布后 post 样本缺失。
+  `voiceSeed` 缺失；③ 朋友圈开启且 timeline 样本缺失，或开启发布后 post 样本缺失；④ 开启自动互动
+  （评论/回复）且已配置互动对象、非演练时，0xD5 评论句柄 `comment_ready=false`。
   每次启动都会重新检测并在缺失时自动弹一次；`didAutoPromptCaptureSetup` 只在同一次机器人运行内
   防重复，用户手动打开只影响本次运行，不会吞掉下一次启动的提示。bridge 尚未返回状态时继续等待，
   不把「还没启动好」误报为缺失。
 - **不阻塞**：弹窗关闭后照常运行；文本句柄未就绪时回复排队，语音句柄未就绪时降级文字；朋友圈页只显示
-  一行未就绪状态 + 重新检测。契约见 [voice.md](voice.md) §4.1 与 [ui-design.md](ui-design.md) §5.14。
+  一行未就绪状态 + 重新检测。评论模板/hook 采集策略见 [sns.md](sns.md) §1.4/§4.2（回复 `sns_reply:` 不写入
+  评论模板；timeline 仅首屏覆盖）。契约见 [voice.md](voice.md) §4.1 与 [ui-design.md](ui-design.md) §5.14。
+
+### 5.15 备份与清理（BackupService）
+
+- **依赖与并发**：`BackupService` 是 `actor`，`supportDirectory` / `logsDirectory` / `FileManager` / `now` /
+  `zipTool` 都可注入；单测只写临时目录，不触碰真实 `~/Library`。微信备份与数据导出通过
+  `ProcessRunner` 流式读取脚本输出，进度回调在 actor 内产生。
+- **微信备份**：`scanWeChatBackups(currentVersion:currentBuild:)` 解析 `WeChat-<version>-<build>-official.zip`、
+  残留 `*.part` 与 `*-entitlements.plist`；`backupWeChat(appPath:scriptURL:)` 运行
+  `tools/manage_wechat.sh backup --app … --backup-dir …`；`deleteWeChatBackup(_:)` 同时删同名 entitlements；
+  `weChatCleanupPlan` 保留最新一份与当前微信版本备份，并清理其它旧 zip、`.part` 与没有 zip 的 entitlements；删除前用
+  `isInside(_:roots:)` 限制在 `backups/` 内。
+- **数据占用与导出**：`dataStorageBreakdown()` 汇总配置/账号库/媒体/记忆卡/日志/音色/备份/运行日志；
+  `dataBackupPlan()` 固定包含 `config.json`、`account-state.json`、`accounts/`（排除 `*/logs/*`）、
+  `cosyvoice/voices` 与 `voice-clones`（存在时）；`exportDataBackup(to:progress:)` 在临时目录整理后写
+  `backup-manifest.json`（schema `wechatai.data-backup/v1`），用 `ditto` 先写 `.part` 再原子替换目标；
+  失败清理 staging 与半成品，不留下看似成功的空 zip。
+- **清理**：`scanRuntimeLogs()` 覆盖 `~/Library/Logs/WeChatAI`、旧 `logs/` 与 `accounts/*/logs/`；
+  `scanTemporaryFiles(referenceDate:inUsePaths:)` 只看 `updates/` 与 `runtime/` 顶层，按目录 mtime 删除
+  超过 24h 的条目，bridge 正在使用的版本配置及其父目录受保护。`remove(_:allowedRoots:)` 对每个路径做
+  根目录校验并按删除前实际大小统计释放空间。
+- **UI 契约**：设置 → 数据与备份（微信备份 / 数据备份与清理）与首次向导共用同一服务与
+  `DataBackupExportButton`；文案与空态/失败原因见 [ui-design.md](ui-design.md) 与 [accounts.md](accounts.md) §9.1。
+- **测试**：`BackupServiceTests` 覆盖文件名解析、清理计划、保护路径、manifest、导出失败清理与统计；
+  文件系统测试全部使用临时目录。
 
 ## 6. 错误处理策略
 
@@ -880,8 +928,8 @@ swift test --scratch-path .build-verify
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 933 项执行（931 通过 / 2 项按环境跳过，0 失败；49 个测试文件）；Go 312 项用例（180 顶层
-+ 132 子测试，0 失败；19 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
+当前实测基线：Swift 1010 项执行（1008 通过 / 2 项按环境跳过，0 失败；58 个测试文件）；Go 348 项用例（204 顶层
++ 144 子测试，0 失败；21 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。
 

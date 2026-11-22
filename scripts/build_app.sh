@@ -17,8 +17,8 @@ BUNDLE="$DIST_DIR/$APP_NAME.app"
 SCRATCH="${BUILD_SCRATCH:-$ROOT_DIR/app/.build-release}"
 # 默认目标微信版本。仓库里必须带对应的 Hook 版本 JSON，否则 App 对当前微信
 # 会显示「Hook 版本文件未就绪」，无法安装/启动 Hook（发布包尤其不能缺）。
-DEFAULT_HOOK_VERSION="4.2.0.17"
-DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_0_17_mac.json"
+DEFAULT_HOOK_VERSION="4.2.1.3"
+DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_3_mac.json"
 
 say() { echo "[build-app] $*" >&2; }
 fail() { echo "[build-app] ERROR: $*" >&2; exit 1; }
@@ -90,7 +90,7 @@ elif [ -f "$ROOT_DIR/bridge/script.js" ]; then
   cp "$ROOT_DIR/bridge/script.js" "$RES/bridge/script.js"
 fi
 if [ ! -f "$DEFAULT_HOOK_JSON" ]; then
-  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_0_17_mac.json"
+  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_1_3_mac.json"
   say "WARNING: 该 App 会对 ${DEFAULT_HOOK_VERSION} 显示「Hook 版本文件未就绪」，无法安装/启动 Hook；发布前必须补齐（package_release.sh 会直接失败）。"
 fi
 if compgen -G "$ROOT_DIR/hook/versions/*.json" >/dev/null; then

@@ -124,8 +124,9 @@ func wsToken(r *http.Request) string {
 }
 
 // wsAuthorized 校验 /ws 连接 token，防止任意本地进程订阅事件流/伪造动作。
-// token 为空表示未配置鉴权（与 http.go 的语义一致，仅监听回环地址时可用）；
-// 比较使用常量时间，避免逐字节比较的计时侧信道。
+// token 为空表示未配置鉴权（仅用于开发/测试；注意 http.go 对空 token 是一律 401，
+// 两侧语义不同。scripts/run_bridge.sh 与 App 始终传非空 token，因此只影响手工以
+// -token="" 直跑二进制的场景）；比较使用常量时间，避免计时侧信道。
 func wsAuthorized(r *http.Request) bool {
 	if config.OnebotToken == "" {
 		return true

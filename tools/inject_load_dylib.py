@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Add one LC_LOAD_DYLIB command to every 64-bit slice of a Mach-O file."""
 
+import os
 import pathlib
+import stat
 import struct
 import sys
 
@@ -30,8 +32,10 @@ def arch_slices(data: bytes):
                 _, _, offset, size, _ = struct.unpack_from(">iiIII", data, cursor)
                 cursor += 20
             else:
-                _, _, offset, size, _, _, _ = struct.unpack_from(
-                    ">iiQQIII", data, cursor
+                # fat_arch_64 = cputype(4) + cpusubtype(4) + offset(8) + size(8)
+                # + align(4) + reserved(4) = 32 字节；旧格式多读了一个 u32。
+                _, _, offset, size, _, _ = struct.unpack_from(
+                    ">iiQQII", data, cursor
                 )
                 cursor += 32
             result.append((offset, size))
@@ -101,6 +105,28 @@ def inject_one(buffer: bytearray, base: int, dylib: str) -> bool:
     return True
 
 
+def atomic_write(path: pathlib.Path, payload: bytes) -> None:
+    """同目录临时文件 + rename：写入中断时保留原文件，避免把微信主程序写成半截。"""
+    if path.is_symlink():
+        raise SystemExit(f"refusing to rewrite symlink: {path}")
+    target = path.resolve()
+    tmp = target.with_name(target.name + ".wechatai-inject.tmp")
+    mode = stat.S_IMODE(target.stat().st_mode)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def main():
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} MACHO DYLIB_LOAD_PATH", file=sys.stderr)
@@ -113,7 +139,7 @@ def main():
     for base, _ in arch_slices(original):
         changed |= inject_one(buffer, base, dylib)
     if changed:
-        path.write_bytes(buffer)
+        atomic_write(path, bytes(buffer))
         print(f"Injected {dylib} into {path}")
     else:
         print(f"Already injected: {dylib}")

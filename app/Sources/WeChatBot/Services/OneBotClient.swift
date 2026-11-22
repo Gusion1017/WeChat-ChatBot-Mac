@@ -237,6 +237,8 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
     private var pingTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
     private var seenMessageIDs: [String] = []
+    /// 稳定投递指纹去重（4.2.1.3 历史回放会换 `message_id` 重投同一条消息）。
+    private var deliveryDedupe = InboundDeliveryDedupe()
     private var outgoingEchoes: [(conversationID: String, text: String, date: Date)] = []
     // 通讯录目录抓取（全部由 `stateQueue` 保护）。
     private var contactDirectoryTask: Task<Void, Never>?
@@ -556,6 +558,14 @@ final class OneBotClient: NSObject, URLSessionWebSocketDelegate, @unchecked Send
     /// Remembers message IDs (bounded) and matches echoes of locally sent messages.
     private func decorateAndDedupe(_ event: OneBotEvent) -> OneBotEvent? {
         stateQueue.sync {
+            // 先按「稳定投递指纹」去重：4.2.1.3 历史回放会换 `message_id` 重投同一条
+            // 消息（见 `InboundDeliveryFingerprint`），只查 `seenMessageIDs` 拦不住，
+            // 会让同一条消息入库两次并再次触发自动回复。
+            if deliveryDedupe.isDuplicate(InboundDeliveryFingerprint(event: event)) {
+                let suffix = event.messageID.count > 6 ? String(event.messageID.suffix(6)) : event.messageID
+                notifyLog(.debug, "忽略重复投递的入站消息（\(event.conversationID)，message_id 尾号 \(suffix)）")
+                return nil
+            }
             if !event.messageID.isEmpty {
                 if seenMessageIDs.contains(event.messageID) { return nil }
                 seenMessageIDs.append(event.messageID)

@@ -78,6 +78,14 @@ struct CaptureSetupPlan: Equatable, Sendable {
         items.filter { !readyItems.contains($0) && !blockedItems.contains($0) }
     }
 
+    /// 所有条目都已就绪或已判定不可用（R3 未启用/版本不支持）：弹窗无需继续轮询。
+    /// 只影响弹窗的自动检测频率，不改变就绪判定与按钮文案。
+    var isSettled: Bool {
+        !items.isEmpty && items.allSatisfy {
+            readyItems.contains($0) || blockedItems.contains($0)
+        }
+    }
+
     /// 弹窗副标题：只保留一句通用说明；具体依赖关系放进标题旁的问号提示，步骤见各条目。
     var subtitleKey: String {
         "微信原生发送需要先捕获发送句柄。请按下列步骤各操作一次，完成后自动检测。"
@@ -302,6 +310,24 @@ struct CaptureSetupPlan: Equatable, Sendable {
         guard momentsEnabled, momentsStatusKnown else { return false }
         if !momentsPrimed { return true }
         return writeEnabled && !writeReady
+    }
+
+    /// 切换「自动互动」开关时是否应提示捕获评论句柄（0xD5）。
+    ///
+    /// 写链路被强制只读的版本（`snsWriteSuppressedVersions`）上评论句柄无法用于发送，
+    /// 即使自动互动开关已打开也不应弹窗；与启动检测、弹窗条目保持同一门禁。
+    static func shouldPromptCommentCaptureAfterToggle(
+        snsWriteSuppressed: Bool,
+        commentCaptureRequired: Bool,
+        commentStatusKnown: Bool,
+        commentReady: Bool
+    ) -> Bool {
+        guard !snsWriteSuppressed else { return false }
+        return needsCommentCapturePrompt(
+            commentCaptureRequired: commentCaptureRequired,
+            commentStatusKnown: commentStatusKnown,
+            commentReady: commentReady
+        )
     }
 
     /// 启动时是否需要提示捕获评论句柄（开启自动评论/回复后）。

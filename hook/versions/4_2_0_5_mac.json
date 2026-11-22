@@ -3,6 +3,7 @@
   "req2bufLayout": "v4_1_15",
   "enableSend": "false",
   "req2bufSendMode": "off",
+  "hookVerified": "true",
   "sendFuncAddr": "0x5add73c",
   "req2bufEnterAddr": "0x4757de0",
   "req2bufExitAddr": "0x4758690",

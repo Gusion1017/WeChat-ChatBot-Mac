@@ -1030,7 +1030,7 @@ final class CoreServicesTests: XCTestCase {
         memories = try await store.fetchMemories()
         XCTAssertEqual(memories.first?.accessCount, 5, "新列可正常读写")
         await store.close()
-        XCTAssertEqual(try readUserVersion(at: file), 4, "迁移后 user_version 应为 4")
+        XCTAssertEqual(try readUserVersion(at: file), 5, "迁移后 user_version 应为 5（含历史时间戳修复）")
     }
 
     func testGlobalStreamToggleOverridesProviderStream() {

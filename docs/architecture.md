@@ -5,8 +5,8 @@
 >
 > 本文件是并行开发的**唯一接口契约**。改动接口请先改这里，再改代码。
 >
-> **发布状态（2026-11-10）**：本文描述 **4.1.0**，包含微信 4.2.0.17 适配与朋友圈（Moments）。
-> 下载用户请先看 [`install.md`](install.md) 与 [`releases/4.1.0.md`](releases/4.1.0.md)。
+> **发布状态（2026-11-22）**：本文描述 **4.2.0**，包含微信 4.2.1.3 适配、备份与朋友圈（Moments）
+> 入口调整。下载用户请先看 [`install.md`](install.md) 与 [`releases/4.2.0.md`](releases/4.2.0.md)。
 
 ## 1. 进程与数据流
 
@@ -38,7 +38,8 @@
 - 消息写入 SQLite（WAL）；UI 分页加载，内存只保留已打开/预载会话的最近消息页；日志环形缓冲（App 2000 条、DB 5000 条）。
 - 防睡眠默认关闭；仅「接入电源时 / 始终」档位持有 IOKit 空闲睡眠断言，不轮询、不阻止合盖睡眠。
 - bridge 事件推送立即写出，`-send_interval` 只节流发往微信的消息（事件日志见 §3.2）。
-- Hook 发送闭环按需调度，入站去重表为 1024 条固定窗口（`OneBotClient`），长时间运行不增长内存。
+- Hook 发送闭环按需调度；入站去重为固定窗口（hook 稳定键 4096 条 + `OneBotClient` 的 message_id 1024 条与
+  投递指纹 4096 条），长时间运行不增长内存。见 §9「重复投递」。
 - 启动历史修复信任 `get_login_info` 的权威 selfID，全表 appmsg/引用迁移由 `data.repairs_version` 门禁只执行一次。
 
 ### 1.1 回复与记忆数据流（v2）
@@ -105,6 +106,7 @@ Qwen3-TTS 本地 TTS 安装与音色、日志文件仍全局共享。完整行�
 │       ├── legacy-migration.json   # 仅旧版迁移目标有
 │       └── unassigned-claim.json   # 仅从 _unassigned 认领过的账号有
 ├── media/                          # 旧版遗留媒体（只读保留，不迁移、不删除）
+├── voice-clones/                   # 旧版 CosyVoice 音色克隆目录（存在时纳入数据备份，不再新增）
 ├── backups/ runtime/ cosyvoice/    # 备份、运行期 Hook 配置、本地 TTS 安装（Qwen3 运行环境/模型/音色）
 ├── updates/                        # 应用内更新工作目录（下载 zip/解压暂存/助手脚本；>24h 清理）
 └── chatbot.sqlite                  # 旧版单库（迁移后保留，不删）
@@ -149,13 +151,14 @@ bridge/onebot \
   `xwechat_files/<wxid>_xxxx/` 推导）；多账号下 App 取当前账号档案。`get_login_info` 回包用于运行期确认，
   不一致则切到回包账号的数据档案（见 [`accounts.md`](accounts.md) §4.3）。
 - `-wechat_conf` 由 App **运行期生成**：读取 `hook/versions/<version>_mac.json` 后合并设置
-  （4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 的 R3 发送开关），写入
+  （4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的 R3 发送开关），写入
   `~/Library/Application Support/WeChatAI/runtime/hook-<version>-<build>.json` 再传给 bridge；
   仓库 JSON 始终保持默认 `off`，产品行为只由设置决定。
 - `image_path` 用于图片/视频临时目录（不存在时上游报错；App 启动前探测，缺失时阻止启动），多账号下传当前账号的
   `xwechat_files/<dir>/temp`（`WeChatAccountResolution.imageDirectory`）。`-media_dir` 是**入站图片获取**的
   落盘目录，App 传 `accounts/<当前账号>/media`；留空（手动调试）时 bridge 回退根 `media/`（仅旧版兼容）。
-  图片只写账号目录，不写 app bundle，也不再新写根 `media/`。
+  图片只写账号目录，不写 app bundle，也不再新写根 `media/`。出站媒体（图片/语音/文件）写入 `-image_path`
+  目录时用 `filepath.Join`，**末尾有没有 `/` 都可以**（旧实现字符串拼接会把目录名当前缀，生成同级散落文件）。
 - 鉴权：HTTP 发送接口与 `/fetch_image` 要求 `Authorization: Bearer <token>`；WS `/ws` 握手同样校验
   同一 token（`Authorization: Bearer` 或 `?token=`；`-token` 为空时仅 WS 放行，HTTP 发送接口仍拒绝）。
   bridge 只监听 127.0.0.1，App 连接 WS 时通过 `URLRequest` 携带该 token。
@@ -241,7 +244,7 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
   appmsg XML 时同样还原，非 appmsg XML（图片/语音）保持原样。触发判定只取引用正文，被引用原文仅作 AI 上下文。
 - 媒体字段：`data.url` 为 `file://` 时复制到 `accounts/<当前账号>/media/`；`data.file` 可能为 base64；
   旧版根 `media/` 不再新写。
-- 入站图片获取（按需）：4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15 的图片消息在 hook 里只有 `[图片]` 占位，
+- 入站图片获取（按需）：4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的图片消息在 hook 里只有 `[图片]` 占位，
   图片 XML 在 `raw_message` 里；bridge 推送前按 `message_id` 登记下载候选，把 `[图片]` 替换成**无 data 的**
   `{"type":"image","data":{}}`（结构化字段与日志不携带 aeskey/CDN key，`raw_message` 保留原始 XML
   并照旧入库）。`POST /fetch_image` 时 bridge 按需触发微信 CDN 下载并解密，写入 `-media_dir/<yyyy-MM-dd>/`
@@ -372,20 +375,37 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 版本文件：`hook/versions/<version_with_underscores>_mac.json`，字段与上游/本项目脚本保持一致；
   **具体键名、地址与发送开关只以文件本身为准，文档不重复**。版本文件是 Hook 地址与开关的唯一数据源；
   修改必须真机验证并同步 `bridge/NOTICE`。
-- 当前目标：WeChat 4.2.0.17（arm64，`/Applications/WeChat.app/Contents/Resources/wechat.dylib`）；
-  历史版本 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 / 4.1.12.53 的版本文件保留，安装脚本默认目标为 4.2.0.17。
+- 当前目标：WeChat 4.2.1.3（build 270595，arm64，`/Applications/WeChat.app/Contents/Resources/wechat.dylib`）；
+  历史版本 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的版本文件保留，安装脚本默认目标为 4.2.1.3。
+  4.1.x（4.1.15.55 / 4.1.12.53）的版本文件与安装门禁自 2026-11-20 起移除。
 - 验证状态：4.2.0.17（2026-11-07）、4.2.0.12、4.2.0.9、4.2.0.5 均已完成真机验证（注入、入站消息、通讯录与
-  R3 文本发送）；4.2.0.17 的验证范围含群聊文本 / type=49 appmsg / 自身消息入站与 R3 文本发送；语音发送、
-  图片获取与群聊 @ 未在 4.2.0.17 复测。任何 Hook 适配变更必须在真机验证文本收发后才能标记为可用；
-  历史验证记录见 `CHANGELOG.md`。
+  R3 文本发送）；4.2.1.3 的入站消息、R3 文本发送、通讯录、朋友圈发布/评论/回复/主动同步与 timeline
+  主动刷新（`source=native` / `body_captured=true`）已于 2026-11-22 真机验证；hook 的 `task_layout_mismatch`
+  安全闸保留（捕获 vtable 与版本表不一致时拒绝发送，防未来版本漂移，不是限制）。
+- 启动门禁：版本 JSON 的 `hookVerified` 与 `WeChatVersionSupport.unverifiedHookVersions` 共同决定能否启动
+  bridge；当前五个受支持版本的 JSON 均为 `hookVerified=true`，`unverifiedHookVersions` 为空。若自定义
+  `versionConfigPath` 指向 `hookVerified=false` 的 JSON，启动时仍抛出 `RuntimeError.hookAdaptationUnverified`
+  并阻止启动。任何 Hook 适配变更必须在真机验证文本收发后才能标记为可用；历史验证记录见 `CHANGELOG.md`。
 - 发送附加配置（R3，仓库默认 `enableSend=false` / `req2bufSendMode=off`）：由 App 读取版本 JSON 后按
   设置合并生成运行期配置；具体键名、运行期参数与地址表只维护在 `hook/versions/*.json` 与
   `hook/script.js`，文档不展开。App 默认开启 R3（可在设置中关闭）；首次使用（或微信重启后）需在本机
   微信手动发一条消息捕获发送上下文，App/bridge 重启会按微信 PID 从本地缓存自动恢复。
-- 朋友圈（SNS）：仅 `hook/versions/4_2_0_12_mac.json` 与 `4_2_0_17_mac.json` 含 SNS 锚点；其余版本 JSON
+- 朋友圈（SNS）：`hook/versions/4_2_0_12_mac.json`、`4_2_0_17_mac.json` 与 `4_2_1_3_mac.json` 含 SNS 锚点；其余版本 JSON
   没有 SNS 键，bridge 因此保持 SNS 关闭。App 运行期按设置合并 `snsEnable` / `snsWrite` / `snsReadMode` 与
   发布策略后传给 bridge；仓库 JSON 始终保持 `snsEnable=false` / `snsProbe=false`。锚点具体键名与地址只以
-  版本 JSON 为准，契约见 [`sns.md`](sns.md) §6.1。
+  版本 JSON 为准，契约见 [`sns.md`](sns.md) §6.1。`snsWriteSuppressedVersions` 当前为空；4.2.1.3 的
+  comment/sync 任务类锚点已于 2026-11-22 修正并真机验证（`task_layout_mismatch` 安全闸保留）。
+- **SNS 模板采集策略（2026-11-22）**：hook 新增 `snsCommentBodyReturn`（4.2.1.3 JSON `0x2fd46e8`），在
+  `autoBufferWrite` 按返回地址捕获原生评论请求体，仅 `SnsAction` Type==2 且无 field 9/12 时写入模板；同时
+  保留 clientId 前缀（回复 `sns_reply:`、普通评论/点赞 `sns_comment:`）兼容。模板复用前健康检查 Type==2 且无
+  9/12，点赞形态/污染模板忽略并回退自拼；timeline 仅 MaxID==0/缺省的首屏请求可覆盖模板（分页与解析失败
+  保留旧模板）。
+- **模板渲染与版本表校验**：`hook/script.js` 是 Go `text/template` 模板，bridge 注入前用版本 JSON 渲染
+  （`bridge/hook_template.go`）；渲染后若在 JS **代码位置**出现裸 `<no value>`（地址占位符缺键）会直接拒绝
+  注入（`Fatal`，退出码 1）并列出缺失键，字符串/注释里的只按可选字段降级。`scripts/check_hook_template.py`
+  （随 `bash scripts/check.sh` 与 `--docs` 运行）静态校验模板占位符与 `hook/versions/*.json` 的必需键、
+  SNS 锚点组完整性、消息偏移成对、BodyReturn 4 字节对齐、布尔开关格式、默认版本与各脚本一致，
+  并在有 `node` 时对每个版本渲染结果做 `node --check`。
 - 安装 Gadget 流程：完整备份 → 复制 Gadget/配置 → 注入 load command → ad-hoc 重签 App bundle（仅主 App，
   保留原沙盒 entitlements）→ 校验。
 - 恢复：从备份 zip 还原整个 `/Applications/WeChat.app` 并重签（或直接用备份替换）。
@@ -446,19 +466,42 @@ App**（保留原沙盒 entitlements，去掉 hardened runtime）→ `codesign -
 ### 8.2 还原
 
 `tools/manage_wechat.sh restore` 用备份 zip 覆盖 App，恢复 Tencent 官方签名；必须保证微信已退出。
-备份路径：`~/Library/Application Support/WeChatAI/backups/WeChat-<version>-<build>-official.zip`。
+默认按当前微信版本+build 找 `~/Library/Application Support/WeChatAI/backups/WeChat-<version>-<build>-official.zip`；
+当前版本没有备份时（例如微信被 Sparkle 自动升级）脚本会列出可用备份并提示用 `--backup-zip <path>` 显式指定，
+例如回退到 4.2.1.3 后再重新 `install`。微信自动升级会用官方签名覆盖 App 并移除 Gadget 注入，未适配版本
+（如 4.2.1.5）不得强装。安装脚本会尽力关闭 Sparkle 自动检查，但已下载的更新仍可能生效。
 
-### 8.3 本地联调
+### 8.3 备份与清理（`BackupService`）
+
+设置 → 数据与备份与首次向导共用 `BackupService`（actor，文件 IO 不阻塞主线程）：
+
+- **微信备份**：扫描 `backups/WeChat-<version>-<build>-official.zip`，解析版本/build、大小与时间；
+  「立即备份」调用 `tools/manage_wechat.sh backup`（显式传实际检测路径与 `--backup-dir`）；
+  「清理旧备份」保留最新一份与当前微信版本备份，并清理残留 `*.part` 与没有对应 zip 的 `*-entitlements.plist`；删除只允许
+  发生在 `backups/` 内。
+- **数据备份**：按分类统计 `config.json`、`account-state.json`、账号库/媒体/记忆卡/日志、`cosyvoice/voices`、
+  `backups/` 与运行日志占用；导出 zip 含 `config.json`、`account-state.json`、`accounts/`（排除
+  `*/logs/*`）、`cosyvoice/voices/`、`voice-clones/`（存在时）与根目录 `backup-manifest.json`
+  （schema `wechatai.data-backup/v1`、App 版本/build、时间、包含项/排除项、大小）。不含
+  `cosyvoice/models`、venv、仓库与运行日志；先写 `.part` 再原子替换，失败清理半成品。
+- **清理**：运行日志（`~/Library/Logs/WeChatAI`、旧 `logs/`、`accounts/*/logs/`）与 `updates/`、`runtime/`
+  下超过 24 小时的条目；`runtime/` 中 bridge 正在使用的版本配置受保护。所有删除前二次确认，按实际删除
+  大小统计释放空间。
+- 契约与实现见 `app/Sources/WeChatBot/Services/BackupService.swift` 与 `BackupServiceTests`；文档细节见
+  [`accounts.md`](accounts.md) §9.1、[`core-services.md`](core-services.md) §10。
+
+### 8.4 本地联调
 
 `devtools/mock_onebot.py` + `devtools/mock_ai.py` 可在无微信/无 API Key 时跑通「收事件 → 触发判定 → AI → 发送」，详见 `devtools/README.md`。
 
-## 9. 4.1.15 入站消息接收
+## 9. 4.2 入站消息接收
 
-4.1.15 起入站消息改为独立接收路径：
+4.1.15 起入站消息改为独立接收路径；4.2.1.3 / 4.2.0.x 沿用：
 
 - Frida 在微信进程内挂**只读的入站消息钩子**；具体函数地址与字段布局由 `hook/versions/*.json` 与
-  `hook/script.js` 按微信版本维护，**不在公开文档展开**。4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 沿用同一路径与
-  版本文件机制，各版本分别适配并完成真机验证（4.2.0.17 于 2026-11-07 验证入站与 R3 文本发送；语音发送与群聊 @ 未全部复测）。
+  `hook/script.js` 按微信版本维护，**不在公开文档展开**。4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 沿用同一路径与
+  版本文件机制，各版本分别适配并完成真机验证（4.2.0.17 于 2026-11-07 验证入站与 R3 文本发送；
+  4.2.1.3 于 2026-11-20 验证入站与 R3 文本发送；语音发送与群聊 @ 未全部复测）。
 - Hook 读取到新消息后发送 `incoming_message` 给 Go bridge；`bridge/incoming.go` 转成 OneBot 事件并经
   WebSocket/HTTP 推送，App 的 OneBotClient 消费。
 - 群聊 `from` 以 `@chatroom` 结尾；文本可能带 `sender_wxid:` 前缀，JS 会剥离并把 sender 作为 user_id。
@@ -467,3 +510,20 @@ App**（保留原沙盒 entitlements，去掉 hardened runtime）→ `codesign -
 安全：入站消息钩子为**只读**，不修改寄存器/内存。R3 发送由 App 设置控制（默认开启）；
 如果绕过 App、直接用 `scripts/run_bridge.sh` 调试，它默认 `HOOK_SEND_DISABLED=true`（只读接收），
 避免误触原生发送路径。
+
+### 9.1 重复投递（2026-11-22 修复）
+
+微信 4.2.1.3 的 `message_id` 是 `(created 秒 << 32) | 序号`，**序号不是稳定身份**：同一条消息被历史回放
+（例如打开/点击会话、微信重建消息对象）重新 finalize 时序号会变（真机 `…176` → `…177`）。旧实现只按
+`message_id` 去重，于是同一条消息会入库两次，并且**再次触发自动回复**（真机：某次语音被重投后重复回复，同一条测试文本也被重复回复）。
+
+现在两层都用「同一秒内不可变」的字段做稳定键：
+
+- **hook（`hook/script.js`）**：`from|to|created|type|正文指纹`，4096 条环形窗口；正文只存长度 + 两路 32 位
+  散列（djb2 + sdbm），避免大 XML 占内存。同一条消息的重复 finalize / 分钟级历史回放都会命中。
+- **App（`OneBotClient` + `InboundDeliveryFingerprint`）**：会话、方向、发送者、`created` 毫秒、消息类型、
+  展示文本与 `raw_message` 的 SHA-256，4096 条 FIFO 窗口；`message_id` 与 `rawJSON` **不参与**（会随重投变化）。
+  媒体事件缺少 `raw_message` 或 `created` 为 0（旧 hook 读到 0）时不做指纹去重，避免把同一秒连续转发的多张
+  图片、或用户真的发过的相同文本误判成重复。
+- 用户真的在别的秒再发相同文本（`created` 不同）不会被去重；更早（已被窗口淘汰）的历史回放由 App 的
+  「历史回放 120s 不自动回复」兜底。

@@ -23,6 +23,21 @@ import (
 	"github.com/wdvxdr1123/go-silk"
 )
 
+// outgoingMediaPath 拼接出站媒体（图片/语音/文件）的落盘路径。
+//
+// 旧实现直接 config.ImagePath + fileName：App 传入的 -image_path 来自目录 URL
+// 的 .path（末尾没有 "/"，App 用 URL(fileURLWithPath:isDirectory:) 取 path 时
+// macOS 会去掉尾部斜杠），于是文件被写成 .../temp123_456.png 这种「目录名被当
+// 前缀」的同级文件，既污染微信账号目录，也让排障找不到文件。空目录保持旧行为
+// （相对当前工作目录），兼容 gadget 开发参数。
+func outgoingMediaPath(dir, fileName string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return fileName
+	}
+	return filepath.Join(dir, fileName)
+}
+
 func SaveBase64Image(base64Data string) (string, string, error) {
 	rawContents := base64Data
 	if strings.HasPrefix(base64Data, "base64://") {
@@ -42,7 +57,7 @@ func SaveBase64Image(base64Data string) (string, string, error) {
 	randomNumber := r.Intn(1000) // 生成 0-999 的随机数
 	timestamp := time.Now().Unix()
 	fileName := fmt.Sprintf("%d_%d.%s", randomNumber, timestamp, DetectFileFormat(data))
-	targetPath := config.ImagePath + fileName
+	targetPath := outgoingMediaPath(config.ImagePath, fileName)
 	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", "", fmt.Errorf("create directory failed: %v", err)
@@ -81,7 +96,7 @@ func SaveVoiceFile(base64Data string) ([]byte, string, error) {
 	timestamp := time.Now().Unix()
 	ext := DetectFileFormat(data)
 	fileName := fmt.Sprintf("%d_%d.%s", randomNumber, timestamp, ext)
-	targetPath := config.ImagePath + fileName
+	targetPath := outgoingMediaPath(config.ImagePath, fileName)
 	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, "", fmt.Errorf("create directory failed: %v", err)
@@ -124,7 +139,7 @@ func SaveBase64File(base64Data string, ext string) (string, string, error) {
 	randomNumber := r.Intn(1000)
 	timestamp := time.Now().Unix()
 	fileName := fmt.Sprintf("%d_%d.%s", randomNumber, timestamp, ext)
-	targetPath := config.ImagePath + fileName
+	targetPath := outgoingMediaPath(config.ImagePath, fileName)
 	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", "", fmt.Errorf("create directory failed: %v", err)
@@ -608,6 +623,11 @@ func GetWeChatPID() (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(output)))
 }
 
+// mediaDownloadClient 用于 legacy 入站表情/媒体下载。
+// 必须显式设超时：旧实现用零值 http.Client（无超时），CDN 卡住时 HandleMsg
+// 派生出的 goroutine 会永久挂起（入站表情就走这条路径）。测试可临时改小。
+var mediaDownloadClient = &http.Client{Timeout: 30 * time.Second}
+
 func DownloadFile(urlStr string) ([]byte, error) {
 	if urlStr == "" {
 		return nil, errors.New("url is empty")
@@ -631,8 +651,7 @@ func DownloadFile(urlStr string) ([]byte, error) {
 		return data, nil
 	}
 
-	client := &http.Client{}
-	resp, err := client.Get(urlStr)
+	resp, err := mediaDownloadClient.Get(urlStr)
 	if err != nil {
 		return nil, err
 	}

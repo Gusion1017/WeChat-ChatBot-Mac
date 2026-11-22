@@ -801,7 +801,12 @@ struct VoiceSettingsPanel: View {
             }
         }
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(1))
+            // 安装/服务启动中保持 1s（进度平滑），空闲降到 2s，减少后台唤醒。
+            let interval = VoicePanelCadence.interval(
+                installInProgress: cosyVoiceInstall.state.isInstalling,
+                serviceStarting: cosyVoiceRuntime.state.isStarting
+            )
+            try? await Task.sleep(for: .seconds(interval))
             if Task.isCancelled { break }
             await refreshCosyVoiceState(loadVoices: false)
         }
@@ -1117,14 +1122,19 @@ struct VoiceSettingsPanel: View {
         guard voiceSettings.replyEnabled else { return }
         await store.refreshVoiceStatus()
         voiceStatusTick = Date()
-        var ticks = 0
+        var secondsSinceRefresh = 0.0
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(1))
+            let interval = VoicePanelCadence.interval(
+                installInProgress: cosyVoiceInstall.state.isInstalling,
+                serviceStarting: cosyVoiceRuntime.state.isStarting
+            )
+            try? await Task.sleep(for: .seconds(interval))
             if Task.isCancelled { break }
             voiceStatusTick = Date()
-            ticks += 1
-            // 倒计时用本地 tick，每 5 秒才向 bridge 拉一次状态，避免每秒请求。
-            if ticks % 5 == 0 {
+            secondsSinceRefresh += interval
+            // 倒计时用本地 tick；约每 5 秒才向 bridge 拉一次状态，避免每个 tick 发请求。
+            if secondsSinceRefresh >= 5 {
+                secondsSinceRefresh = 0
                 await store.refreshVoiceStatus()
                 voiceStatusTick = Date()
             }

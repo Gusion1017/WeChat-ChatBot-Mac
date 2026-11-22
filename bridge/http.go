@@ -16,6 +16,48 @@ import (
 	"time"
 )
 
+// errSendResultTimeout 表示等待 worker 发送结果超时（handler 按 500 返回，
+// 与 docs/bridge.md §3.3「失败一律 500」的契约一致）。
+var errSendResultTimeout = errors.New("send result timeout")
+
+// sendBodyMaxBytes 是 /send_* 的请求体上限。
+//
+// 刻意不沿用 /sns/* 的 1MiB：/send_* 的媒体段以 base64 内联
+// （docs/bridge.md §3.3 的 data.file="base64://…"、docs/voice.md §3 的 pcm16k），
+// App 侧导入上限 40MiB（OneBotClient.maxImportBytes），bridge 侧语音 PCM 上限
+// 120s@24k = 5.76MB（voice.go maxVoiceSendPCMBytes，base64 后约 7.7MB）。
+// 1MiB 会拒掉 >0.75MB 的图片/视频/文件与 >15s 的语音段，属于功能回归。
+// 这里只兜底「异常超大 body」（40MiB 文件 → base64 ≈ 53MB + JSON 开销），
+// 防止异常客户端把 bridge 内存打爆。测试可临时改小。
+var sendBodyMaxBytes int64 = 64 << 20
+
+// sendResultTimeout 是一次 HTTP 发送请求等待 worker 结果的总预算。
+// worker 自身超时 15s；图片/视频/语音还要等 hook 的 upload_*_finish 异步回包，
+// 所以这里留足余量，只兜底「永远等不到」的情况。测试可临时改小。
+var sendResultTimeout = 60 * time.Second
+
+// waitSendResults 依次等待每个发送结果，总预算 sendResultTimeout。
+func waitSendResults(chans []chan error) error {
+	deadline := time.Now().Add(sendResultTimeout)
+	for _, ch := range chans {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return errSendResultTimeout
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case err := <-ch:
+			timer.Stop()
+			if err != nil {
+				return err
+			}
+		case <-timer.C:
+			return errSendResultTimeout
+		}
+	}
+	return nil
+}
+
 func sendHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "仅支持 POST", http.StatusMethodNotAllowed)
@@ -31,7 +73,16 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := new(SendRequest)
-	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+	// 与 /sns/* 一样限制请求体大小，但上限按媒体段（base64 内联）取值，
+	// 见 sendBodyMaxBytes 的说明。
+	body := http.MaxBytesReader(w, r.Body, sendBodyMaxBytes)
+	if err := json.NewDecoder(body).Decode(req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "请求体过大", http.StatusRequestEntityTooLarge)
+			Error("请求体过大", "limit", sendBodyMaxBytes)
+			return
+		}
 		http.Error(w, "无效的 JSON", http.StatusBadRequest)
 		Error("无效的 JSON")
 		return
@@ -193,17 +244,19 @@ func sendHandler(w http.ResponseWriter, r *http.Request) {
 		resultChans = append(resultChans, ch)
 	}
 
-	// 等待所有消息发送完成
-	for _, ch := range resultChans {
-		if err := <-ch; err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]any{
-				"status": "failed",
-				"error":  err.Error(),
-			})
-			return
-		}
+	// 等待所有消息发送完成。必须有时间预算：pendingResultMap 只按 target_id
+	// 记录一个等待者，并发发往同一会话时后写覆盖先写，先前的请求永远等不到
+	// 结果；hook 没有回 upload_*_finish 时也一样。没有预算会让 handler 永久
+	// 挂起（连接与 goroutine 一起泄漏），App 侧只能等到自身超时。
+	// 状态码保持 docs/bridge.md §3.3 的契约（失败一律 500），只把原因写进 error。
+	if err := waitSendResults(resultChans); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
 	}
 
 	// 只含语音段的请求：语音已同步处理完（编码/上传触发），按 §3.3 的

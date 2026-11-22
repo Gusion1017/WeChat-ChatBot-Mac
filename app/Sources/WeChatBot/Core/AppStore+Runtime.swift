@@ -14,6 +14,8 @@ enum RuntimeError: LocalizedError {
     case accountSwitching
     case accountImagePathUnavailable(String)
     case hookOperationInProgress
+    /// 微信版本的 Hook 地址表未经真机验证；启动 bridge 会让微信崩溃，直接拒绝。
+    case hookAdaptationUnverified(String, String)
 
     var errorDescription: String? {
         switch self {
@@ -45,6 +47,12 @@ enum RuntimeError: LocalizedError {
             )
         case .hookOperationInProgress:
             return L("正在安装或还原微信 Hook，请等待当前操作完成")
+        case .hookAdaptationUnverified(let version, let configFile):
+            return Lf(
+                "微信 %@ 的 Hook 地址表尚未真机验证（%@）。启动 bridge 会修改微信内部函数，可能导致微信崩溃，已阻止启动。请换回已验证的微信版本（如 4.2.1.3），或等待该版本适配完成后再试。",
+                version,
+                configFile
+            )
         }
     }
 }
@@ -206,6 +214,8 @@ final class RuntimeCoordinator {
     /// 电量 / DeepSeek 余额的后台刷新任务与去重标记。
     private var systemVitalsTask: Task<Void, Never>?
     private var balanceRefreshInFlight = false
+    /// 机器人启动后预热本地 TTS 的任务；停止机器人时取消并等待服务回收。
+    private var cosyVoiceWarmupTask: Task<Void, Never>?
     /// 通道配置指纹：AI 模型页新增通道、填写 Key 或改 baseURL 后立即重查余额。
     private var lastProviderFingerprint: String?
 
@@ -365,7 +375,8 @@ final class RuntimeCoordinator {
             await loadPersistedState()
             await loadStats()
         }
-        autoStartCosyVoiceIfNeeded()
+        // 本地 TTS 不再随 App 启动无条件拉起（GB 级模型）；改为机器人成功启动后预热，
+        // 停止机器人时按设置回收。见 startCosyVoiceWarmupIfNeeded()。
         log(.debug, "Runtime", "本地状态已加载，正在检测微信与 Hook 状态…")
         await refreshStatus()
         bootstrapped = true
@@ -946,8 +957,8 @@ final class RuntimeCoordinator {
 
     // MARK: Start / stop
 
-    /// 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55 使用 R3 原生文本发送（由 App 设置开启）；
-    /// 4.1.12 及更早版本保持 legacy 发送路径，不做任何覆盖。
+    /// 4.2.1.3 与 4.2.0.x 使用 R3 原生文本发送（由 App 设置开启）；4.1.x 自 2026-11-20 起不再支持。
+    /// 非支持版本不做任何发送覆盖。
     /// 首次使用 R3 前需要在本机微信手动发一条消息以捕获发送句柄。
     /// 刷新 bridge `/voice_status`（登录稳定倒计时、文本/语音句柄、CdnManager）。
     /// 失败时保留可展示的错误状态，不抛给 UI。
@@ -1035,12 +1046,14 @@ final class RuntimeCoordinator {
         }
         // 开启「自动互动（评论/回复）」后，评论句柄（0xD5）与读/写样本一样是必需前置；
         // 演练模式不真正发送，不要求提前捕获。互动对象为空时调度器不会执行，也不提醒捕获。
+        // 写链路未验证的版本强制只读：评论句柄无法用于发送，不要提示永远补不齐的条目。
         let commentRequired = snsSettings.enabled
             && snsSettings.writeEnabled
             && snsSettings.interaction.enabled
             && snsSettings.interaction.isActive
             && !store.snsInteractionTargetIDs.isEmpty
             && !store.settings.bot.dryRun
+            && SnsWriteGate.requiresCommentHandleCapture(version: store.hookStatus.wechatVersion)
 
         // bridge 可用时以 `/voice_status.configured` 为准（App 下发 R3 时一定带 r3VoiceSend）；
         // bridge 尚未就绪时用启动阶段下发的配置推断，决定是否要等文字句柄状态。
@@ -1130,53 +1143,103 @@ final class RuntimeCoordinator {
     }
 
     private func nativeSendConfigOverrides() async -> [String: String] {
-        let path = store.settings.hook.wechatPath
-        let installation = await Task.detached(priority: .userInitiated) {
-            WeChatInstallation.inspect(path: path)
-        }.value
-        let isR3Supported = NativeSendVersionSupport.supports(
-            version: installation.version,
-            build: installation.build
-        )
-        guard isR3Supported else { return [:] }
+        let installation = await runtimeWeChatInstallation()
+        let sns = store.settings.bot.snsSettings
+        guard let overrides = Self.nativeSendOverrides(
+            installation: installation,
+            enableNativeSend: store.settings.hook.enableNativeSend,
+            sns: sns
+        ) else { return [:] }
+
         if store.settings.hook.enableNativeSend {
-            log(.info, "Hook", "微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55：启用 R3 原生发送（首次使用前需在本机微信手动发一条消息以捕获发送句柄）")
-            let snsSettings = store.settings.bot.snsSettings
-            if snsSettings.enabled {
+            log(.info, "Hook", "微信 \(installation.versionDisplay)：启用 R3 原生发送（首次使用前需在本机微信手动发一条消息以捕获发送句柄）")
+            if sns.enabled {
                 log(.info, "SNS", "朋友圈功能已开启（首次使用前需在本机微信打开一次朋友圈以捕获任务句柄）")
             }
-            var overrides = [
-                "enableSend": "true",
-                "req2bufSendMode": "r3",
-                "r3ClosureCapture": "true",
-                "r3Slot13Capture": "true",
-                "r3QueueUntilSeed": "true",
-                // 2026-10-26 真机：官方 24k SILK 编码 + 上传/R3 发送已能正常播放。
-                "r3VoiceSend": "true"
-            ]
-            // 朋友圈（docs/sns.md §6）：SNS 通道依赖 R3；关闭原生发送时强制关闭。
-            let sns = store.settings.bot.snsSettings
-            let snsReadable = sns.enabled
-            overrides["snsEnable"] = snsReadable ? "true" : "false"
-            overrides["snsWrite"] = (snsReadable && sns.writeEnabled) ? "true" : "false"
-            // v2.7 起主动读取不再依赖「允许发布」：捕获到真实请求体后 timeline 可原生刷新；
-            // 未捕获请求体时 bridge 自动回退被动缓存（不会发无效的最小请求体）。
-            overrides["snsReadMode"] = snsReadable ? "native" : "off"
-            // v2 不再把「可发时段」下发给 bridge：时段由 App 排程器精确执行，bridge 侧若是全局时段，
-            // 会把同一账号的确认草稿发布也一起拦掉（例如自动发布时段 09:00–22:00 时，23:00 确认草稿被 409）。
-            // bridge 只保留全局每日上限与最小间隔兜底（下方两个键）。
-            // bridge 侧是全局兜底（不限单对象）；每个对象的每日上限/最小间隔由 App 调度器执行。
-            overrides["snsPostDailyLimit"] = "50"
-            overrides["snsPostMinIntervalMs"] = "60000"
-            return overrides
+            if SnsWriteGate.isSuppressed(version: installation.version),
+               sns.enabled, sns.writeEnabled {
+                log(.warning, "SNS", "微信 \(installation.versionDisplay)：朋友圈写链路尚未验证，已强制关闭发布/评论（只读可用）")
+            }
         } else {
-            log(.warning, "Hook", "微信 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 / 4.1.15.55：R3 原生发送已关闭，主动发送不可用（接收不受影响）")
+            log(.warning, "Hook", "微信 \(installation.versionDisplay)：R3 原生发送已关闭，主动发送不可用（接收不受影响）")
+        }
+        return overrides
+    }
+
+    /// 实际生效的微信安装信息：检测到的微信（运行中的进程）优先于设置路径。
+    ///
+    /// 与 `startRuntime` 的版本门禁、`HookManager.startBridge` 的检测保持同一口径；
+    /// 检测路径读不到版本时回退设置路径（覆盖「刚改设置、检测结果还是上一次」的窗口）。
+    /// Info.plist 读取在后台线程完成。
+    private func runtimeWeChatInstallation() async -> WeChatInstallation {
+        let configured = store.settings.hook.wechatPath
+        let target = WeChatRuntimeTarget.path(
+            configuredPath: configured,
+            detectedPath: store.hookStatus.wechatDetectedPath
+        )
+        return await Task.detached(priority: .userInitiated) {
+            let preferred = WeChatInstallation.inspect(path: target)
+            guard preferred.version.isEmpty, target != configured else { return preferred }
+            return WeChatInstallation.inspect(path: configured)
+        }.value
+    }
+
+    /// 生成 R3 / 朋友圈运行期覆盖项（纯函数，便于单测）。
+    ///
+    /// 返回 `nil` 表示微信版本不在 R3 支持列表（不做任何覆盖）。写链路未验证的版本
+    /// （`snsWriteSuppressedVersions`）即使 App 设置允许发布也强制 `snsWrite=false`，
+    /// 与 bridge 的写门禁同一判据。
+    nonisolated static func nativeSendOverrides(
+        installation: WeChatInstallation,
+        enableNativeSend: Bool,
+        sns: SnsSettings
+    ) -> [String: String]? {
+        guard NativeSendVersionSupport.supports(
+            version: installation.version,
+            build: installation.build
+        ) else { return nil }
+
+        guard enableNativeSend else {
             return [
                 "enableSend": "false",
                 "req2bufSendMode": "off",
                 "r3VoiceSend": "false"
             ]
         }
+
+        var overrides = [
+            "enableSend": "true",
+            "req2bufSendMode": "r3",
+            "r3ClosureCapture": "true",
+            "r3Slot13Capture": "true",
+            "r3QueueUntilSeed": "true",
+            // 2026-10-26 真机：官方 24k SILK 编码 + 上传/R3 发送已能正常播放。
+            "r3VoiceSend": "true"
+        ]
+        // 朋友圈（docs/sns.md §6）：SNS 通道依赖 R3；关闭原生发送时强制关闭。
+        let snsReadable = sns.enabled
+        overrides["snsEnable"] = snsReadable ? "true" : "false"
+        // 单点门禁：用户写开关 + 版本写门禁共同决定下发值。
+        overrides["snsWrite"] = SnsWriteGate.snsWriteOverride(
+            version: installation.version,
+            userEnabled: snsReadable && sns.writeEnabled
+        )
+        // v2.7 起主动读取不再依赖「允许发布」：捕获到真实请求体后 timeline 可原生刷新；
+        // 未捕获请求体时 bridge 自动回退被动缓存（不会发无效的最小请求体）。
+        overrides["snsReadMode"] = snsReadable ? "native" : "off"
+        // v2 不再把「可发时段」下发给 bridge：时段由 App 排程器精确执行，bridge 侧若是全局时段，
+        // 会把同一账号的确认草稿发布也一起拦掉（例如自动发布时段 09:00–22:00 时，23:00 确认草稿被 409）。
+        // bridge 只保留全局每日上限与最小间隔兜底（下方两个键）。
+        // bridge 侧是全局兜底（不限单对象）；每个对象的每日上限/最小间隔由 App 调度器执行。
+        overrides["snsPostDailyLimit"] = "50"
+        overrides["snsPostMinIntervalMs"] = "60000"
+        return overrides
+    }
+
+    /// 只读门禁日志里展示的微信版本（未检测到版本时为空）。
+    private var snsWriteGateVersionLabel: String {
+        let display = WeChatStatusPresentation.versionDisplay(store.hookStatus)
+        return display.isEmpty ? store.hookStatus.wechatVersion : display
     }
 
     func startRuntime() async throws {
@@ -1237,6 +1300,35 @@ final class RuntimeCoordinator {
             throw RuntimeError.accountImagePathUnavailable(AppAccount.maskedID(AccountProfile.activeID))
         }
         if store.settings.hook.autoStartBridge {
+            // 未通过真机验证的版本表绝不能注入：错地址会在 Interceptor.attach 或
+            // 回调执行时直接让微信 SIGILL（4.2.1.3 实测）。宁可拒绝启动，也不让微信崩溃。
+            let effectivePath = WeChatRuntimeTarget.path(
+                configuredPath: store.settings.hook.wechatPath,
+                detectedPath: store.hookStatus.wechatDetectedPath
+            )
+            let installation = WeChatInstallation.inspect(path: effectivePath)
+            let version = installation.version.isEmpty ? store.hookStatus.wechatVersion : installation.version
+            let configPath = AppResources.versionConfig(
+                version: version,
+                explicitPath: store.settings.hook.versionConfigPath
+            )?.path ?? AppResources.expectedVersionConfigPath(
+                version: version,
+                explicitPath: store.settings.hook.versionConfigPath
+            )
+            guard WeChatVersionSupport.isHookAdaptationVerified(
+                version: version,
+                configVerified: AppResources.versionConfigVerified(
+                    version: version,
+                    explicitPath: store.settings.hook.versionConfigPath
+                )
+            ) else {
+                throw RuntimeError.hookAdaptationUnverified(
+                    WeChatStatusPresentation.versionDisplay(store.hookStatus).isEmpty
+                        ? version
+                        : WeChatStatusPresentation.versionDisplay(store.hookStatus),
+                    URL(fileURLWithPath: configPath).lastPathComponent
+                )
+            }
             let overrides = await nativeSendConfigOverrides()
             // R3 关闭时也会返回 enableSend=false 等覆盖项，必须按 enableSend 判断，
             // 否则 bridge 未就绪时会误以为需要等文字句柄而空等 60s。
@@ -1384,6 +1476,9 @@ final class RuntimeCoordinator {
         SleepPreventionCenter.shared.setRuntimeActive(true)
         // 朋友圈页可见时的自动同步只在 bridge 运行时发请求（停止后循环保留、等待重启）。
         store.moments.setRuntimeActive(true)
+        // 机器人成功启动后再预热本地 TTS（App 启动阶段不再无条件拉起）。
+        startCosyVoiceWarmupIfNeeded()
+        CrashReporter.setBotRunning(true)
         log(.info, "Bot", "机器人运行时已启动（\(configuration.host):\(configuration.port)）")
     }
 
@@ -1412,6 +1507,15 @@ final class RuntimeCoordinator {
         // 演练模式不直接禁用调度：只生成只读演练草稿，不发送（见 onDraft）。
         guard settings.hook.enableNativeSend else {
             log(.warning, "SNS", "自动发布需要开启 R3 原生发送；已跳过调度")
+            return
+        }
+        // 写链路未验证的版本由 bridge 强制 snsWrite=false：继续排程只会到点发布失败。
+        // 演练模式仍可生成只读草稿（不写微信），因此只在真实发布时跳过。
+        if !SnsWriteGate.shouldRunWriteSchedulers(
+            version: store.hookStatus.wechatVersion,
+            dryRun: settings.bot.dryRun
+        ) {
+            log(.warning, "SNS", "微信 \(snsWriteGateVersionLabel)：朋友圈写链路尚未验证，已跳过自动发布（只读可用）")
             return
         }
         let selected = Set(sns.publish.targetUserIDs)
@@ -1516,6 +1620,15 @@ final class RuntimeCoordinator {
         }
         guard settings.hook.enableNativeSend else {
             log(.warning, "SNS", "自动互动需要开启 R3 原生发送；已跳过调度")
+            return
+        }
+        // 同自动发布：写链路未验证的版本 bridge 会拒绝评论/回复；
+        // 演练只生成记录、不发送，保留可用。
+        if !SnsWriteGate.shouldRunWriteSchedulers(
+            version: store.hookStatus.wechatVersion,
+            dryRun: settings.bot.dryRun
+        ) {
+            log(.warning, "SNS", "微信 \(snsWriteGateVersionLabel)：朋友圈写链路尚未验证，已跳过自动互动（只读可用）")
             return
         }
 
@@ -2212,6 +2325,9 @@ final class RuntimeCoordinator {
         store.oneBotRestartNotice = nil
         // 停止机器人后不再需要防睡眠（偏好保留，下次启动机器人时恢复）。
         SleepPreventionCenter.shared.setRuntimeActive(false)
+        CrashReporter.setBotRunning(false)
+        // 按设置回收本地 TTS（GB 级模型），避免机器人停止后常驻占用内存/CPU。
+        await stopCosyVoiceForRuntimeStopIfNeeded()
         log(.info, "Bot", "机器人运行时已停止")
         // Flush coalesced logs (UI + SQLite) before the runtime goes idle.
         await LogPipeline.shared.flushNow()
@@ -3961,13 +4077,29 @@ final class RuntimeCoordinator {
             await refreshVoiceStatus()
             runtimeReady = store.voiceRuntimeStatus.canSendVoice()
         }
+        let voiceRNG = Double.random(in: 0..<1)
+        // 机器人刚启动时 TTS 可能仍在加载模型：只在「本轮本来就会改发语音」时等预热完成
+        // （最多 30 秒），避免刚启动的第一条语音被降级成文字；纯文字轮次不等待。
+        if voiceConfigured, segmentCount == 1, mention == nil, !voiceModelsReady(voiceSettings) {
+            let provisional = decideVoiceReply(VoiceReplyContext(
+                global: voiceSettings,
+                incomingWasVoice: incomingWasVoice,
+                replyText: plan.fullText,
+                modelsReady: true,
+                runtimeReady: runtimeReady,
+                rng: voiceRNG
+            ))
+            if provisional.isVoice {
+                await awaitCosyVoiceWarmupIfNeeded(voiceSettings)
+            }
+        }
         let voiceDecision = decideVoiceReply(VoiceReplyContext(
             global: voiceSettings,
             incomingWasVoice: incomingWasVoice,
             replyText: plan.fullText,
             modelsReady: voiceModelsReady(voiceSettings),
             runtimeReady: runtimeReady,
-            rng: Double.random(in: 0..<1)
+            rng: voiceRNG
         ))
         let useVoice = voiceDecision.isVoice && segmentCount == 1 && mention == nil
         if voiceDecision.isVoice, !useVoice {
@@ -4416,21 +4548,27 @@ final class RuntimeCoordinator {
         }
     }
 
-    /// App 启动时按设置自动拉起本地语音服务。
+    /// 机器人成功启动后预热本地 TTS。
     ///
-    /// 只在「允许语音回复 + 开启自动启动 + Qwen3-TTS 已安装」时执行：本地模型是
-    /// GB 级的 MLX 旁路，没必要在用户没开语音回复时随 App 启动。
-    private func autoStartCosyVoiceIfNeeded() {
+    /// 替代旧版「App 启动时无条件拉起」：本地模型是 GB 级 MLX 旁路，机器人未运行时
+    /// 没必要常驻。停止机器人时由 `stopCosyVoiceForRuntimeStopIfNeeded()` 按设置回收；
+    /// Voice 设置面板的手动启动与回复路径的按需拉起保持不变。
+    private func startCosyVoiceWarmupIfNeeded() {
+        cosyVoiceWarmupTask?.cancel()
+        cosyVoiceWarmupTask = nil
         let voice = store.settings.bot.voiceSettings
-        guard voice.replyEnabled,
-              voice.cosyVoiceAutoStart,
-              CosyVoiceInstallation.isInstalled() else { return }
         let endpoint = voice.effectiveCosyVoiceEndpoint
         let device = voice.voiceComputeDevice
-        Task { @MainActor [weak self] in
+        cosyVoiceWarmupTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            guard await self.hasCosyVoiceVoices() else {
-                self.log(.info, "Voice", "未添加任何音色，跳过自动启动本地语音服务")
+            let hasVoice = await self.hasCosyVoiceVoices()
+            guard CosyVoiceLifecyclePolicy.shouldWarmUpOnRuntimeStart(
+                replyEnabled: voice.replyEnabled,
+                autoStart: voice.cosyVoiceAutoStart,
+                installed: CosyVoiceInstallation.isInstalled(),
+                hasVoice: hasVoice
+            ) else {
+                self.log(.info, "Voice", "未添加音色或未开启自动启动，跳过本地语音服务预热")
                 return
             }
             await self.syncCosyVoiceEndpoint(voice)
@@ -4439,9 +4577,48 @@ final class RuntimeCoordinator {
                     endpoint: endpoint, device: device)
                 self.log(.info, "Voice", "本地语音服务已就绪（\(device.label)）")
             } catch {
+                guard !Task.isCancelled else { return }
                 self.log(.info, "Voice",
-                    "本地语音服务自动启动未完成：\(error.localizedDescription)")
+                    "本地语音服务预热未完成：\(error.localizedDescription)")
             }
+        }
+    }
+
+    /// 停止机器人时按设置停止本地 TTS，释放 GB 级模型占用的内存/CPU。
+    ///
+    /// `CosyVoiceRuntime.stop()` 只终止本 App 启动的进程（外部服务只清理本地状态），
+    /// 因此不会误杀用户自己启动的服务；等待进程退出，确保没有残留 `server.py`。
+    private func stopCosyVoiceForRuntimeStopIfNeeded() async {
+        cosyVoiceWarmupTask?.cancel()
+        cosyVoiceWarmupTask = nil
+        let voice = store.settings.bot.voiceSettings
+        guard CosyVoiceLifecyclePolicy.shouldStopOnRuntimeStop(autoStart: voice.cosyVoiceAutoStart) else {
+            return
+        }
+        await CosyVoiceRuntime.shared.stop()
+        log(.info, "Voice", "机器人已停止，本地语音服务已停止")
+    }
+
+    /// 首条语音等待启动预热完成（最多 30s），避免「刚启动第一条语音」被降级成文字。
+    ///
+    /// 只等待本 App 已发起的预热；没有预热/已就绪时立即返回，不阻塞正常回复。
+    private func awaitCosyVoiceWarmupIfNeeded(_ settings: VoiceSettings) async {
+        guard CosyVoiceLifecyclePolicy.shouldAwaitWarmupBeforeVoice(
+            replyEnabled: settings.replyEnabled,
+            autoStart: settings.cosyVoiceAutoStart,
+            installed: CosyVoiceInstallation.isInstalled(),
+            hasVoice: settings.hasCosyVoiceVoice,
+            warmupInFlight: cosyVoiceWarmupTask != nil,
+            modelsReady: voiceModelsReady(settings)
+        ), let warmup = cosyVoiceWarmupTask else { return }
+        log(.debug, "Voice", "本地语音服务预热中：首条语音最多等待 30 秒")
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await warmup.value }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(30))
+            }
+            await group.next()
+            group.cancelAll()
         }
     }
 
@@ -4757,6 +4934,7 @@ final class RuntimeCoordinator {
         )
         let status = try await hookManager.installGadget(
             explicitVersionConfigPath: store.settings.hook.versionConfigPath,
+            gadgetPort: store.settings.hook.gadgetPort,
             onProgress: onProgress
         )
         store.hookStatus = status
@@ -5794,7 +5972,12 @@ extension AppStore {
         prepareMoments()
         await moments.refreshPrimingStatus()
         guard moments.status != nil else { return }
-        guard CaptureSetupPlan.needsCommentCapturePrompt(
+        // 写链路被强制只读的版本（见 snsWriteSuppressedVersions）上评论句柄无法用于发送，
+        // 切换自动互动开关时不再弹「捕获评论句柄」，与启动检测/弹窗条目同一门禁。
+        guard CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(
+            snsWriteSuppressed: !SnsWriteGate.requiresCommentHandleCapture(
+                version: hookStatus.wechatVersion
+            ),
             commentCaptureRequired: true,
             commentStatusKnown: true,
             commentReady: moments.status?.commentReady == true

@@ -21,6 +21,8 @@ enum HookError: LocalizedError {
     case installFailed(String)
     case restoreFailed(String)
     case commandFailed(String)
+    /// macOS「App 管理」（App Management）拒绝修改其它 App：写入微信 bundle 返回 Operation not permitted。
+    case appManagementPermissionDenied
 
     var errorDescription: String? {
         switch self {
@@ -58,7 +60,17 @@ enum HookError: LocalizedError {
             return Lf("微信恢复失败：%@", message)
         case .commandFailed(let message):
             return Lf("命令执行失败：%@", message)
+        case .appManagementPermissionDenied:
+            return L(
+                "没有修改微信的权限（macOS「App 管理」）。请在「系统设置 → 隐私与安全性 → App 管理」中打开 WeChat AI，然后完全退出并重新打开 App 再安装。"
+            )
         }
+    }
+
+    /// 是否是系统级「App 管理」权限拒绝；UI 据此显示可操作的系统设置入口。
+    var isAppManagementPermissionDenied: Bool {
+        if case .appManagementPermissionDenied = self { return true }
+        return false
     }
 }
 
@@ -332,6 +344,13 @@ final class HookManager {
         updated.versionConfigFile = versionConfig?.path
             ?? AppResources.expectedVersionConfigPath(version: installation.version)
         updated.matchedVersion = versionConfig != nil
+        updated.versionConfigVerified = WeChatVersionSupport.isHookAdaptationVerified(
+            version: installation.version,
+            configVerified: AppResources.versionConfigVerified(
+                version: installation.version,
+                explicitPath: configuredVersionConfigPath
+            )
+        )
 
         // Optional: merge richer state from manage_wechat.sh (signature, backup path).
         // 必须对「实际生效的微信」执行，否则设置路径失效时会误报未安装。
@@ -344,6 +363,8 @@ final class HookManager {
             if !updated.versionConfigFile.isEmpty, scriptStatus.versionConfigFile != nil {
                 updated.versionConfigFile = scriptStatus.versionConfigFile!
             }
+            updated.signatureValid = scriptStatus.signatureValid
+            updated.backupExists = scriptStatus.backupExists
         }
         // 脚本可能补回版本信息；在状态判定前重新计算已知性。
         updated.wechatVersionKnown = !updated.wechatVersion.isEmpty
@@ -462,6 +483,9 @@ final class HookManager {
     @discardableResult
     func installGadget(
         explicitVersionConfigPath: String = "",
+        /// Gadget 监听端口（设置 → Hook → Gadget 端口）。写进安装后的
+        /// FridaGadget.config，bridge 启动时连接同一端口；默认 27042。
+        gadgetPort: Int = 27042,
         onProgress: ((Double, String) -> Void)? = nil
     ) async throws -> HookStatus {
         onProgress?(0.0, "检查安装环境")
@@ -523,12 +547,17 @@ final class HookManager {
         let handle = ProcessRunner.launch(
             executable: URL(fileURLWithPath: "/bin/bash"),
             arguments: arguments,
-            currentDirectory: bridgeRoot
+            currentDirectory: bridgeRoot,
+            // 安装脚本把它写进 FridaGadget.config；必须与 bridge 的 -gadget_addr 一致。
+            environment: ["WECHAT_GADGET_PORT": String(gadgetPort)]
         )
 
         var exitCode: Int32 = -1
         var failureMessage: String?
         var sawOK = false
+        /// 安装脚本写入 /Applications/WeChat.app 被 macOS App Management 拦截时会输出
+        /// `Operation not permitted`（脚本自身可能不会打印 ERROR:），单独识别后给可操作提示。
+        var permissionDenied = false
         do {
             for try await event in handle.events {
                 switch event {
@@ -541,13 +570,22 @@ final class HookManager {
                     } else if let stage = Self.parseProgressLine(line) {
                         onProgress?(stage.progress, stage.message)
                     } else if !line.isEmpty {
+                        if Self.isAppManagementDenial(line) {
+                            permissionDenied = true
+                            failureMessage = failureMessage ?? line
+                        }
                         onLog?(.debug, "install: \(line)")
                     }
                 case .line(let line, .stderr):
+                    if Self.isAppManagementDenial(line) {
+                        permissionDenied = true
+                        failureMessage = failureMessage ?? line
+                    }
                     if line.contains("ERROR:") && failureMessage == nil {
                         failureMessage = line
                     }
-                    if line.contains("[wechat-hook]") || line.contains("ERROR") {
+                    if line.contains("[wechat-hook]") || line.contains("ERROR")
+                        || Self.isAppManagementDenial(line) {
                         onLog?(.debug, "install(stderr): \(Self.redact(line))")
                     }
                 case .terminated(let code):
@@ -556,6 +594,15 @@ final class HookManager {
             }
         } catch {
             throw HookError.installFailed(error.localizedDescription)
+        }
+
+        if permissionDenied {
+            let message = HookError.appManagementPermissionDenied.localizedDescription
+            var failed = status
+            failed.state = .failed
+            failed.detail = message
+            publish(failed)
+            throw HookError.appManagementPermissionDenied
         }
 
         guard exitCode == 0, sawOK, failureMessage == nil else {
@@ -597,13 +644,24 @@ final class HookManager {
         var exitCode: Int32 = -1
         var output = ""
         var failure: String?
+        /// 还原同样要写 /Applications/WeChat.app，App 管理拒绝时给可操作提示，
+        /// 而不是把 ditto/codesign 的原始输出当成唯一线索。
+        var permissionDenied = false
         for try await event in handle.events {
             switch event {
             case .line(let line, .stdout):
                 output += line + "\n"
+                if Self.isAppManagementDenial(line) {
+                    permissionDenied = true
+                    failure = failure ?? line
+                }
                 onLog?(.debug, "restore: \(line)")
             case .line(let line, .stderr):
                 output += line + "\n"
+                if Self.isAppManagementDenial(line) {
+                    permissionDenied = true
+                    failure = failure ?? line
+                }
                 if line.contains("ERROR") { failure = line }
                 onLog?(.debug, "restore(stderr): \(line)")
             case .terminated(let code):
@@ -611,6 +669,13 @@ final class HookManager {
             }
         }
         guard exitCode == 0, failure == nil else {
+            if permissionDenied {
+                var failed = status
+                failed.state = .failed
+                failed.detail = HookError.appManagementPermissionDenied.localizedDescription
+                publish(failed)
+                throw HookError.appManagementPermissionDenied
+            }
             throw HookError.restoreFailed(failure ?? String(output.suffix(300)))
         }
         onLog?(.info, "微信已从官方备份恢复")
@@ -954,6 +1019,8 @@ final class HookManager {
         var version: String = ""
         var build: String = ""
         var gadgetInstalled: Bool = false
+        var signatureValid: Bool = true
+        var backupExists: Bool = false
         var backupPath: String?
         var versionConfigFile: String?
     }
@@ -975,9 +1042,20 @@ final class HookManager {
         parsed.version = object["version"] as? String ?? ""
         parsed.build = object["build"] as? String ?? ""
         parsed.gadgetInstalled = object["gadgetInstalled"] as? Bool ?? false
+        parsed.signatureValid = object["signatureValid"] as? Bool ?? true
+        parsed.backupExists = object["backupExists"] as? Bool ?? false
         parsed.backupPath = object["backupPath"] as? String
         parsed.versionConfigFile = object["versionConfigFile"] as? String
         return parsed
+    }
+
+    /// macOS App Management 拒绝写入其它 App 时的典型输出（ditto/codesign/rm 均可能触发）。
+    nonisolated static func isAppManagementDenial(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        return lower.contains("operation not permitted")
+            || lower.contains("app management")
+            || lower.contains("appmanagement")
+            || line.contains("App 管理")
     }
 
     private static func parseProgressLine(_ line: String) -> (progress: Double, message: String)? {

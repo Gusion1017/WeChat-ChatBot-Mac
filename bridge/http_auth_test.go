@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -275,5 +276,116 @@ func TestWebSocketSurvivesMalformedSendAction(t *testing.T) {
 	}
 	if got["echo"] != "ok-2" {
 		t.Fatalf("echo = %v, want ok-2 (first action should not kill connection)", got["echo"])
+	}
+}
+
+// TestSendHandlerTimesOutWhenResultNeverArrives 覆盖「发送结果永远不回」：
+// pendingResultMap 只按 target_id 记录一个等待者，并发发往同一会话时后写覆盖
+// 先写，先前的请求永远等不到 worker 结果；hook 不回 upload_*_finish 时同理。
+// 旧实现直接 <-ch 会永久挂住 handler（连接与 goroutine 一起泄漏），这里要求
+// 在 sendResultTimeout 后返回 500 且带可判定的错误串。
+func TestSendHandlerTimesOutWhenResultNeverArrives(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	withToken(t, token)
+
+	// 必须在创建 httptest server 之前改预算：handler 运行在 server 的 goroutine 里。
+	oldTimeout := sendResultTimeout
+	sendResultTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { sendResultTimeout = oldTimeout })
+	t.Cleanup(func() {
+		// 本测试没有 worker，消息会留在 msgChan 里：排空，避免影响后续用例。
+		for {
+			select {
+			case <-msgChan:
+			default:
+				return
+			}
+		}
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(sendHandler))
+	defer srv.Close()
+
+	started := time.Now()
+	resp := doRequest(t, http.MethodPost, srv.URL+"/send_private_msg", "Bearer "+token,
+		`{"user_id":"wxid_x","message":[{"type":"text","data":{"text":"hi"}}]}`)
+	body := readBody(t, resp)
+	// docs/bridge.md §3.3：/send_* 失败一律 HTTP 500（不引入新状态码）。
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500（body %q）", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "send result timeout") {
+		t.Fatalf("body = %q, want 含 send result timeout", body)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("超时预算未生效：耗时 %v", elapsed)
+	}
+}
+
+// TestWaitSendResultsStopsAtFirstError 覆盖 worker 返回错误时的短路行为与
+// 「多个结果按顺序等待」的语义。
+func TestWaitSendResultsStopsAtFirstError(t *testing.T) {
+	oldTimeout := sendResultTimeout
+	sendResultTimeout = 2 * time.Second
+	t.Cleanup(func() { sendResultTimeout = oldTimeout })
+
+	failed := make(chan error, 1)
+	failed <- errors.New("upload image failed")
+	never := make(chan error, 1) // 永远没有结果：短路后不应再等它
+	started := time.Now()
+	err := waitSendResults([]chan error{failed, never})
+	if err == nil || err.Error() != "upload image failed" {
+		t.Fatalf("err = %v, want upload image failed", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("首个错误应立即返回，耗时 %v", elapsed)
+	}
+
+	ok := make(chan error, 1)
+	ok <- nil
+	if err := waitSendResults([]chan error{ok}); err != nil {
+		t.Fatalf("成功结果应返回 nil，实际 %v", err)
+	}
+}
+
+// TestWaitSendResultsTimeout 覆盖「没有任何结果」时的等待预算。
+func TestWaitSendResultsTimeout(t *testing.T) {
+	oldTimeout := sendResultTimeout
+	sendResultTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { sendResultTimeout = oldTimeout })
+
+	never := make(chan error, 1)
+	started := time.Now()
+	if err := waitSendResults([]chan error{never}); !errors.Is(err, errSendResultTimeout) {
+		t.Fatalf("err = %v, want errSendResultTimeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("超时应按预算返回，耗时 %v", elapsed)
+	}
+}
+
+// TestSendHandlerRejectsOversizedBody 覆盖 /send_* 的请求体上限（MaxBytesReader）：
+// 超过上限回 413「请求体过大」，而不是把整个 body 读进内存。上限本身按媒体段取
+// 64MiB（见 sendBodyMaxBytes 注释），这里临时改小以便用小请求验证。
+func TestSendHandlerRejectsOversizedBody(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	withToken(t, token)
+
+	oldLimit := sendBodyMaxBytes
+	sendBodyMaxBytes = 64
+	t.Cleanup(func() { sendBodyMaxBytes = oldLimit })
+
+	srv := httptest.NewServer(http.HandlerFunc(sendHandler))
+	defer srv.Close()
+
+	body := `{"user_id":"wxid_x","message":[{"type":"text","data":{"text":"` +
+		strings.Repeat("a", 256) + `"}}]}`
+	resp := doRequest(t, http.MethodPost, srv.URL+"/send_private_msg", "Bearer "+token, body)
+	got := readBody(t, resp)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413（body %q）", resp.StatusCode, got)
+	}
+	if !strings.Contains(got, "请求体过大") {
+		t.Fatalf("body = %q, want 含 请求体过大", got)
 	}
 }

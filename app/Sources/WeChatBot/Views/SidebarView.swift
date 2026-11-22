@@ -68,6 +68,11 @@ struct SidebarView: View {
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
         }
+        // 切换页面时清理悬停：macOS 26 的 NavigationSplitView 在详情列换页/重排时
+        // 可能吞掉 onHover(false)，留下错位的灰色高亮块（截图中的 AI 模型行）。
+        .onChange(of: store.sidebarSelection) { _, _ in
+            hoveredItem = SidebarHoverState.afterSelectionChange()
+        }
     }
 
     // MARK: Brand
@@ -178,7 +183,11 @@ struct SidebarView: View {
             .animation(reduceMotion ? nil : .smooth(duration: 0.14), value: isSelected)
         }
         .buttonStyle(.plain)
-        .onHover { hoveredItem = $0 ? item : (hoveredItem == item ? nil : hoveredItem) }
+        .onHover { isHovering in
+            hoveredItem = isHovering
+                ? SidebarHoverState.entered(item)
+                : SidebarHoverState.exited(hoveredItem, item: item)
+        }
         .help(helpText(for: item, isSelected: isSelected))
         .accessibilityLabel(item.title)
         .accessibilityHint(hintText(for: item, isSelected: isSelected))
@@ -261,6 +270,22 @@ struct SidebarView: View {
     private var totalUnread: Int {
         store.conversations.reduce(0) { $0 + max(0, $1.unreadCount) }
     }
+}
+
+/// 侧栏悬停状态机（纯逻辑，便于单测）。
+///
+/// macOS 26 的 NavigationSplitView 在详情页切换/重排时可能吞掉 `onHover(false)`；
+/// 页面切换后统一清空，避免上一行的灰色悬停块错位残留。
+enum SidebarHoverState {
+    static func entered(_ item: SidebarItem) -> SidebarItem? { item }
+
+    /// 只清理仍指向该行的悬停，避免「先进入新行、后收到旧行离开」误清当前悬停。
+    static func exited(_ current: SidebarItem?, item: SidebarItem) -> SidebarItem? {
+        current == item ? nil : current
+    }
+
+    /// 选中页变化（点击/快捷键/命令）后清空悬停。
+    static func afterSelectionChange() -> SidebarItem? { nil }
 }
 
 // MARK: - Status capsule

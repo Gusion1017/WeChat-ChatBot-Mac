@@ -146,7 +146,8 @@ curl -s -X POST http://127.0.0.1:5051/tts \
 - `cosyVoiceVoiceID`：本机 `voices.json` 中的音色 id；未选择/音色库为空时显示「未选择音色」。
 - `cosyVoiceEndpoint`：默认 `http://127.0.0.1:5051`（只允许回环）。
 - `cosyVoiceAutoStart`：默认 `true`；**仅当「允许语音回复」开启、本开关开启、已安装且有音色时**，
-  启动 App/打开语音面板会拉起本地服务。
+  机器人启动成功后预热本地服务，停止机器人时按设置回收（2026-11-22 起不再 App 启动即常驻）；
+  面板内可手动启动，首条语音最多等待预热 30s。
 - `cosyVoiceSpeed`：已无 UI 且 Qwen3 不支持（服务端忽略）；保留字段仅兼容旧配置，缺省 1.0、旧值 0.5–2.0 原样回写。
 
 ## 6. HTTP 契约（v2.0.0）
@@ -213,7 +214,7 @@ RTF 口径：`duration = samples / sample_rate`，`rtf = processing_time_seconds
 
 ## 11. 测试与验证状态
 
-- `swift test` **933 项（931 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
+- `swift test` **1010 项（1008 通过 / 2 跳过）0 失败**，`--filter CosyVoice`、`--filter ReferenceImport`
   与真实 GPU E2E 通过；`test_server.py` **72 项通过**（设备解析/auto、health、合成、x-vector
   fallback、headers 等）；完整真实下载/安装在早期版本已跑通。
 - 真实 GPU `/tts` 24k WAV、RTF≈0.54–0.78；`--device auto/gpu`、`--wait-health`、`bash -n`、

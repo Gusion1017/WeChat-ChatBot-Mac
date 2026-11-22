@@ -17,7 +17,7 @@ body:
     attributes:
       label: 问题描述
       description: 用一两句话说明现象；必要时附上发生时间与对应页面。
-      placeholder: 例如：4.1.15.55 开启 R3 原生发送后，首条消息一直停在“排队中”，手动发消息后也不重发。
+      placeholder: 例如：微信 4.2.1.3 开启 R3 原生发送后，首条消息一直停在“排队中”，手动发消息后也不重发。
     validations:
       required: true
 
@@ -28,7 +28,7 @@ body:
       description: 写出最小复现路径；不要粘贴真实聊天内容。
       placeholder: |
         1. 打开 App → 设置 → Hook，开启“R3 原生发送”
-        2. 启动 bridge 并注入微信 4.1.15.55
+        2. 启动 bridge 并注入微信 4.2.1.3
         3. 向测试账号发送一条私聊消息
         4. ...
     validations:
@@ -83,13 +83,13 @@ body:
     id: wechat_version
     attributes:
       label: 微信版本
+      description: 4.1.x 自 2026-11-20 起不再支持；版本不在列表或无法确定时选「其他」并注明实际版本号。
       options:
+        - 4.2.1.3 (270595)
         - 4.2.0.17 (270353)
         - 4.2.0.12 (270348)
         - 4.2.0.9 (270345)
         - 4.2.0.5 (270341)
-        - 4.1.15.55 (270135)
-        - 4.1.12.53 (269365)
         - 其他（请在补充信息中注明版本号）
     validations:
       required: true

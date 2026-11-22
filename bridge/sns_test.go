@@ -427,13 +427,26 @@ func TestSNSJSONHelpers(t *testing.T) {
 
 func TestSNSFridaAdapterContextTimeout(t *testing.T) {
 	oldCall := snsCallFrida
-	t.Cleanup(func() { snsCallFrida = oldCall })
 	release := make(chan struct{})
+	// finished 让 cleanup 等到 fake 调用（在 fridaSNSPRC.call 派生的 goroutine 里）
+	// 真正返回后再还原 snsCallFrida：ctx 超时只让 call 先返回，goroutine 仍会继续
+	// 读这个全局函数变量，先还原会构成 data race（-race 实测）。
+	finished := make(chan struct{})
+	var once sync.Once
 	snsCallFrida = func(fn string, args ...any) (any, error) {
+		defer once.Do(func() { close(finished) })
 		<-release
 		return `{"ok":true,"ready":true}`, nil
 	}
-	t.Cleanup(func() { close(release) })
+	t.Cleanup(func() {
+		close(release)
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("fake snsCallFrida 未被调用或未返回")
+		}
+		snsCallFrida = oldCall
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

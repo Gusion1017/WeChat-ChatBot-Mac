@@ -4,10 +4,11 @@
 > [`bridge.md`](bridge.md)；实现细节（函数地址、结构偏移、密钥派生、发送任务构造）只维护在
 > `hook/script.js` 与 `hook/versions/*.json`，**不写入本文档**（安全披露边界）。
 >
-> **目标微信版本**：macOS 微信 4.2.0.17（build 270353）与 4.2.0.12（build 270348）。
-> **发布状态**：朋友圈（Moments）与 4.2.0.17 适配自 **4.0.0** 起正式提供；下文为 4.1.0 契约。
+> **目标微信版本**：macOS 微信 4.2.1.3（build 270595）、4.2.0.17（build 270353）与 4.2.0.12（build 270348）。
+> **发布状态**：朋友圈（Moments）与 4.2.x 适配自 **4.0.0** 起提供；下文为当前 `main` 源码契约（App 版本已升至
+> **4.2.0 build 38** 已发布，含 4.2.1.3 适配；4.2.1.3 于 2026-11-20 接入。
 > 其它版本不承诺；每个版本需要独立的 `hook/versions/<version>_mac.json`（含 SNS 锚点）。
-> 目前只有这两个版本 JSON 含 SNS 锚点；缺锚点时 SNS 读请求返回 503
+> 目前这三个版本 JSON 含 SNS 锚点；缺锚点时 SNS 读请求返回 503
 > `sns_channel_unconfigured`，写接口同样不可用（发布还会先因无样本返回 503
 > `sns_publish_unavailable`）；不会影响聊天，但也不是 404 关闭。
 > 微信升级后需由 hook 适配流程重新定位 SNS 任务锚点/响应解码器并写入对应版本 JSON。
@@ -15,8 +16,11 @@
 > **范围**：读取朋友圈时间线（纯文字与图片动态）、评论/点赞、单条详情（当前主动补齐不可用：Mac UI 不触发 0xd2，objectdetail 路线放弃；回退时间线缓存，sns.db 只读兜底探针已实现）
 > 与图片下载；`mmsnssync` 增量同步（`CmdBuf` 外层信封解包 + cmd45/46 解码；Type=11 仅产 `sns_comment_hint`，真正未识别命令才计入 unsupported）；
 > 发布朋友圈为分阶段能力（仅文字、完全自动发布；固定**部分可见**并只发给已选目标好友，本迭代不提供公开）；
-> **评论已真机验证、回复已接入（P4，App 端到端；回复协议字段待真机验证）**。
-> **P7 AI 自动互动（2026-11-09 新增，2026-11-10 回复链路真机闭环；2026-11-11 起互动对象改为复用聊天白名单私聊对象；其余动作待扩展验证）**：机器人运行期间只对「聊天白名单里的私聊对象」
+> **评论与回复已真机验证（P4，App 端到端；4.2.0.17 2026-11-08，4.2.1.3 2026-11-22）**。
+> **4.2.1.3（2026-11-22 真机）**：发布 / 评论 / 回复 / 主动同步 / 时间线主动刷新均已真机验证；
+> hook 的 `task_layout_mismatch` 安全闸保留（捕获 vtable 与版本表不一致时拒绝发送，防未来版本漂移，
+> 不是功能限制）。赞/取消赞与 objectop 写接口仍未打通（503），userpage 主动发送未验证（passive）。
+> **P7 AI 自动互动（2026-11-09 新增；2026-11-10 回复链路真机闭环；2026-11-11 起互动对象改为复用聊天白名单私聊对象；2026-11-22 4.2.1.3 评论/回复/自动互动真机闭环）**：机器人运行期间只对「聊天白名单里的私聊对象」
 > 的新动态自动写评论，并回复自己动态下的评论 / 别人对自己评论的回复（互动对象每轮由白名单 + 私聊会话推导，白名单为空则不互动，**不会**退化为全部好友）；可用识图理解图片内容；默认全关。
 > **P8 朋友圈记忆（2026-11-09 新增）**：读到好友（私聊且开启 AI 自动回复）的动态后，把正文与（若本轮已生成）
 > 图片分析摘要写入该好友的 v2 记忆卡（`MemorySource.moments`），让之后的聊天与自动互动能记得对方最近发过什么；
@@ -30,24 +34,25 @@
 | P1 时间线读取 | ✅ 可用（被动缓存） | 用户手动打开一次微信朋友圈 → hook 捕获真实响应 → `/sns/timeline` 返回 `source=passive`；真机验证 10 条动态；不控制电脑界面。bridge 只认最近 10 分钟内捕获的响应（§4.2） |
 | P1 翻页（加载更多） | ⚠️ 部分可用（游标修复，被动页重复） | 时间线只认 `max_id/first_page_md5/session` 游标；`/sns/sync` 的同步游标（`key_buf/continue_flag`）不再写入时间线游标。分页仍读被动缓存（最近一次捕获的那一页），不能真正取到更旧数据；App 去重并在「无新动态且游标未前进」时停止翻页（§1.1.1） |
 | P5 增量事件（App 本地 fallback） | ✅（v2，无页面入口） | CmdList 未解码前，App 用「刷新前后时间线对比」产生 `source=fallback` 的新动态/新评论/新点赞事件，仅供内部缓存/评论预览；页面不提供「N 条更新」入口；**不代表服务端实时推送** |
-| P1 主动刷新 | ✅ 已打通（v2.8，4.2.0.17） | 手动打开一次朋友圈后，hook 捕获真实 timeline 请求体 + service + closure；bridge 首页刷新重放请求体，经 R3 合成任务拿回原生响应（真机连续 3 次 `source=native`，probe=false 生产模式验证）。未捕获/失效时回退被动缓存 |
+| P1 主动刷新 | ✅ 已打通（v2.8，4.2.0.17；2026-11-22 4.2.1.3 真机确认） | 手动打开一次朋友圈后，hook 捕获真实 timeline 请求体 + service + closure；bridge 首页刷新重放请求体，经 R3 合成任务拿回原生响应（4.2.0.17 真机连续 3 次 `source=native`；4.2.1.3 修正 BodyReturn 为真实 BL 返回点后真机确认 `source=native`、`body_captured=true`、`ready=true`）。未捕获/失效时回退被动缓存 |
 | 评论/点赞展示 | ✅ 随响应解析 | 不需要额外接口；详情展开会尝试主动补齐，但 **Mac 微信 UI 不触发 0xd2 mmsnsobjectdetail，objectdetail 路线已放弃**，当前回退时间线缓存（`source=cache`，评论可能不全，§4.3/§8）；App 标记为「评论可能不完整」而不是错误态。sns.db 只读 schema/评论补全已实现（真机读取两条回复 + P7 自动回复 c<id3>，页面闭环）。回复关系同时返回 `reply_to` / `reply_to_name`（v3.6） |
-| P4 评论 / 回复 | ✅ 评论真机验证（2026-11-08，4.2.0.17）；回复仍待真机 | 朋友圈卡片「写评论」/ 评论区「回复」→ 二次确认 → `/sns/comment`（`confirm:true`）→ 合并回包/本地回显；写开关关闭、评论句柄/请求模板未捕获时给出可行动提示。**评论用 hook 捕获的真实请求做模板 patch（保留 mac 隐藏字段）**；真机评论成功（回包 `comment_id`、时间线可见），bridge 重启后模板恢复仍可评论。回复的 `ReplyCommentId2`/`ReferAction` 语义仍未真机验证；失败不自动重发 |
-| P4 评论/点赞句柄捕获 | ✅ 真机验证（2026-11-08） | hook 的 slot13 捕获从 timeline/sync/post 扩展到 0xD5（评论/点赞共用）；`snsStatus.commentReady` 经 `/sns/status` 暴露为 `comment_ready`。除闭包句柄外，hook 用 clientId 标记 `sns_comment:` 在 `autoBufferWrite` 捕获**真实评论请求体**并随账号目录持久化；评论必须用它做模板 patch。首次需用户在微信里手动评论一次（点赞也可能捕获）以同时拿到句柄与模板 |
-| P7 AI 自动互动（评论/回复） | 🧪 回复链路真机闭环（2026-11-10）；其余动作待扩展验证 | 机器人运行期间按「聊天白名单中的私聊对象」自动评论好友新动态、回复自己动态下的评论、回复别人对自己评论的回复；互动对象每轮由白名单 + 私聊会话推导（不落库），白名单为空则不互动、**不会**退化为全部好友；独立于朋友圈页是否可见；只处理启用后出现的新内容（`startedAt` 持久化、**重启保留**、关闭互动/切号清空；停机期间 24h 内且未去重的回复会补处理）；默认全关；依赖 native 主动刷新 + 0xD5 评论句柄（§1.5） |
+| P4 评论 / 回复 | ✅ 真机验证（评论 2026-11-08 4.2.0.17；4.2.1.3 于 2026-11-22 评论/回复全部通过） | 朋友圈卡片「写评论」/ 评论区「回复」→ 二次确认 → `/sns/comment`（`confirm:true`）→ 合并回包/本地回显；写开关关闭、评论句柄/请求模板未捕获时给出可行动提示。**评论用 hook 捕获的真实请求做模板 patch（保留 mac 隐藏字段）**；真机评论成功（回包 `comment_id`、时间线可见），bridge 重启后模板恢复仍可评论。回复已真机验证（带 `reply_comment_id` 返回 `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确；回复请求用独立 `sns_reply:` 标记，不覆盖评论模板；回复自己的评论被微信拒绝 `ret=-2`）；`ReplyCommentId2`/`ReferAction` 旧字段语义以真机模板 patch 为准；失败不自动重发 |
+| P4 评论/点赞句柄捕获 | ✅ 真机验证（2026-11-08） | hook 的 slot13 捕获从 timeline/sync/post 扩展到 0xD5（评论/点赞共用）；`snsStatus.commentReady` 经 `/sns/status` 暴露为 `comment_ready`。除闭包句柄外，hook 在 `autoBufferWrite` 按返回地址 `snsCommentBodyReturn`（4.2.1.3 `0x2fd46e8`）捕获**原生评论请求体**（仅 Type==2 且无 field 9/12；点赞体/回复体不覆盖，解析失败保留旧模板），并兼容旧 clientId 标记；模板随账号目录持久化，评论优先用它做 patch。首次需用户在微信里手动评论一次（点赞也可能捕获）以同时拿到句柄与模板 |
+| P7 AI 自动互动（评论/回复） | ✅ 4.2.1.3 真机闭环（2026-11-22；评论/回复/自动回复均成功） | 机器人运行期间按「聊天白名单中的私聊对象」自动评论好友新动态、回复自己动态下的评论、回复别人对自己评论的回复；互动对象每轮由白名单 + 私聊会话推导（不落库），白名单为空则不互动、**不会**退化为全部好友；独立于朋友圈页是否可见；只处理启用后出现的新内容（`startedAt` 持久化、**重启保留**、关闭互动/切号清空；停机期间 24h 内且未去重的回复会补处理）；默认全关；依赖 native 主动刷新 + 0xD5 评论句柄（§1.5） |
 | P7 互动识图 | 🧪 代码已实现（待真机） | 复用「AI 模型 → 识图模型」：一条动态内的全部图片（微信单条最多 9 张）整组一次送入模型分析，失败自动回退逐张识别（原图失败再回退缩略图），把分析注入评论生成提示词；描述只驻留内存（缓存上限 80 条），不落库、不上传；纯视频动态跳过，纯图片无描述时不猜内容 |
 | P7 互动账本/频率 | ✅ App 侧实现（单测覆盖） | 按账号 UserDefaults 保存已处理动态/评论键、自己的评论 ID、每天互动次数/最近时间/每条动态当天回复数；每天上限 0–20（**0 = 无上限**）、最小间隔 0–180 分钟、只处理最近 1–72 小时、单帖每天最多回复 0–5 条（**0 = 无上限**）、检查间隔 60–600 秒；失败 10 分钟退避、最多 3 次。演练使用独立 `dryRunHandled` / `dryRunAttempts`（不污染真实去重/重试） |
 | P7 评论句柄捕获提示 | ✅ 2026-11-09 | 开启自动互动（且非演练、已有互动对象/动作）后，设置页开关与启动检测都会把「评论或点赞一次」列为统一「捕获发送句柄」弹窗的条目；评论输入面板未就绪时提供「去捕获/查看步骤」入口（§1.4/§2） |
 | P8 朋友圈记忆 | 🧪 代码已实现（2026-11-09，待真机） | 时间线（页面刷新或自动互动的 native 刷新）读到的好友动态写入其 v2 记忆卡：`source=moments`、确定性去重 ID、正文 ≤300 字、图片仅记录数量/已生成的识图摘要；聊天召回、自动互动与自动发布文案都能看到。默认开启，只写本机，不涉及服务端；**演练模式不写** |
 | 图片 | ✅ 真机验证（v3.3） | 时间线解析时注册 raw media（url/key/token），bridge 用 token 签名 URL 下载 + ISAAC-64 解密；真机 thumb/full 均返回合法 JPEG（thumb 22KB / full 263KB），同参数复用已解密文件。列表缩略图由「自动加载缩略图」控制，原图在查看器按需下载 |
+| P1/P5 主动同步（4.2.1.3） | ✅ 真机验证（2026-11-22） | 4.2.1.3 修正 `snsSync` 任务类（ctor `0x3bbccb4` / vtable `0x85e2178` / decoder `0x3bbce7c` / size `0xD0` / bodyReturn `0x3bbce28`）后，`POST /sns/sync` 返回 cmd 45/46 与 `sns_new_post` / `sns_comment` 事件，微信未崩溃；主动 sync 可用，timeline 仍可 `source=native` 主动刷新 |
 | P5 实时通知 | 🧪 CmdBuf 信封已修复；Type=11 由 DB 补全 | `/sns/sync` 返回命令计数；bridge 先剥 `CmdBuf` 外层信封（`{1: payload_len, 2: payload}`），cmd45 新动态可解码，cmd46 的 Type 1/2/3 可解为点赞/评论；**4.2.0.17 实测好友回复为 Type=11、hint 本身无正文与评论 ID，只发 `sns_comment_hint`；App 静默刷新后由 sns.db 只读补全正文，页面可展示、P7 可自动回复（真机生成 c<id3> 闭环）**；真正未知动作才计入 `unsupported_cmd_count`；WS 推送仍未实现，App 另有时间线 diff 兜底 |
-| P3 发布 | ✅ 文字发布真机验证（v3.2 + 2026-11-08） | 手动发布入口已移除。post 用捕获的真实请求做模板（**逐字段保留未知字段** + ClientCheckDat），替换正文/可见性后经 R3 提交；真机 partial（仅一个好友）与 public（联调）均成功：回包 `post_id`/`create_time`，时间线可见。**2026-11-10 抓包校准：mac 原生「部分可见」是 Privacy=0 + GroupUsers=[好友]；旧实现写 Privacy=2，回包成功但目标好友看不到，已修正（§4.6）。2026-11-08 复测：private 返回 `post_id/create_time`（decoder matched），但微信 UI/时间线不显示「仅自己可见」动态**；图片/视频未实现 |
+| P3 发布 | ✅ 真机验证（v3.2；4.2.1.3 2026-11-22 发布成功） | 手动发布入口已移除。post 用捕获的真实请求做模板（**逐字段保留未知字段** + ClientCheckDat），替换正文/可见性后经 R3 提交；真机 partial（仅一个好友）与 public（联调）均成功：回包 `post_id`/`create_time`，时间线可见。**2026-11-10 抓包校准：mac 原生「部分可见」是 Privacy=0 + GroupUsers=[好友]；旧实现写 Privacy=2，回包成功但目标好友看不到，已修正（§4.6）。2026-11-08 复测：private 返回 `post_id/create_time`（decoder matched），但微信 UI/时间线不显示「仅自己可见」动态**；图片/视频未实现。**2026-11-22 4.2.1.3 真机：post 返回 `post_id`，动态在朋友圈可见（文字、partial 仅指定好友可见）；发布/评论/回复/同步均通过** |
 | 自动发布 | 🧪 调度/文案已实现（v2；2026-11-10 修复「配额跳过不可解释」，运行期复验待做，§8） | 两种时机（时段内随机 / 固定时间点）、**必须显式选择发布对象**、每对象每日上限/最小间隔、每轮目标间隔 ≥61s、旧 `memories` 表（v1）补充 + **v2 记忆卡召回**生成文案、ledger 持久化；跳过原因写入「上次结果」、所有对象当日额度用尽时顺延次日；依赖写通道 |
 | 自动发布前置条件 | ✅ 面板展示 | 机器人运行中 + 朋友圈功能 + 允许发布（写） + 自动发布 + R3 原生发送 + 已选对象 + 有效时段/时间点 + 写通道样本（演练模式不需要）；不满足时在「发布」卡内列出原因（含机器人未运行，§1.3） |
 | 演练草稿（outbox） | ✅（v3.0 只读） | 仅演练模式下到点生成只读草稿，存 `accounts/<wxid>/sns-outbox.json`（上限 20 条）；「机器人 → 朋友圈 → 演练草稿」只读预览/清空，不发送、不写 ledger；正式自动发布完全无人工确认 |
 | 设置生效范围 | ✅（v2） | App 侧设置改动即时生效（按签名重建调度器，且仅在机器人运行/启动中时创建）；bridge 运行期开关（`snsEnable`/`snsWrite` 及派生的 `snsReadMode`）仍需重启机器人，面板显示「配置待生效」 |
 | 视频 | ⏳ 占位 | 只展示元数据；播放/下载后续阶段 |
-| 设置位置 | ✅ | 内容在「会话」下方；设置在「机器人 → 朋友圈」（v3.7 面板：顶部三联分段「读取 / 互动 / 发布」+ 状态总览；发布与自动发布仍合并为一张卡；互动卡含互动对象只读行（来源为聊天白名单私聊对象，可跳转「机器人 → 名单」编辑）、三种动作、频率与「最近互动」sheet） |
+| 设置位置 | ✅ | 内容在「会话」下方；设置在「机器人 → 朋友圈」（v3.7 面板：顶部三联分段「读取 / 互动 / 发布」+ 状态总览；发布与自动发布仍合并为一张卡）。**发布对象与互动对象统一在「机器人 → 名单 → 朋友圈对象」配置**（2026-11-20 起）：名单页提供发布对象多选与互动对象只读计数，朋友圈面板只保留摘要与「去名单…」跳转 |
 
 ## 1. 能力与行为
 
@@ -62,8 +67,12 @@
 | 刷新 | App 主动刷新（mac 微信客户端不支持下拉刷新，不能依赖 UI）：native 模式重放已捕获请求体，未捕获/失效时回读最近一次真实响应缓存，不控制微信窗口。工具栏「同步」另发一次 `/sns/sync`（事件解码见 §1.2；未知命令 best-effort） | 工具栏按钮 |
 | 评论/点赞 | 随动态返回；展开详情时尝试补齐（当前回退缓存，评论可能不全）；评论行的「回复」可带 `reply_comment_id` 发起回复 | 动态卡片 / 评论区 |
 
-### 1.1.1 主动刷新（v2.8，4.2.0.17）
+### 1.1.1 主动刷新（v2.8 起；4.2.0.17 / 4.2.1.3）
 
+- **4.2.1.3 请求体锚点（2026-11-22）**：`snsTimelineBodyReturn` / `snsSyncBodyReturn` /
+  `snsPostBodyReturn` 此前误填为 vtable 槽位函数入口（不是可返回的调用点），导致 timeline 请求体捕获失败、
+  只能读被动缓存；现修正为真实 **BL 调用返回点**（与 4.2.0.17 同口径，`scripts/check_hook_template.py`
+  校验 4 字节对齐），timeline 首页刷新可走主动刷新（`body_captured=true`）。
 - 首次读取前，用户需在本机微信手动打开一次朋友圈：hook 捕获**真实 timeline 请求体**、提交该请求的
   **service 对象** 与 **closure seed**（仅驻留本机内存）。
 - 之后 bridge 在首页/刷新（`max_id=0`）时重放捕获请求体，经 R3 合成任务提交并拿回**原生响应**
@@ -119,7 +128,7 @@
 ### 1.3 发布（阶段 P3）
 
 - 支持纯文字（bridge 上限 1500 字；App 自动生成 60–120 字）；图片/视频后续（见 §8 未决项）。
-- **自动发布固定为部分可见，且只勾选该条文案对应的目标好友**（发布对象由用户在「发布对象」sheet 显式选择，
+- **自动发布固定为部分可见，且只勾选该条文案对应的目标好友**（发布对象在「机器人 → 名单 → 朋友圈对象」显式选择，
   文案基于该会话的人格 + 旧 `memories` 表（v1，补充）+ v2 记忆卡召回生成）。bridge 协议仍支持 `private`，但 App 自动发布不会降级为「仅自己可见」；
   未选择对象时调度器不启动（见本节）。
 - 本迭代不提供「公开」选项：避免把只属于某个会话的内容泄露给所有人；后续若要公开需单独评审。
@@ -169,9 +178,10 @@
   让今天剩余时刻重新进入等待。**真机实况（2026-11-10 01:53）**：到点触发但当日已记 2 条、上限 1 条，
   本轮未向 bridge 发 `/sns/post`；此前面板只显示「跳过 1」且仍显示「下一次 01:53」，本修复后显示原因与
   次日时刻。
-- **发布对象必须显式选择**（`publish.targetUserIDs`，默认空数组 = 不发布；面板把可见性并入该行：固定部分可见、只发给已选好友，不单列「谁可以看」）：旧版会向「所有开启 AI
-  自动回复的私聊会话」扇出，属隐私风险；v2 只发布给勾选的好友，「选择…」按钮打开「发布对象」sheet，
-  候选只列私聊且开启 AI 自动回复的会话。未选择对象时调度器不启动（日志说明原因）。
+- **发布对象必须显式选择**（`publish.targetUserIDs`，默认空数组 = 不发布；可见性固定部分可见、只发给已选好友，不单列「谁可以看」）：旧版会向「所有开启 AI
+  自动回复的私聊会话」扇出，属隐私风险；v2 只发布给勾选的好友。2026-11-20 起「选择…」入口移到
+  「机器人 → 名单 → 朋友圈对象」，候选仍只列私聊且开启 AI 自动回复的会话；朋友圈面板只显示已选人数与
+  「去名单…」跳转。未选择对象时调度器不启动（日志说明原因）。
 - **完全自动发布（v3.0）**：没有手动发布入口，也没有「发布前确认」；到点直接发布（成功才计入 ledger）。
 - **演练模式（可选安全阀）**：`bot.dryRun` 开启时只生成只读「演练草稿」（`accounts/<wxid>/sns-outbox.json`，
   上限 20 条），不发送、不写 ledger、不写记忆；不受真实「每好友每日上限 / 最小间隔」限制（用于随时预览，
@@ -231,10 +241,32 @@
   为 false 时 App 不发请求，输入面板展示「评论通道未就绪」和「重新检测」。
   **真实评论请求模板**通常随同一次捕获得到，但 App 无法从 `/sns/status` 判断模板是否就绪；
   模板缺失时 bridge 仍会退回自拼报文提交（真机 4.2.0.17 会被服务端静默丢弃，见下条与 §4.7）。
+- **4.2.1.3 任务类锚点修正（2026-11-22 真机）**：旧版本表把 0xD5 评论与 0xD6 同步的任务类锚点填成了同版本
+  其它子系统的任务类（comment 旧值对应广告 `AdChannelMsgReq`，sync 旧值对应 `NewSyncRequest`），导致
+  评论提交后约 2s 微信 SIGSEGV（EXC_BAD_ACCESS，`mars::stn` 线程）。已改为真机捕获一致的任务类：
+  - comment：ctor `0x2fd4590` / vtable `0x8562f08` / decoder `0x2fd473c` / size `0xC0` / B1/B2 `+0x78`/`+0xA0`；
+  - sync：ctor `0x3bbccb4` / vtable `0x85e2178` / decoder `0x3bbce7c` / size `0xD0` / bodyReturn `0x3bbce28`。
+  修正后真机验证通过：**发布**（`post_id`、动态可见）、**评论**（`comment_id`）、**回复**（带
+  `reply_comment_id`，回包 `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确）、**主动同步**
+  （cmd 45/46、`sns_new_post`/`sns_comment` 事件）与 **timeline 主动刷新**（`source=native`、
+  `body_captured=true`、`ready=true`），微信均未崩溃。**安全闸保留**：`snsSendRequest` 对所有 SNS 合成任务
+  校验捕获 `taskVtable` 与版本 JSON `vtable`，不一致时分配前返回 `task_layout_mismatch`、不进入 slot13
+  （防未来版本漂移，不是功能限制）。注意：回复**自己**的评论会被微信拒绝（`ret=-2`，服务端语义），回复
+  他人评论正常。赞/取消赞与 objectop 写接口仍未打通（503），userpage 主动发送未验证（保持 passive）。
 - **模板必要（2026-11-08 真机）**：mac 4.2.0.17 的评论请求含公开 schema 之外的字段
-  （`SnsAction field 23` / mac 昵称取值）；bridge 自己拼的报文会被服务端静默丢弃（任务 `ret=0`、
-  12s 无任何 decoder 回包）。因此 bridge 用 hook 捕获的**真实评论请求**做模板 patch：保留未知字段，
+  （`SnsAction field 23` / mac 昵称取值）；4.2.0.17 上 bridge 自己拼的报文会被服务端静默丢弃（任务 `ret=0`、
+  12s 无任何 decoder 回包；4.2.1.3 真机确认自拼报文可被接受，见下条）。因此 bridge 优先用 hook 捕获的
+  **真实评论请求**做模板 patch：保留未知字段，
   只替换目标动态、动作与 `client_id`；模板随账号目录持久化，bridge 重启后可恢复。
+- **原生评论模板捕获 + 污染过滤（2026-11-22）**：hook 新增 `snsCommentBodyReturn`（4.2.1.3 JSON 值
+  `0x2fd46e8`），在 `autoBufferWrite` 处按返回地址捕获**原生评论请求体**；仅当 `SnsAction` Type==2 且无
+  field 9/12 时写入 `bodies.comment`，点赞体（Type=1）与回复体不会覆盖模板，解析失败保留旧模板。同时保留
+  clientId 标记兼容：回复请求用 `sns_reply:`、普通评论/点赞用 `sns_comment:`，hook 只把后者也作为模板候选。
+  模板复用前仍做健康检查：只有 `SnsAction` field 5（Type）== 2 且无 field 9/12 才复用；点赞形态/被回复
+  污染的模板用于普通评论/回复时一律忽略、退回自拼并记 Warn，等待下一次干净评论重建。**4.2.1.3 真机**：手动
+  评论一次后账户捕获的 comment 模板为 Type=2/无回复字段（原生体）；随后 App bridge `POST /sns/comment` 成功
+  返回 `comment_id`（微信未崩溃），timeline 读取 comments=5，说明「原生模板 + patch」端到端可用。模板缺失时
+  退回自拼仅是**兜底**（普通评论自拼可能无回包，不保证成功；自拼回复未真机验证）；点赞仍优先模板。
 - **真机验证（2026-11-08，4.2.0.17）**：手动评论一次 → `/sns/status.comment_ready=true`；
   `POST /sns/comment` 返回 `comment_id`，时间线评论数/列表同步更新；重启 bridge 后模板恢复，
   再次调用仍成功。4.2.0.17 的回复目标已真机确认：手动回复某好友 的 reply 时请求 `ReplyCommentID=<id>`
@@ -257,7 +289,7 @@
   点赞/取消赞、删评论仍只有 bridge 接口，App 不提供入口；**自动评论/回复由 P7 独立调度（§1.5），仍不提供自动点赞**；
   手动与自动写入都只允许对已读取到的动态/评论操作。
 
-### 1.5 AI 自动互动（P7，2026-11-09）
+### 1.5 AI 自动互动（P7，2026-11-09；2026-11-22 4.2.1.3 真机闭环）
 
 - **三种动作**（可分别开关，全部只针对「互动对象」）：
   1) **评论新动态**：互动对象发布新动态时，AI 写一条评论；
@@ -272,6 +304,8 @@
   已删除，旧 `profile.json` 里的这两个键由解码器**忽略**（不迁移、不报错、无需用户操作）。
   **白名单为空在聊天回复里表示「不限制」，但自动互动不会退化为「全部好友」：白名单为空 = 没有互动对象 = 不启动自动互动。**
   聊天**黑名单仍是硬门槛**：即使好友在白名单里，只要在聊天黑名单中就不会被自动互动。
+  「机器人 → 名单 → 朋友圈对象」以只读行展示当前互动对象数量（不新增第二份互动名单）；朋友圈面板的
+  互动对象行同样只显示摘要与「去名单…」跳转。
   三种动作均只针对该集合，不再存在「所有好友」回复范围。
 - **前置条件**：机器人运行中 + 朋友圈功能 + 允许发布（写）+ R3 原生发送 + 互动开关 + **白名单私聊对象非空** +
   至少一种动作 + **已捕获 timeline 请求体且本轮刷新为 native**（回退被动缓存时整轮跳过，避免把旧缓存
@@ -290,6 +324,10 @@
 - **Type=11 hint 边界**：App 收到 `sns_comment_hint` 只**静默触发一次 timeline 刷新**，不显示任何 UI；
   hint 本身不进入 P7 候选、不自动回复、不写 bridge 评论缓存、不展示正文、不做未读计数、不持久化。
   sns.db 补全的评论是普通评论对象（`comment_id_confirmed`），确认后可进入 P7；真机 P7 自动回复 c<id3> 已闭环。
+- **4.2.1.3 真机闭环（2026-11-22）**：安装版 4.2.0 + App 管理 bridge 下，普通评论成功（回包 `comment_id`）、
+  回复成功（`comment_id` 与 `reply_to`/`reply_to_user_id`/`reply_to_name` 正确）；P7 对互动对象的新评论自动
+  回复成功，timeline 可见 AI 回复，微信全程未崩溃。评论写链路此前 comment/sync 任务类错配导致的崩溃已修正；
+  `task_layout_mismatch` 安全闸保留。
 - **频率**：每天最多互动次数（评论 + 回复合计）0–20，**0 = 无上限**（只受最小间隔与检查节奏约束）；
   两次互动最小间隔 0–180 分钟；每条动态当天最多回复 `maxRepliesPerPost`（0–5，**0 = 无上限**；
   评论动态不计入）；只处理最近 `maxAgeHours`（1–72）内的内容；检查间隔 60–600 秒。
@@ -428,7 +466,8 @@ hook/script.js（微信进程）
 - `read_mode`：`native`（可尝试主动刷新；未捕获请求体时自动回退缓存）/ `passive`（强制只读缓存；
   仅版本 JSON 手工配置时出现，App 不下发）/ `off`（App 在功能关闭时下发的值；同时 `snsEnable=false`，
   此时 `/sns/*` 404）。`captured` 为 hook
-  已捕获的 SNS 任务类型数，**不等于请求体一定已捕获**（4.2.0.12 无请求体返回锚点）；`body_captured`
+  已捕获的 SNS 任务类型数，**不等于请求体一定已捕获**（4.2.0.12 无请求体返回锚点；4.2.1.3 于
+  2026-11-22 修正为真实返回点后可捕获）；`body_captured`
   才表示 timeline 真实请求体已捕获（`mmsnstimeline` 记录 `bodyLen>0`）。App 在
   `read_mode=native && body_captured` 时显示「原生通道」，因此 4.2.0.12 会显示「原生待捕获」而不是
   夸大能力；旧 bridge 不返回 `body_captured` 时 App 退回 `captured>0` 兼容判定。
@@ -501,6 +540,12 @@ hook/script.js（微信进程）
   4.2.0.17 主动发送未就绪时，bridge **不会控制微信/电脑界面**；用户手动打开一次朋友圈后，
   hook 捕获最近一次真实响应，时间线请求回退 `source=passive` 读取该缓存。
   微信进程重启后需要再手动打开一次完成初始化（bridge 重启会尝试恢复已持久化样本，见 §1.1.1）。
+- **首屏模板覆盖策略（2026-11-22）**：hook 捕获 timeline 请求体时解析 protobuf field 3（MaxID）：
+  MaxID==0/缺省视为首屏，允许覆盖已保存模板；MaxID!=0 的分页请求在已有模板时不覆盖，解析失败保留旧模板。
+  避免用户滚动加载更多后，App 刷新重放分页游标、看不到最新动态。
+  **已知限制**：时间线以**最近一次捕获的首屏请求**为准；若用户在微信朋友圈滚动到很靠后的位置再重新打开，
+  捕获到的「首屏」请求可能仍带旧游标，App 刷新会显示「最近动态 + 旧一页」。此时回到朋友圈顶部再刷新/重新
+  打开一次即可重捕干净首屏。
 - 正文与评论按原样返回，不做 AI 改写；`text` 超长按 2000 字符截断并带 `text_truncated:true`。
 - `media[].thumb_key` / `media[].url_key` 存时间线 XML 里的 CDN 地址（原始 URL，不含
   token/key——token/key 只留在 bridge 内存），由 `/sns/media` 下载并解密成本地文件。
@@ -645,10 +690,15 @@ hook/script.js（微信进程）
 - `objectop`: `{post_id, op:"delete_comment|delete_post|set_private|set_public", comment_id?, confirm}`；
   同因缺 0xDA 任务锚点，当前返回 503 `sns_channel_unconfigured`，只有接口与用例。
 - **评论句柄与模板**：0xD5 任务的闭包 seed 由 hook 在用户手动评论（点赞也可能）时捕获（slot13 捕获已覆盖 0xD5）；
-  同时 hook 在 `autoBufferWrite` 按 clientId 标记 `sns_comment:` 捕获**真实评论请求体**，随账号目录持久化。
-  评论请求优先用该模板 patch（保留 `SnsAction field 23` 等 mac 隐藏字段），没有模板时退回自拼报文
-  （真机 4.2.0.17 会 12s 超时无回包，仅作兜底并记 warning）；没有 seed 时 bridge 返回 503
-  `sns_comment_unavailable`，不会提交请求。
+  同时 hook 在 `autoBufferWrite` 按返回地址 `snsCommentBodyReturn`（4.2.1.3 `0x2fd46e8`）捕获**原生评论请求体**，
+  仅 Type==2 且无 field 9/12 时写入模板（点赞体/回复体不覆盖，解析失败保留旧模板），并兼容旧 clientId 标记；
+  模板随账号目录持久化。评论请求优先用该模板 patch（保留 `SnsAction field 23` 等 mac 隐藏字段），没有模板时
+  退回自拼报文（4.2.0.17 曾 12s 超时无回包；4.2.1.3 普通评论自拼可能无回包，**仅作兜底**并记 warning；自拼
+  回复未真机验证）；没有 seed 时 bridge 返回 503 `sns_comment_unavailable`，不会提交请求。
+- **模板健康检查与污染回退（2026-11-22）**：回复请求用 `sns_reply:` 前缀，普通评论/点赞用 `sns_comment:`，
+  hook 只持久化 `sns_comment:` 请求体。只有模板 `SnsAction` field 5（Type）== 2 且无 field 9/12 时才复用；
+  点赞形态（Type=1）或被回复污染的模板用于普通评论/回复时一律忽略、退回自拼报文并记 Warn，等待下一次干净
+  评论重建模板。普通评论自拼在 4.2.1.3 已验证；自拼回复未真机验证；点赞仍优先模板。
 - **频率**：comment/like/objectop 各 1 次/10 秒、20 次/小时；`check` 与 `record` 分离，
   只有微信确认成功后才记账，失败/未就绪的尝试不消耗配额。
 - **失败语义**：不自动重试（评论重复是高风险）；超时由 App 提示先到微信确认。
@@ -772,13 +822,15 @@ hook/script.js（微信进程）
 > 或手动打开统一「捕获发送句柄」弹窗时会显示「打开/发布一次朋友圈」条目（仅朋友圈开启时）。机器人启动后
 > 会在 bridge/hook 就绪时查询一次 `/sns/status`：读取样本或（开启发布后的）post 样本缺失时，自动弹一次
 > 统一弹窗；同一次机器人运行内最多一次，每次启动都重新检测。样本持久化恢复成功时不会弹。
-> **评论通道（0xD5）不进入启动弹窗**：首次打开评论输入面板时按 `comment_ready` 提示手动点一次评论/赞，
-> 避免强迫不使用评论的用户操作。
+> **评论通道（0xD5）只在开启自动互动后进入启动弹窗**：开启「自动互动（评论/回复）」、已配置互动对象、
+> 非演练时，评论句柄与读取/发布样本一样参与启动检测并列入统一弹窗（`CaptureSetupItem.comment`）；
+> 4.2.0.12 / 4.2.0.17 / 4.2.1.3 均可显示。仅手动评论（未开自动互动）的用户不会被要求先评论，仍只在评论
+> 输入面板看到 inline「评论通道未就绪」提示。
 > 没有独立的朋友圈启动提示或日志旁路。
 
 ### 6.1 版本 JSON 与运行期覆盖
 
-**仓库版本 JSON**（仅 4.2.0.12 / 4.2.0.17 有 SNS 段）：
+**仓库版本 JSON**（4.2.0.12 / 4.2.0.17 / 4.2.1.3 有 SNS 段）：
 
 | 键 | 仓库默认 | 说明 |
 | --- | --- | --- |
@@ -786,14 +838,15 @@ hook/script.js（微信进程）
 | `snsProbe` | `"false"` | 调试探针（额外捕获日志、`/sns/sync` 的 `debug_commands`；默认关，不写产品日志/遥测） |
 | `snsDbRead` | 缺省（无键 = `false`） | 显式开启 sns.db 只读探针（`/sns/db/schema`）；与 `snsProbe` 任一为 `true` 即可用。App 运行期不下发，仅版本 JSON 手工设置；不返回 key/内容 |
 | SNS 任务锚点键 | 由实现写入 | 各 op 的任务锚点字段（具体键名与值只维护在版本 JSON，不写入文档）；缺键时该 op 的发送返回 503 `sns_channel_unconfigured`（不影响聊天） |
-| `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` | 仅 4.2.0.17 写入 | 请求体捕获/重放的返回地址锚点；4.2.0.12 JSON 缺省 → 不捕获请求体（读取回退被动缓存；发布样本无法捕获，`/sns/post` 返回 503 `sns_publish_unavailable`） |
+| `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` | 4.2.0.17 / 4.2.1.3 写入 | 请求体捕获/重放的 **BL 返回点**锚点（必须是 4 字节对齐的真实调用返回地址，不是 vtable 槽位入口）；4.2.1.3 于 2026-11-22 修正三个值后**真机确认** timeline 主动刷新可用（`source=native`、`body_captured=true`、`ready=true`）；4.2.0.12 JSON 缺省 → 不捕获请求体（读取回退被动缓存；发布样本无法捕获，`/sns/post` 返回 503 `sns_publish_unavailable`） |
+| `snsCommentBodyReturn` | 4.2.1.3 写入（可选键） | `autoBufferWrite` 处按该返回地址捕获**原生评论请求体**；仅当 `SnsAction` Type==2 且无 field 9/12 时写入 `bodies.comment`，点赞体（Type=1）与回复体不会覆盖模板，解析失败保留旧模板。4.2.1.3 JSON 值 `0x2fd46e8`；`scripts/check_hook_template.py` 将其作为可选键校验 4 字节对齐（模板占位符 97） |
 
 **App 运行期覆盖**（`AppStore+Runtime.nativeSendConfigOverrides` 生成 `runtime/hook-*.json`）：
 
 | 键 | App 默认 | 说明 |
 | --- | --- | --- |
-| `snsEnable` | 按「启用朋友圈」（默认 `false`） | 读取通道总开关；同时启用 SNS 任务捕获（含 0xD5 评论/点赞句柄）；仅在设置 → Hook 开启 R3 原生发送、微信版本在 R3 支持列表内、且由 App 启动 bridge 时才写入（注意：R3 支持列表里的 4.2.0.9 / 4.2.0.5 / 4.1.15.55 没有 SNS 锚点，见下方「版本与锚点」） |
-| `snsWrite` | `"false"` | 发布/评论/回复/点赞/删除等写接口（post/comment/like/objectop）总开关；关闭时均 404 |
+| `snsEnable` | 按「启用朋友圈」（默认 `false`） | 读取通道总开关；同时启用 SNS 任务捕获（含 0xD5 评论/点赞句柄）；仅在设置 → Hook 开启 R3 原生发送、微信版本在 R3 支持列表内、且由 App 启动 bridge 时才写入（注意：R3 支持列表里的 4.2.0.9 / 4.2.0.5 没有 SNS 锚点，见下方「版本与锚点」） |
+| `snsWrite` | `"false"` | 发布/评论/回复/点赞/删除等写接口（post/comment/like/objectop）总开关；关闭时均 404。按「允许发布（写操作）」设置下发；`WeChatVersionSupport.snsWriteSuppressedVersions` 当前为空（4.2.1.3 的发布/评论/回复/同步已于 2026-11-22 真机验证），无强制只读版本 |
 | `snsReadMode` | 按「启用朋友圈」→ `native` / `off` | 功能开启即写 `native`（与写开关无关；未捕获请求体时 bridge 自动回退被动缓存）；功能关闭写 `off`（此时 `/sns/*` 404）。`passive` 是 bridge 支持的手工配置模式，App 不下发 |
 | `snsPostTimeWindows` | **v2 不再下发** | 旧版由 `publish.windows` 生成并下发给 bridge 作为全局可发时段，会把同一账号的**手动发布**也一起拦掉（例如自动发布时段 09:00–22:00 时，23:00 手动发布被 409）。v2 起时段只由 App 排程器执行；bridge 侧如需全局兜底可手工在版本 JSON 配置（App 不写入） |
 | `snsPostDailyLimit` | `"50"` | bridge 全局兜底每日上限（每对象频率由 App 调度器执行） |
@@ -801,8 +854,12 @@ hook/script.js（微信进程）
 
 - bridge 在键缺失时的内置默认：发布最小间隔 10 分钟、每日 5 条（上限 50）；评论/点赞/objectop
   另有 10 秒最小间隔 + 20 次/小时。
+- **评论模板标记与 timeline 首屏覆盖（hook 行为，无 JSON 键）**：回复请求 clientId 前缀 `sns_reply:`、
+  普通评论/点赞 `sns_comment:`；hook 只把后者存为评论模板，只有 `SnsAction` field 5（Type）== 2 且无 field 9/12
+  的干净模板才复用，点赞形态（Type=1）或被回复污染的模板忽略并回退自拼；timeline 仅 MaxID==0/缺省的首屏请求
+  可覆盖模板，分页请求与解析失败保留旧模板。
 - **版本与锚点**：`snsEnable` / `snsWrite` 只由功能开关决定，不检查当前版本 JSON 是否有 SNS 锚点。
-  R3 支持列表里的 4.2.0.9 / 4.2.0.5 / 4.1.15.55 没有 SNS 段：开启朋友圈后 App 仍会写入
+  R3 支持列表里的 4.2.0.9 / 4.2.0.5 没有 SNS 段：开启朋友圈后 App 仍会写入
   `snsEnable=true`，此时 `/sns/status` 仍返回 200；用户打开朋友圈后 hook 也可能捕获任务
   （`captured>0`、`ready` 可能为 true），但发送必需的**任务锚点**缺失，时间线/详情/同步等读请求
   仍返回 503 `sns_channel_unconfigured`；写接口同样不可用（发布先因无样本返回 503
@@ -889,24 +946,30 @@ hook/script.js（微信进程）
 | 主动请求回包入口 | ✅ 已解决（v2.8，4.2.0.17） | 不走 `buf2resp`：复用真实任务的 service + 克隆 closure + fake serializer 经 slot13 提交，响应由 task vtable slot3 的 decoder 回填；timeline 已真机验证 |
 | 0xd2 objectdetail | ❌ 不可用（Mac UI 不触发） | Lead 本机 3 轮探针 + 静态分析结论一致：Mac 微信 UI 不触发 0xd2 `mmsnsobjectdetail`，**objectdetail 路线放弃**，不要重复尝试抓包/加锚点。评论补全已实现 sns.db 只读补全 + P7 自动回复真机闭环 |
 | 时间线数据来源 | ✅ 被动缓存（手动打开一次朋友圈） | bridge 只认最近 10 分钟内的捕获响应；App 显示状态与「重新检测」；微信重启后重新打开一次；不控制界面、不自动点击 |
-| 读取前置条件 | ✅ 面板已解释 | `snsEnable` 只在设置 → Hook 开启 R3 原生发送、微信版本在 R3 支持列表内、且由 App 启动 bridge 时写入；功能关闭、R3 未开启、版本不在 R3 列表或 App 未启动 bridge 时仓库 JSON 为 `false` → `/sns/*` 404。注意：版本在 R3 列表但无 SNS 锚点（4.2.0.9 / 4.2.0.5 / 4.1.15.55）时仍会写入 `snsEnable=true`，读请求返回 503 `sns_channel_unconfigured`（写接口同样不可用），而不是 404（§6.1「版本与锚点」）。v2.4 起读取卡状态行直接显示「依赖 R3」并指向「设置 → Hook」，不再只在自动发布前置条件里提示 |
+| 读取前置条件 | ✅ 面板已解释 | `snsEnable` 只在设置 → Hook 开启 R3 原生发送、微信版本在 R3 支持列表内、且由 App 启动 bridge 时写入；功能关闭、R3 未开启、版本不在 R3 列表或 App 未启动 bridge 时仓库 JSON 为 `false` → `/sns/*` 404。注意：版本在 R3 列表但无 SNS 锚点（4.2.0.9 / 4.2.0.5）时仍会写入 `snsEnable=true`，读请求返回 503 `sns_channel_unconfigured`（写接口同样不可用），而不是 404（§6.1「版本与锚点」）。v2.4 起读取卡状态行直接显示「依赖 R3」并指向「设置 → Hook」，不再只在自动发布前置条件里提示 |
 | `/sns/detail` 缓存兜底 | ✅ v2.1 修复 | 被动模式/主动失败时用时间线缓存返回 `source=cache`（`comments_truncated=true`），App 标记「评论可能不完整」；缓存缺失仍报原错误 |
 | `/sns/detail` 主动补齐 | ❌ 路线放弃 | Mac UI 不触发 0xd2；bridge 的 `detail` 请求仍返回 503 `sns_channel_unconfigured`，回退时间线缓存（`source=cache`）。不再计划靠 objectdetail 补全，改走 sns.db 只读兜底 |
 | `sns.db` 只读 schema / 评论补全（P1） | ✅ 真机端到端已验证（读取正文 + P7 自动回复） | `snsEnable=true` 时 timeline 截断后按 signed `feed_id=uint64-2^64` 批量查 `SnsMessage_tmp3`，补到原生评论后：原生优先、只补缺、`comment_count` 取 max、`comments_truncated` 重算，失败静默；`snsDbRead=true` 支持仅 DB 模式，`snsProbe=true` 可调 `/sns/db/schema` 与 `/sns/db/comments`。真机：某好友回复 c<id1> 生成 c<id2>，P7 自动回复生成 c<id3>（reply_to=<id>、reply_to_user_id=<uid>），页面评论闭环；DB 32 位 comment_id=<id> 经手动抓包确认可作 reply_comment_id，JSON 带 `comment_id_confirmed`。边界：仅 4.2.0.17、依赖 sns key 缓存、其它 schema 可能不同、失败静默降级 |
-| 主动刷新（4.2.0.17） | ✅ v2.8 可用（首页） | 需先在微信手动打开一次朋友圈捕获请求体；之后首页刷新走原生（可重复），未捕获/失效时回退被动缓存；分页仍用缓存 |
+| 主动刷新（4.2.0.17 / 4.2.1.3） | ✅ v2.8 可用（首页；4.2.1.3 于 2026-11-22 真机确认） | 需先在微信手动打开一次朋友圈捕获请求体；之后首页刷新走原生（可重复），未捕获/失效时回退被动缓存；分页仍用缓存 |
 | 图片 CDN 下载 | ✅ 真机验证（v3.3） | 时间线 XML 的 token 签名 URL + ISAAC-64 解密；真机 thumb/full 均为合法 JPEG；网络错误/5xx 自动重试一次，失败只显示占位 |
 | 「加载更多」 | ⚠️ 部分可用 | 同步游标不再覆盖时间线游标；`loadMore` 仍要求 `cursor.max_id` 非空。被动分页只返回最近捕获页，App 去重并在游标未前进时停止，因此不会无限转圈，但也取不到更旧数据（需 timeline 请求体 patch + 真机验证） |
 | 视频播放/下载 | 未实现 | P2+；列表只展示元数据/占位 |
 | 发布图片/视频 | 未实现，风险高 | P3b；App 无发布入口，bridge 对带 media 的发布请求返回 400 `sns_media_post_unsupported` |
-| 评论写 | ✅ 评论真机验证（2026-11-08）；回复待真机 | 评论走 `/sns/comment`（0xD5，Type=2）；必须用 hook 捕获的真实请求模板 patch（保留 `SnsAction field 23`、`FromNickname`、`ToNickname=wxid` 等 mac 取值），自拼报文会被服务端静默丢弃。真机：回包 `comment_id`、时间线评论数/列表更新、bridge 重启恢复模板后仍成功。回复（`ReplyCommentId2`/`ReferAction`）未验证；点赞/取消赞、删评论仍只有 bridge 接口（取消赞/删评论缺 objectop 任务锚点，当前返回 503 `sns_channel_unconfigured`） |
-| 评论句柄/模板捕获 | ✅ 真机验证（2026-11-08） | slot13 捕获从 0xD3/0xD6/0xD1 扩展到 0xD5（评论与点赞共用）；用户手动评论一次即捕获闭包 seed + 真实请求体（按 clientId 标记识别），样本随 `sns-capture.json` 持久化（同一微信进程内 bridge 重启可恢复，已真机复验）。未捕获 seed 时 `/sns/comment` 返回 503 `sns_comment_unavailable`；仅缺模板时退回自拼报文并记 warning |
-| `mmsnssync` 主动同步 | 🧪 CmdBuf 信封已修复；回复动作仅 hint | v2.9 起 hook 已把安全 body 捕获扩展到 0xd6（`autoBufferWrite` 入口 + 版本 JSON 的返回地址锚点；仅 4.2.0.17 JSON 有该锚点），bridge 首次整包复用捕获体，之后保留 App 侧字段、只替换当前 KeyBuf 后重放。2026-11-09 真机确认 `CmdBuf` 是 `{1: len, 2: payload}` 信封，cmd45 新动态正常、cmd46 的 Type 1/2/3 可解码、Type=11 只产 `sns_comment_hint`；`bridge/sns_sync_envelope_test.go` 覆盖信封/解码/hint/合并/去重。打开朋友圈是否稳定触发 0xd6 仍受微信时机影响；App 另有时间线 diff 兜底 |
+| 评论写 | ✅ 真机验证（4.2.0.17 2026-11-08；4.2.1.3 2026-11-22 评论/回复均通过） | 评论走 `/sns/comment`（0xD5，Type=2）；必须用 hook 捕获的真实请求模板 patch（保留 `SnsAction field 23`、`FromNickname`、`ToNickname=wxid` 等 mac 取值），自拼报文在 4.2.0.17 会被服务端静默丢弃（4.2.1.3 真机确认自拼可用）。真机：回包 `comment_id`、时间线评论数/列表更新、bridge 重启恢复模板后仍成功。回复已真机验证（`reply_comment_id` → `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确；回复自己的评论 `ret=-2` 属服务端语义）；点赞/取消赞、删评论仍只有 bridge 接口（取消赞/删评论缺 objectop 任务锚点，当前返回 503 `sns_channel_unconfigured`） |
+| **4.2.1.3 comment 任务类锚点（已修正）** | ✅ 真机验证（2026-11-22） | 旧 JSON `snsCommentVtable` `0x8561798`（同版本广告 `AdChannelMsgReq` 任务类）与真机捕获 `mmsnscomment` vtable `0x8562f08` 不符；旧类 ctor/decoder 为 `0x2f9ba4c`/`0x2f9bbfc`、B2 `+0xA8`，已采用类 ctor/decoder 为 `0x2fd4590`/`0x2fd473c`、B1/B2 `+0x78`/`+0xA0`；两者 dtor size 均 `0xC0`，尺寸检查无法发现。合成任务用错类并注入真实 closure 会在 sns.pb copy 路径以 `0x100000000+0x40` 崩溃（`mars::stn`）。已采用锚点（真机验证）：ctor `0x2fd4590` / vtable `0x8562f08` / decoder `0x2fd473c` / size `0xC0`。修正后发布/评论/回复均真机通过；`task_layout_mismatch` 安全闸保留（仅防未来版本漂移，不是限制） |
+| **4.2.1.3 sync 任务类锚点（已修正）** | ✅ 真机验证（2026-11-22） | 旧 JSON vtable `0x85e1690`（同版本 `NewSyncRequest` 任务类）与真机捕获 `0x85e2178` 不符；已改为真机一致的任务类：ctor `0x3bbccb4` / vtable `0x85e2178` / decoder `0x3bbce7c` / size `0xD0` / bodyReturn `0x3bbce28`。`POST /sns/sync` 已真机返回 cmd 45/46 与 `sns_new_post`/`sns_comment` 事件、微信未崩溃；`task_layout_mismatch` 安全闸保留（仅防未来版本漂移，不是限制） |
+| 回复自己的评论（ret=-2） | ⚠️ 服务端语义限制 | 回复**自己**的评论会被微信拒绝（`ret=-2`），不是协议/配置错误；回复他人评论正常（回包 `comment_id`、`reply_to`/`reply_to_user_id`/`reply_to_name` 正确） |
+| 评论模板污染（已修复） | ✅ 2026-11-22 | hook 新增 `snsCommentBodyReturn`（4.2.1.3 `0x2fd46e8`）按返回地址捕获原生评论请求体，仅 Type==2 且无 field 9/12 时写入模板（点赞体/回复体不覆盖，解析失败保留旧模板）；同时保留 `sns_reply:` / `sns_comment:` clientId 兼容。模板复用前做健康检查（Type==2 且无 9/12），点赞形态/污染模板忽略并退回自拼（普通评论自拼可能无回包，仅兜底；自拼回复未真机验证）；点赞优先模板。4.2.1.3 真机：手动评论后模板为原生 Type=2，`POST /sns/comment` 返回 comment_id、timeline comments=5 |
+| timeline 分页覆盖首屏模板（已修复） | ✅ 2026-11-22 | hook 解析 timeline 请求 protobuf field 3（MaxID）：MaxID==0/缺省=首屏，可覆盖已保存模板；分页 MaxID!=0 或解析失败保留旧模板，避免 App 刷新重放分页游标、看不到最新动态 |
+| 深滚动后首屏请求带旧游标 | ⚠️ 已知限制（2026-11-22 实测） | 时间线以最近一次捕获的首屏请求为准；若在微信朋友圈滚动到很靠后的位置再重新打开，捕获到的「首屏」请求可能带旧游标，App 刷新显示「最近动态 + 旧一页」。回到朋友圈顶部再刷新/重新打开一次即可重捕干净首屏 |
+| 评论句柄/模板捕获 | ✅ 真机验证（2026-11-08） | slot13 捕获从 0xD3/0xD6/0xD1 扩展到 0xD5（评论与点赞共用）；用户手动评论一次即捕获闭包 seed + 真实请求体（按 clientId 标记识别；回复请求 `sns_reply:` 不再写入评论模板），样本随 `sns-capture.json` 持久化（同一微信进程内 bridge 重启可恢复，已真机复验）。未捕获 seed 时 `/sns/comment` 返回 503 `sns_comment_unavailable`；仅缺模板时退回自拼报文并记 warning |
+| `mmsnssync` 主动同步 | ✅ 真机验证（4.2.0.17；4.2.1.3 2026-11-22 修正任务类后） | v2.9 起 hook 已把安全 body 捕获扩展到 0xd6（`autoBufferWrite` 入口 + 版本 JSON 的返回地址锚点；4.2.0.17 / 4.2.1.3 JSON 均有该锚点（4.2.1.3 于 2026-11-22 修正任务类后真机验证 cmd 45/46 与事件）），bridge 首次整包复用捕获体，之后保留 App 侧字段、只替换当前 KeyBuf 后重放。2026-11-09 真机确认 `CmdBuf` 是 `{1: len, 2: payload}` 信封，cmd45 新动态正常、cmd46 的 Type 1/2/3 可解码、Type=11 只产 `sns_comment_hint`；`bridge/sns_sync_envelope_test.go` 覆盖信封/解码/hint/合并/去重。打开朋友圈是否稳定触发 0xd6 仍受微信时机影响；App 另有时间线 diff 兜底 |
 | **好友回复机器人评论（Type=11）** | ⚠️ 已知限制（4.2.0.17 真机） | 真机同步动作 `Type=11`，payload 只有 From/To、ToNickname/CreateTime/IsNotRichText，没有 `Content`/`CommentID`/`CommentID2`/`ReplyCommentID`；bridge 不伪造正文、不写评论缓存，只发 `sns_comment_hint`（post_id/from_user/create_time，可带 from_name/reply_to_user_id）。App 收到 hint 仅静默触发一次 timeline 刷新，不显示任何 UI（不展示正文、不做未读计数、不持久化）。**sns.db 只读补全把回复正文补进 timeline，32 位 comment_id 已确认可作 reply_comment_id；P7 自动回复已真机生成 c<id3>，端到端闭环**。Mac UI 不触发 0xd2；边界仅 4.2.0.17/依赖 key 缓存/其它 schema 可能不同 |
 | `sns_*` WS 推送 | 协议预留、bridge 未实现 | CmdBuf 解码已完成，但 bridge 只通过 `/sns/sync` HTTP 返回 `events[]`，不推送 WS 帧；App 的 WS 解析仍为协议预留 |
 | 分组/部分可见好友列表 | 未实现 | P4+；UI 隐藏 |
 | 私密可见性（private） | ⚠️ 未成功 | 真机尝试无回包、未出现在时间线；mac 侧可能不支持仅自己可见。生产仍拒绝 public |
 | 本地 DB 兜底 | ✅ schema + 评论补全 + P7 自动回复真机闭环 | 默认关闭；只读解密到容器 tmp、查完删除；key 缓存 0600；timeline 按 signed feed_id 补评论（§4.2）；DB 32 位 comment_id 已确认可作 reply_comment_id（comment_id_confirmed） |
-| 主动发送（4.2.0.17） | ✅ 机制已打通（timeline + post + comment 真机验证） | timeline：复用真实 service + 克隆 closure + 捕获请求体，slot13 提交后拿到 decoder 回包（连续 3 次）。post：逐字段保留模板未知字段 + ClientCheckDat，partial 与 public（联调）均成功回包并出现在时间线；**private 2026-11-08 复测返回成功但微信 UI 不显示**。comment：真实请求模板 patch 后成功（§1.4） |
+| 主动发送（4.2.0.17 / 4.2.1.3） | ✅ 机制已打通（timeline + post + comment + reply + sync 真机验证） | timeline：复用真实 service + 克隆 closure + 捕获请求体，slot13 提交后拿到 decoder 回包（连续 3 次）。post：逐字段保留模板未知字段 + ClientCheckDat，partial 与 public（联调）均成功回包并出现在时间线；**private 2026-11-08 复测返回成功但微信 UI 不显示**。comment：真实请求模板 patch 后成功（§1.4） |
 | 读取（4.2.0.17） | ✅ 可用（手动触发） | 手动打开一次朋友圈后，hook 捕获真实响应；`source=passive` 返回 10 条动态（已真机验证） |
 | 设置运行期生效边界 | ⚠️ 两套口径 | App 侧自动发布调度器按设置签名即时重建（需机器人运行/启动中）；bridge 运行期开关（`snsEnable`/`snsWrite` 及派生的 `snsReadMode`）只在启动 bridge 时下发，面板显示「配置待生效」。**未实现** bridge 配置热更新 |
 | 自动发布调度 | 🧪 代码已实现；2026-11-10 修复前实测「到点→配额跳过」，修复后待运行期复验 | v2 两种时机（时段内随机 / 固定时间点）、必须显式选择发布对象、每对象每日上限/最小间隔、每轮目标间隔 ≥61s、本机 ledger 持久化；只在机器人运行/启动中创建调度器；写通道就绪前失败并记录。跳过原因写入 `SnsPublishRunSummary.skipNote`；所有对象当日额度用尽时直接顺延次日第一个时刻，不再「到点→跳过」；面板可重置今日计数后重排 |
@@ -917,7 +980,7 @@ hook/script.js（微信进程）
 | 自动互动的读取覆盖 | ⚠️ 仅最近一页时间线 | 每轮先 best-effort `/sns/sync`（Type 2/3 评论并入 bridge 缓存），再拉 native timeline；仍只处理第一页（当前约 10 条）里的新动态/评论。更早动态需 `/sns/detail` 主动补齐（objectdetail 路线放弃）；sns.db 评论补全已实现真机读取，P7 自动回复已真机闭环。Type=11 hint 本身无正文，不在候选范围 |
 | 自动互动水位 / 停机补处理 | ✅ 代码 + 单测（2026-11-09） | 账本「启用时间」跨 App/机器人重启保留；停机期间产生、未超过 `maxAgeHours`（默认 24 小时）且未被 `handledKeys` 去重的动态 / Type 2/3 评论会补处理；Type=11 回复无正文，不能补处理。关闭互动或切号清空水位，重新开启从新首轮起算；调度器重建沿用同一水位 |
 | 自动互动识图 | 🧪 代码已实现，待真机 | 一条动态的全部图片（单条最多 9 张）整组一次分析，失败回退逐张（原图优先、失败回退缩略图）；分析只驻留内存（80 条缓存）；识图未开启/失败时纯文字互动；纯图片且无描述时不猜内容；视频内容不识别 |
-| 自动互动运行期验证 | 🧪 回复链路真机端到端；其余动作待扩展 | 调度/规划/账本有单测；`reply_to_user_id`（Type 2/3）、重启保留水位、sync 评论合并均有单测。2026-11-10 真机：某好友回复 c<id1> 生成 c<id2>，P7 自动回复生成 c<id3>（reply_to=<id>、reply_to_user_id=<uid>、若干字），页面评论闭环。仍需真机观察 0xD5 句柄长期有效与连续评论风控；`ReferAction`/其它版本待确认 |
+| 自动互动运行期验证 | ✅ 4.2.1.3 真机闭环（2026-11-22） | 调度/规划/账本有单测；`reply_to_user_id`（Type 2/3）、重启保留水位、sync 评论合并均有单测。2026-11-10 真机：回复链路生成 c<id3>、页面闭环；2026-11-22 4.2.1.3 真机：普通评论与回复均返回 `comment_id`、`reply_to` 字段正确，P7 对互动对象新评论自动回复成功并在 timeline 可见，微信未崩溃。仍需长期观察 0xD5 句柄有效期与连续评论风控；`ReferAction`/其它版本待确认 |
 | 自动互动与页面并发 | ⚠️ 无共享读锁 | 调度器与朋友圈页可能同时发起 native timeline 刷新（bridge/hook 并发限制见 §3）；极端情况下有一方失败回退缓存，下一轮自动重试 |
 | 发布幂等 | ✅ v2 基础去重 + 未知结果重试复用 | `client_id` + bridge 10 分钟去重（重复 409）；App 不自动重试，但「上次结果未知」（超时/5xx/解析失败）且正文/可见范围相同时，10 分钟内会复用同一键，成功或明确失败后换新键。残留：幂等键在构造发布请求前登记，发布样本缺失的 503 也会占用该键；若服务端已发布但响应超时，超过 10 分钟窗口再重试仍可能重复；服务端幂等最终以微信侧为准 |
 | 自动发布计入 ledger | ✅ | 发布成功后由 `MomentsStore.publish` 写入账本（按账号/好友）；当日上限与最小间隔只覆盖自动发布 |

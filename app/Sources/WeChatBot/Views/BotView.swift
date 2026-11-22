@@ -46,7 +46,7 @@ enum BotTab: String, CaseIterable, Identifiable, PageTabItem {
         case .general: "运行状态、基础开关与默认人格"
         case .trigger: "群聊触发方式与关键词"
         case .interaction: "唤醒窗口与拍一拍回复"
-        case .lists: "白名单与黑名单"
+        case .lists: "白名单、黑名单与朋友圈对象"
         case .rhythm: "频率、工作时间与拟人化"
         case .schedules: "定时向指定会话发送固定内容"
         case .moments: "朋友圈开关、刷新方式、发布与自动发布"
@@ -64,6 +64,8 @@ struct BotView: View {
     @SceneStorage("bot.subTab") private var selectedTabID: String = BotTab.general.rawValue
 
     @State private var newKeyword = ""
+    /// 「名单 → 朋友圈对象」的发布对象选择 sheet。
+    @State private var isMomentsTargetsPresented = false
 
     /// 唤醒窗口的快捷时长（分钟）；其余数值用 Slider 调整。
     private static let wakeWindowPresets = [1, 3, 5, 10, 30, 60]
@@ -115,6 +117,10 @@ struct BotView: View {
             }
         }
         .onDisappear { store.persist() }
+        .sheet(isPresented: $isMomentsTargetsPresented) {
+            MomentsTargetsSheet()
+                .environment(store)
+        }
     }
 
     // MARK: Sub-tabs
@@ -143,6 +149,7 @@ struct BotView: View {
             wakeAndPatCard
         case .lists:
             allowListCard
+            momentsTargetsCard
         case .rhythm:
             limitsCard
             workingHoursCard
@@ -515,6 +522,123 @@ struct BotView: View {
     private var conflictingIDs: [String] {
         let bot = store.settings.bot
         return Set(bot.effectiveWhitelist).intersection(Set(bot.effectiveBlacklist)).sorted()
+    }
+
+    // MARK: Moments targets
+
+    /// 「朋友圈对象」：发布对象在名单里选择，互动对象只读复用聊天白名单。
+    ///
+    /// 2026-11-20 起发布对象选择从「机器人 → 朋友圈」移到名单，和聊天白名单放在同一页；
+    /// 朋友圈面板只保留摘要与「去名单…」跳转，避免两处编辑同一配置。
+    private var momentsTargetsCard: some View {
+        SectionCard(
+            title: "朋友圈对象",
+            subtitle: "发布对象在此选择；互动对象只读",
+            symbol: "photo.on.rectangle.angled",
+            tint: Theme.violet,
+            help: "「机器人 → 朋友圈」只显示摘要与跳转；发布对象只列开启 AI 自动回复的私聊会话。"
+        ) {
+            VStack(spacing: 0) {
+                momentsPublishTargetsRow
+                if !momentsUnavailablePublishTargetIDs.isEmpty {
+                    SettingsDivider()
+                    momentsUnavailablePublishTargetsNotice
+                }
+                if momentsPublishCandidates.isEmpty {
+                    SettingsDivider()
+                    InlineNotice(
+                        kind: .info,
+                        title: "还没有可发布的私聊对象",
+                        message: "先在「会话」里开启某个私聊会话的 AI 自动回复，再回来选择。"
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                SettingsDivider()
+                momentsInteractionTargetsRow
+            }
+        }
+    }
+
+    /// 发布对象摘要 + 选择入口。候选规则与调度器一致：私聊且开启 AI 自动回复。
+    private var momentsPublishTargetsRow: some View {
+        SettingsRow(
+            title: "发布对象",
+            subtitle: "部分可见：只发给已选好友；未选择时不发布",
+            symbol: "person.2.circle",
+            tint: Theme.info,
+            help: "自动发布固定为部分可见，只勾选已选好友；不提供公开。候选为开启 AI 自动回复的私聊会话。"
+        ) {
+            HStack(spacing: 8) {
+                Text(Lf("已选 %d 人", momentsPublishTargetIDs.count))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(momentsPublishTargetIDs.isEmpty ? Theme.warning : .secondary)
+                Button(L("选择…")) {
+                    isMomentsTargetsPresented = true
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .accessibilityLabel(L("选择发布对象"))
+            }
+        }
+    }
+
+    /// 已选但不在候选集里的对象（会话已删除或关闭了 AI 自动回复）：调度器会跳过，
+    /// 这里给出移除入口，避免只能整份清空。
+    private var momentsUnavailablePublishTargetsNotice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            InlineNotice(
+                kind: .warning,
+                title: "部分已选对象不可用",
+                message: Lf("已选的 %d 人当前不在可发布列表（会话已删除或未开启 AI 自动回复），自动发布会跳过。",
+                            momentsUnavailablePublishTargetIDs.count)
+            )
+            Button(L("移除不可用对象")) {
+                let available = momentsPublishCandidates
+                snsUpdatePublishTargets(momentsPublishTargetIDs.filter { available.contains($0) }, in: store)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// 互动对象只读展示：对象来自「聊天白名单里的私聊对象」，这里不提供第二份名单。
+    private var momentsInteractionTargetsRow: some View {
+        SettingsRow(
+            title: "互动对象",
+            subtitle: "直接使用聊天白名单中的私聊对象；聊天黑名单永不互动",
+            symbol: "bubble.left.and.bubble.right",
+            tint: Theme.info,
+            help: "在「名单」分栏的白名单里增删对象；白名单为空时不自动互动（不会退化为全部好友）。"
+        ) {
+            Text(momentsInteractionTargets.isEmpty
+                 ? L("暂无对象")
+                 : Lf("共 %d 人", momentsInteractionTargets.count))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(momentsInteractionTargets.isEmpty ? Theme.warning : .secondary)
+        }
+    }
+
+    private var momentsPublishTargetIDs: [String] {
+        store.settings.bot.snsSettings.publish.targetUserIDs
+    }
+
+    private var momentsPublishCandidates: Set<String> {
+        snsPublishCandidateIDs(store.conversations)
+    }
+
+    /// 会话列表尚未加载时不提示不可用，避免启动阶段误报。
+    private var momentsUnavailablePublishTargetIDs: [String] {
+        guard !store.conversations.isEmpty else { return [] }
+        let available = momentsPublishCandidates
+        return momentsPublishTargetIDs.filter { !available.contains($0) }
+    }
+
+    /// 互动对象沿用运行期推导（白名单 × 私聊会话）；聊天黑名单由调度器作为硬门槛排除。
+    private var momentsInteractionTargets: [String] {
+        store.snsInteractionTargetIDs
     }
 
     // MARK: Limits

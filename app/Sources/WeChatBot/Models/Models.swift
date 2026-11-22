@@ -897,6 +897,12 @@ struct HookStatus: Codable, Hashable {
     var gatewayConnected: Bool = false
     var versionConfigFile: String = ""
     var matchedVersion: Bool = false
+    /// 微信 bundle 签名校验（`manage_wechat.sh status` 的 signatureValid；未检测到时为 true）。
+    var signatureValid: Bool = true
+    /// 当前版本表是否标记为真机验证（`hookVerified`）；false 时禁止启动 bridge，避免错地址导致微信崩溃。
+    var versionConfigVerified: Bool = true
+    /// 当前微信版本是否已有完整备份（`backupExists`）。
+    var backupExists: Bool = false
     /// 4.1.15.55 / 4.2.0.x R3 原生发送是否启用/已拿到发送句柄（种子闭包）。
     var r3Active: Bool = false
     var r3Seeded: Bool = false

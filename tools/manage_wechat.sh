@@ -4,7 +4,11 @@
 #   manage_wechat.sh status  [--app PATH]
 #   manage_wechat.sh backup  [--app PATH]
 #   manage_wechat.sh install [--app PATH] [--force]
-#   manage_wechat.sh restore [--app PATH]
+#   manage_wechat.sh restore [--app PATH] [--backup-zip PATH]
+#
+# restore 默认使用「当前微信版本 + build」对应的官方备份；微信自动升级后
+# 默认备份名不再匹配（备份仍是旧版本），此时可用 --backup-zip 显式指定
+# backups/ 目录里的任一 WeChat-<version>-<build>-official.zip。
 #
 # The installer:
 #   1. refuses to touch a running WeChat,
@@ -25,16 +29,18 @@ GADGET_SRC="${WECHAT_GADGET_SRC:-$ROOT_DIR/hook/gadget/FridaGadget.dylib}"
 CONFIG_SRC="${WECHAT_GADGET_CONFIG:-$ROOT_DIR/hook/gadget/FridaGadget.config}"
 INJECTOR="$ROOT_DIR/tools/inject_load_dylib.py"
 BACKUP_ROOT="${WECHAT_BACKUP_DIR:-$HOME/Library/Application Support/WeChatAI/backups}"
-SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.0.17}"
-SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270353}"
+SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.1.3}"
+SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270595}"
 # 已知可用版本（version:build），首个为默认目标。未显式设置 WECHAT_SUPPORTED_VERSION/BUILD 时，
-# 历史版本仍可安装，避免新增默认版本后旧版向导/Hook 安装被误拒。
-KNOWN_VERSION_PAIRS="4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341 4.1.15.55:270135 4.1.12.53:269365"
+# 历史 4.2.0.x 仍可安装；4.1.x 自 2026-11-20 起不再支持。
+KNOWN_VERSION_PAIRS="4.2.1.3:270595 4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341"
 LOAD_PATH="@executable_path/../Frameworks/FridaGadget.dylib"
 
 ACTION="${1:-status}"
 shift || true
 FORCE=0
+# restore 显式指定的官方备份 zip（微信自动升级后默认备份名会失配）。
+BACKUP_ZIP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --app)
@@ -44,6 +50,9 @@ while [ $# -gt 0 ]; do
     --backup-dir)
       [ $# -ge 2 ] || { echo "ERROR: --backup-dir needs a directory" >&2; exit 2; }
       BACKUP_ROOT="$2"; shift 2 ;;
+    --backup-zip)
+      [ $# -ge 2 ] || { echo "ERROR: --backup-zip needs a path" >&2; exit 2; }
+      BACKUP_ZIP="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -231,7 +240,9 @@ do_install() {
   ent="$(entitlements_path)"
   note "installing Frida Gadget into $APP"
   mkdir -p "$APP/Contents/Frameworks" "$APP/Contents/Resources"
-  /usr/bin/ditto "$GADGET_SRC" "$APP/Contents/Frameworks/FridaGadget.dylib"
+  if ! /usr/bin/ditto "$GADGET_SRC" "$APP/Contents/Frameworks/FridaGadget.dylib"; then
+    die "无法写入 ${APP}（Operation not permitted）。这是 macOS「App 管理」权限：请到「系统设置 → 隐私与安全性 → App 管理」打开 WeChat AI，完全退出并重新打开 App 后重试。"
+  fi
   chmod +x "$APP/Contents/Frameworks/FridaGadget.dylib"
   # A plain JSON file directly under Frameworks is treated as nested code by
   # codesign. Keep the real config in Resources (sealed as a resource) and place
@@ -239,6 +250,38 @@ do_install() {
   /usr/bin/ditto "$CONFIG_SRC" "$APP/Contents/Resources/FridaGadget.config"
   rm -f "$APP/Contents/Frameworks/FridaGadget.config"
   ln -s "../Resources/FridaGadget.config" "$APP/Contents/Frameworks/FridaGadget.config"
+  # Gadget 监听端口：App 设置里的「Gadget 端口」通过 WECHAT_GADGET_PORT 下发。
+  # 仓库里的静态配置固定 27042；不把用户改过的端口写进配置，bridge 会连到
+  # 一个没人监听的端口。必须在 codesign 之前改，改完再签，资源封印才一致。
+  local gadget_port="${WECHAT_GADGET_PORT:-}"
+  if [ -n "${gadget_port}" ]; then
+    case "${gadget_port}" in
+      *[!0-9]*) die "invalid WECHAT_GADGET_PORT: ${gadget_port}" ;;
+    esac
+    if [ "${gadget_port}" -lt 1024 ] || [ "${gadget_port}" -gt 65535 ]; then
+      die "WECHAT_GADGET_PORT out of range (1024-65535): ${gadget_port}"
+    fi
+    /usr/bin/python3 - "$APP/Contents/Resources/FridaGadget.config" "$gadget_port" <<'PY' \
+      || die "failed to write gadget port into FridaGadget.config"
+import json
+import sys
+
+path, port = sys.argv[1], int(sys.argv[2])
+with open(path, encoding="utf-8") as fh:
+    conf = json.load(fh)
+if not isinstance(conf, dict):
+    raise SystemExit("FridaGadget.config is not a JSON object")
+interaction = conf.get("interaction")
+if not isinstance(interaction, dict):
+    interaction = {}
+    conf["interaction"] = interaction
+interaction["port"] = port
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(conf, fh, indent=2)
+    fh.write("\n")
+PY
+    note "gadget listen port set to ${gadget_port}"
+  fi
   /usr/bin/codesign -f -s - --timestamp=none "$APP/Contents/Frameworks/FridaGadget.dylib"
 
   if ! gadget_installed; then
@@ -276,8 +319,29 @@ do_restore() {
     die "WeChat is running. Quit WeChat completely, then retry."
   fi
   local backup
-  backup="$(backup_path)"
-  [ -s "$backup" ] || die "no backup found: $backup"
+  if [ -n "$BACKUP_ZIP" ]; then
+    backup="$BACKUP_ZIP"
+    [ -s "$backup" ] || die "backup not found: $backup"
+  else
+    backup="$(backup_path)"
+    if [ ! -s "$backup" ]; then
+      # 微信自动升级后，当前版本没有对应备份，但 backups/ 里通常仍有旧版本官方 zip。
+      # 列出候选并明确提示用 --backup-zip 指定，避免用户误以为无法还原。
+      local candidates
+      candidates="$(/bin/ls -1t "$BACKUP_ROOT"/WeChat-*-official.zip 2>/dev/null | head -n 6 || true)"
+      if [ -n "$candidates" ]; then
+        {
+          echo "ERROR: no backup found for current WeChat version: $backup" >&2
+          echo "       (微信可能已自动升级；备份仍保留旧版本)" >&2
+          echo "       available backups:" >&2
+          printf '         %s\n' $candidates >&2
+          echo "       retry with: $0 restore --backup-zip <path>" >&2
+        }
+        exit 1
+      fi
+      die "no backup found: $backup"
+    fi
+  fi
   # 先校验备份 zip 可读，再删除现有 App；否则备份损坏时会把唯一可用的微信
   # 删掉后才失败（还原失败没有回滚路径）。
   if [ -x /usr/bin/unzip ]; then

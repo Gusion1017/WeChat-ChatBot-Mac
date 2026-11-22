@@ -11,10 +11,17 @@ struct RootView: View {
         @Bindable var store = store
         NavigationSplitView {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 216, ideal: Theme.sidebarWidth, max: 286)
+                // 固定列宽：balanced 样式会按详情页理想宽度重新分配列宽，切到
+                // 朋友圈（引导/空态）时侧栏行宽随之变化，放大重排时的错位感。
+                .navigationSplitViewColumnWidth(Theme.sidebarWidth)
         } detail: {
-            PageRouter(item: store.sidebarSelection ?? .dashboard)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // GeometryReader 让详情列不把内容理想高度传给 NavigationSplitView：
+            // macOS 26 会把非 ScrollView 页面（朋友圈引导态）的多行文案拟合高度
+            // 叠加进窗口高度，表现为切页后侧栏整体上移、底部状态胶囊/版本行被裁掉。
+            GeometryReader { _ in
+                PageRouter(item: store.sidebarSelection ?? .dashboard)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)

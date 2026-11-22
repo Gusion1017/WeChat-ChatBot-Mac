@@ -2238,3 +2238,285 @@ func TestSNSBuildCommentRequestMatchesCapturedShape(t *testing.T) {
 		t.Fatalf("评论请求缺少 SnsAction field 23: %x", raw)
 	}
 }
+
+// ---- 评论模板污染回归（2026-11-22 真机） ----------------------------------
+//
+// 现象：回复请求历史上也用 "sns_comment:" clientId 前缀，hook 按该标记把「真实
+// 评论请求体」存成评论模板，于是回复体（SnsAction field 9/12）覆盖了干净模板；
+// 之后普通评论复用被污染模板，微信返回 BaseRet=1（HTTP 502 sns_native_rejected）。
+// 修复：回复改用 "sns_reply:" 前缀（不再被捕获），且普通评论遇到含 9/12 的模板
+// 时忽略模板、退回自拼报文（4.2.1.3 实测自拼评论体可被接受）。
+
+// withSNSCapturedCommentTemplate 让 snsCapturedSNSBody("comment") 返回给定模板。
+func withSNSCapturedCommentTemplate(t *testing.T, body []byte) {
+	t.Helper()
+	oldCall := snsCallFrida
+	t.Cleanup(func() { snsCallFrida = oldCall })
+	snsCallFrida = func(fn string, args ...any) (any, error) {
+		if fn == "snsCapturedBody" && len(args) > 0 && fmt.Sprint(args[0]) == "comment" {
+			return fmt.Sprintf(`{"ok":true,"len":%d,"hex":%q}`, len(body), hex.EncodeToString(body)), nil
+		}
+		return "", fmt.Errorf("unexpected frida call %s", fn)
+	}
+}
+
+// snsTestCapturedCommentOpTemplate 构造 hook 捕获到的 0xD5 评论/点赞请求模板。
+//   - actionType：SnsAction field 5（Type），1=点赞形态、2=评论形态；
+//   - withReply=true 时额外写 field 9/12（模拟回复体覆盖后的模板）；
+//   - 末尾追加未知字段 99="keep-me"：patch 会保留未知字段，用它判定「确实用了模板」。
+func snsTestCapturedCommentOpTemplate(t *testing.T, actionType uint32, withReply bool) []byte {
+	t.Helper()
+	action := SNSAction{
+		FromUsername: "wxid_template",
+		ToUsername:   "wxid_author",
+		FromNickname: "模板昵称",
+		ToNickname:   "wxid_author",
+		Type:         actionType,
+		CreateTime:   1794000000,
+		Content:      "template-content",
+	}
+	if withReply {
+		action.ReplyCommentID = 77
+		action.ReplyCommentID2 = 77
+	}
+	raw := MarshalSNSCommentRequest(SNSCommentRequest{
+		Action:   SNSActionGroup{ID: 100, CurrentAction: &action},
+		ClientID: "sns_comment:100_1794000000_2",
+	})
+	return snsAppendBytesField(raw, 99, []byte("keep-me"))
+}
+
+func snsTestCommentRequestContext(t *testing.T) snsPostJSON {
+	t.Helper()
+	oldID := myWechatId
+	oldNow := snsNow
+	myWechatId = "wxid_self"
+	snsNow = func() time.Time { return time.Unix(1794000000, 0) }
+	t.Cleanup(func() {
+		myWechatId = oldID
+		snsNow = oldNow
+	})
+	return snsPostJSON{ID: "100", AuthorID: "wxid_author", AuthorName: "作者"}
+}
+
+// 回复必须用 "sns_reply:" 前缀：hook 只按 "sns_comment:" 标记捕获评论模板，
+// 回复体不再覆盖干净模板；普通评论/点赞保持 "sns_comment:"。
+func TestSNSBuildCommentRequestClientIDPrefix(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+
+	plain, se := snsBuildCommentRequest(post, 2, "hello", nil)
+	if se != nil {
+		t.Fatalf("构造普通评论失败: %+v", se)
+	}
+	if !strings.HasPrefix(plain.ClientID, "sns_comment:100_") {
+		t.Fatalf("普通评论 clientId 应保留 sns_comment: 前缀，实际 %q", plain.ClientID)
+	}
+
+	replied, se := snsBuildCommentRequest(post, 2, "hi", &snsCommentJSON{CommentID: "77", UserID: "wxid_cmt"})
+	if se != nil {
+		t.Fatalf("构造回复失败: %+v", se)
+	}
+	if !strings.HasPrefix(replied.ClientID, "sns_reply:100_") {
+		t.Fatalf("回复 clientId 应改为 sns_reply: 前缀（避免污染评论模板），实际 %q", replied.ClientID)
+	}
+
+	like, se := snsBuildCommentRequest(post, 1, "", nil)
+	if se != nil {
+		t.Fatalf("构造点赞失败: %+v", se)
+	}
+	if !strings.HasPrefix(like.ClientID, "sns_comment:100_") {
+		t.Fatalf("点赞与评论共用 0xD5 模板，clientId 应保持 sns_comment: 前缀，实际 %q", like.ClientID)
+	}
+}
+
+// 点赞形态模板（Type=1、无回复字段）：patch 虽把 Type 改成 2，但点赞体缺评论特有
+// 字段、带点赞条件，服务端仍返回 BaseRet=1（2026-11-22 真机 502 ret=1）。
+// 普通评论必须忽略它、退回自拼报文。
+func TestSNSMarshalCommentBodyIgnoresLikeShapedTemplate(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 2, "hello", nil)
+	if se != nil {
+		t.Fatalf("构造评论失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 1, false))
+
+	body := snsMarshalCommentBody(req)
+	if strings.Contains(string(body), "keep-me") {
+		t.Fatal("点赞形态模板不可用于普通评论（未知字段哨兵不应出现）")
+	}
+	parsed, err := UnmarshalSNSCommentRequest(body)
+	if err != nil {
+		t.Fatalf("自拼评论报文解析失败: %v", err)
+	}
+	if parsed.ClientID != req.ClientID {
+		t.Fatalf("自拼报文 clientId 错误: %q != %q", parsed.ClientID, req.ClientID)
+	}
+	action := parsed.Action.CurrentAction
+	if action == nil || action.Type != 2 || action.Content != "hello" || action.FromUsername != "wxid_self" {
+		t.Fatalf("自拼评论字段错误: %+v", action)
+	}
+	if action.ReplyCommentID != 0 || action.ReplyCommentID2 != 0 {
+		t.Fatalf("普通评论不应带回复字段: %+v", action)
+	}
+}
+
+// 被回复体覆盖的模板（Type=2 且含 9/12）：普通评论同样必须忽略、退回自拼。
+func TestSNSMarshalCommentBodyIgnoresPollutedTemplate(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 2, "hello", nil)
+	if se != nil {
+		t.Fatalf("构造评论失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 2, true))
+
+	body := snsMarshalCommentBody(req)
+	if strings.Contains(string(body), "keep-me") {
+		t.Fatal("模板含回复字段时应忽略模板（未知字段哨兵不应出现）")
+	}
+	parsed, err := UnmarshalSNSCommentRequest(body)
+	if err != nil {
+		t.Fatalf("自拼评论报文解析失败: %v", err)
+	}
+	if parsed.ClientID != req.ClientID {
+		t.Fatalf("自拼报文 clientId 错误: %q != %q", parsed.ClientID, req.ClientID)
+	}
+	action := parsed.Action.CurrentAction
+	if action == nil || action.Content != "hello" || action.FromUsername != "wxid_self" {
+		t.Fatalf("自拼评论字段错误: %+v", action)
+	}
+	if action.ReplyCommentID != 0 || action.ReplyCommentID2 != 0 {
+		t.Fatalf("普通评论不应带回复字段: %+v", action)
+	}
+}
+
+// 干净评论形态模板（Type=2、无 9/12）复用：保留模板的 mac 特有未知字段并 patch。
+func TestSNSMarshalCommentBodyReusesCleanTemplate(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 2, "hello", nil)
+	if se != nil {
+		t.Fatalf("构造评论失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 2, false))
+
+	body := snsMarshalCommentBody(req)
+	if !strings.Contains(string(body), "keep-me") {
+		t.Fatal("干净模板应被复用（未知字段哨兵应保留）")
+	}
+	parsed, err := UnmarshalSNSCommentRequest(body)
+	if err != nil {
+		t.Fatalf("patch 后报文解析失败: %v", err)
+	}
+	if parsed.ClientID != req.ClientID {
+		t.Fatalf("clientId 未替换: %q != %q", parsed.ClientID, req.ClientID)
+	}
+	action := parsed.Action.CurrentAction
+	if action == nil || action.Content != "hello" || action.FromUsername != "wxid_self" {
+		t.Fatalf("动作未 patch: %+v", action)
+	}
+	if parsed.Action.ID != 100 {
+		t.Fatalf("动态 ID 未替换: %d", parsed.Action.ID)
+	}
+}
+
+// 回复：干净评论形态模板仍可 patch（回复本来就要带 9/12）。
+func TestSNSMarshalCommentBodyPatchesReply(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 2, "hi", &snsCommentJSON{CommentID: "77", UserID: "wxid_cmt"})
+	if se != nil {
+		t.Fatalf("构造回复失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 2, false))
+
+	body := snsMarshalCommentBody(req)
+	if !strings.Contains(string(body), "keep-me") {
+		t.Fatal("回复应继续复用干净评论模板（保留 mac 特有字段）")
+	}
+	parsed, err := UnmarshalSNSCommentRequest(body)
+	if err != nil {
+		t.Fatalf("回复报文解析失败: %v", err)
+	}
+	action := parsed.Action.CurrentAction
+	if action == nil || action.ReplyCommentID2 != 77 || action.ToUsername != "wxid_cmt" {
+		t.Fatalf("回复字段未写入: %+v", action)
+	}
+	if !strings.HasPrefix(parsed.ClientID, "sns_reply:") {
+		t.Fatalf("回复 clientId 前缀错误: %q", parsed.ClientID)
+	}
+}
+
+// 回复 + 点赞形态模板：不再复用点赞模板（已知 BaseRet=1），Warn 后自拼回复体。
+func TestSNSMarshalCommentBodyReplyFallsBackOnLikeTemplate(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 2, "hi", &snsCommentJSON{CommentID: "77", UserID: "wxid_cmt"})
+	if se != nil {
+		t.Fatalf("构造回复失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 1, false))
+
+	body := snsMarshalCommentBody(req)
+	if strings.Contains(string(body), "keep-me") {
+		t.Fatal("点赞形态模板不可用于回复（未知字段哨兵不应出现）")
+	}
+	parsed, err := UnmarshalSNSCommentRequest(body)
+	if err != nil {
+		t.Fatalf("自拼回复报文解析失败: %v", err)
+	}
+	action := parsed.Action.CurrentAction
+	if action == nil || action.Type != 2 || action.ReplyCommentID2 != 77 || action.ToUsername != "wxid_cmt" {
+		t.Fatalf("自拼回复字段错误: %+v", action)
+	}
+	if !strings.HasPrefix(parsed.ClientID, "sns_reply:") {
+		t.Fatalf("回复 clientId 前缀错误: %q", parsed.ClientID)
+	}
+}
+
+// 点赞（Type=1）保持原行为：优先模板（自拼点赞体未真机验证，不扩大改动面）。
+func TestSNSMarshalCommentBodyKeepsTemplateForLike(t *testing.T) {
+	post := snsTestCommentRequestContext(t)
+	req, se := snsBuildCommentRequest(post, 1, "", nil)
+	if se != nil {
+		t.Fatalf("构造点赞失败: %+v", se)
+	}
+	withSNSCapturedCommentTemplate(t, snsTestCapturedCommentOpTemplate(t, 1, false))
+
+	body := snsMarshalCommentBody(req)
+	if !strings.Contains(string(body), "keep-me") {
+		t.Fatal("点赞应保持优先模板的旧行为")
+	}
+}
+
+// 模板形态判定：只有 Type=2 且无 9/12 的模板才算「干净评论形态」。
+func TestSNSCommentTemplateIsPlainComment(t *testing.T) {
+	if !snsCommentTemplateIsPlainComment(snsTestCapturedCommentOpTemplate(t, 2, false)) {
+		t.Fatal("Type=2 且无回复字段的模板应判为干净评论形态")
+	}
+	if snsCommentTemplateIsPlainComment(snsTestCapturedCommentOpTemplate(t, 2, true)) {
+		t.Fatal("含回复字段的模板不应判为干净评论形态")
+	}
+	if snsCommentTemplateIsPlainComment(snsTestCapturedCommentOpTemplate(t, 1, false)) {
+		t.Fatal("点赞形态模板不应判为干净评论形态")
+	}
+	if snsCommentTemplateIsPlainComment([]byte{0xff, 0xff}) {
+		t.Fatal("无法解析的模板不应判为干净评论形态")
+	}
+	if snsCommentTemplateIsPlainComment(nil) {
+		t.Fatal("空模板不应判为干净评论形态")
+	}
+}
+
+// 模板残留检测只看结构：action field 9/12 存在即污染（值为 0 也算），
+// 非法/截断模板不 panic、按干净处理。
+func TestSNSCommentTemplateHasReplyField(t *testing.T) {
+	if !snsCommentTemplateHasReplyField(snsTestCapturedCommentOpTemplate(t, 2, true)) {
+		t.Fatal("带 field 9/12 的模板应判为污染")
+	}
+	if snsCommentTemplateHasReplyField(snsTestCapturedCommentOpTemplate(t, 2, false)) {
+		t.Fatal("干净模板不应判为污染")
+	}
+	if snsCommentTemplateHasReplyField([]byte{0xff, 0xff}) {
+		t.Fatal("无法解析的模板应按干净处理（由 patch 失败兜底）")
+	}
+	if snsCommentTemplateHasReplyField(nil) {
+		t.Fatal("空模板不应判为污染")
+	}
+}

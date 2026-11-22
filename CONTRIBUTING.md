@@ -17,7 +17,7 @@
 | Xcode | 27（已验证 27.1） | 工具链 Swift 6.4；`app/Package.swift` 的 `swift-tools-version` 为 6.2，使用 Swift 5 语言模式 |
 | Go | 1.25 | 仅构建 bridge 需要；`scripts/build_bridge.sh` 固定使用 Go 1.25.14 |
 | Frida Gadget | 17.8.0 | 用 `bash scripts/fetch_gadget.sh` 下载并校验 SHA256 |
-| 微信 | 4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345)、4.2.0.5 (270341)、4.1.15.55 (270135) 或 4.1.12.53 (269365) | 当前源码范围；仅真机验证需要，其他版本未验证。3.1.6 发布包不含 4.2.0.17 与朋友圈 |
+| 微信 | 4.2.1.3 (270595)、4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345) 或 4.2.0.5 (270341) | 当前源码支持范围；4.2.1.3 为默认目标，其余四个 4.2.0.x 为保留版本，4.1.x 已移除支持 |
 | Python 3 | 可选 | `devtools/` Mock 与 `tools/` 辅助脚本 |
 
 ## 2. 本地构建与测试
@@ -43,7 +43,7 @@ open "$HOME/Applications/WeChat AI.app"
 ```bash
 cd app
 swift build
-swift test                                  # 全量单测：837 项执行（835 通过 / 2 项按环境跳过 / 0 失败）
+swift test                                  # 全量单测：997 项执行（995 通过 / 2 项按环境跳过 / 0 失败）
 swift test --scratch-path .build-verify     # 并行开发时避免构建锁冲突
 ```
 
@@ -58,16 +58,22 @@ cd bridge
 go test ./... && gofmt -l .
 ```
 
-当前测试基线：Swift 933 项执行（931 通过 / 2 项按环境跳过 / 0 失败；49 个测试文件）；Go 312 项用例
-（179 顶层 + 132 子测试，0 失败；19 个 `_test.go`）。
+当前测试基线：Swift 997 项执行（995 通过 / 2 项按环境跳过 / 0 失败；58 个测试文件）；Go 348 项用例
+（204 顶层 + 144 子测试，0 失败；21 个 `_test.go`）。
 
-提交前跑质量门禁（脚本语法、文档链接、hook/bridge 副本一致性、Swift 测试）：
+提交前跑质量门禁（脚本语法、文档链接、hook/bridge 副本一致性、**hook 模板与版本表深度校验**、Swift 测试）：
 
 ```bash
-bash scripts/check.sh            # 静态 + Swift
-bash scripts/check.sh --docs     # 只查文档/脚本
+bash scripts/check.sh            # 静态 + Swift（含 check_hook_template.py）
+bash scripts/check.sh --docs     # 只查文档/脚本/模板/版本表
 bash scripts/check.sh --with-go  # 额外构建并测试 bridge
 ```
+
+`scripts/check_hook_template.py`（`check.sh` 的“Hook 模板占位符与版本表一致性”步骤）校验 `hook/script.js`
+占位符（当前 97 个）与 `hook/versions/*.json`：缺键、SNS 锚点组完整性、消息偏移成对、BodyReturn 4 字节对齐
+（含可选 `snsCommentBodyReturn`）、布尔开关格式、
+默认版本与安装/构建/打包脚本及 App `knownPairs` 一致；有 `node` 时对每个版本渲染结果做 `node --check`。
+新增/修改版本表或模板占位符后必须先跑通它。
 
 常用命令也可以走根目录 `Makefile`（`make help` 查看全部目标）。
 

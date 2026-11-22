@@ -38,10 +38,10 @@ done
 [[ -x "$ROOT_DIR/bridge/onebot" ]] \
   || fail "缺少 bridge/onebot；先运行 bash scripts/build_bridge.sh"
 [[ -f "$ROOT_DIR/hook/script.js" ]] || fail "缺少 hook/script.js"
-# 默认目标微信版本必须带版本表：缺失时 App 能启动，但会对 4.2.0.17 显示
+# 默认目标微信版本必须带版本表：缺失时 App 能启动，但会对 4.2.1.3 显示
 # 「Hook 版本文件未就绪」，发布包等于不可用。发布前显式拦截。
-[[ -f "$ROOT_DIR/hook/versions/4_2_0_17_mac.json" ]] \
-  || fail "缺少默认微信 4.2.0.17 的 Hook 版本 JSON：hook/versions/4_2_0_17_mac.json（发布包必须包含该文件）"
+[[ -f "$ROOT_DIR/hook/versions/4_2_1_3_mac.json" ]] \
+  || fail "缺少默认微信 4.2.1.3 的 Hook 版本 JSON：hook/versions/4_2_1_3_mac.json（发布包必须包含该文件）"
 
 if (( SKIP_BUILD == 0 )); then
   bash "$ROOT_DIR/scripts/build_app.sh"
@@ -54,7 +54,7 @@ for required in \
   "Contents/Resources/bridge/onebot" \
   "Contents/Resources/bridge/script.js" \
   "Contents/Resources/hook/gadget/FridaGadget.dylib" \
-  "Contents/Resources/hook/versions/4_2_0_17_mac.json" \
+  "Contents/Resources/hook/versions/4_2_1_3_mac.json" \
   "Contents/Resources/LICENSE" \
   "Contents/Resources/ThirdPartyNotices.txt" \
   "Contents/Resources/LICENSES/Apache-2.0.txt" \
@@ -87,7 +87,7 @@ say "SHA256："
 cat "$ZIP.sha256"
 say ""
 say "下一步：把 zip 与 .sha256 上传到 GitHub Releases，并在说明中写清"
-say "  - 支持 Apple Silicon / macOS 26+ / 微信 4.2.0.17、4.2.0.12、4.2.0.9、4.2.0.5、4.1.15.55 或 4.1.12.53"
+say "  - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.3、4.2.0.17、4.2.0.12、4.2.0.9 或 4.2.0.5"
 say "  - 安装 Hook 需要 Xcode Command Line Tools（首启向导可检测与引导安装）"
 say "  - ad-hoc 签名、未公证；macOS 15+ 已取消右键打开，首次需在「系统设置 → 隐私与安全性 → 仍要打开」，"
 say "    或执行 xattr -dr com.apple.quarantine /Applications/WeChat\\ AI.app"

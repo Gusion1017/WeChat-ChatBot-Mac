@@ -129,6 +129,17 @@ if (( version_ok )); then
   say "  ✔ 默认 ${manage_default_version} 与已知版本列表均有版本 JSON，脚本默认值一致"
 fi
 
+# ---------- 4c. Hook 模板占位符 / 版本表深度一致性 ----------
+# 4b 只检查"文件存在 + 默认版本字符串一致"；这里再检查每个 {{.key}} 是否真能渲染、
+# SNS/sendPat 地址组是否成组、默认版本 hookVerified 门禁、App knownPairs 与脚本列表
+# 是否同步、渲染后的 JS 语法（有 node 时）。避免"版本表少一个键 → 真机静默失效"。
+step "Hook 模板占位符与版本表一致性"
+if python3 "${ROOT_DIR}/scripts/check_hook_template.py"; then
+  :
+else
+  FAILED=1
+fi
+
 if (( DOCS_ONLY == 1 )); then
   step "结果"
   if (( FAILED == 0 )); then say "✅ 静态检查全部通过"; else say "❌ 有检查失败"; fi

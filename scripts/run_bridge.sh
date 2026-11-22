@@ -7,7 +7,7 @@
 #   Authorization: Bearer <TOKEN>
 #
 # 可用环境变量（命令行参数优先）：
-#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_0_17_mac.json
+#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_1_3_mac.json
 #   PORT         监听端口，默认 58080
 #   TOKEN        OneBot token；为空时随机生成 32 字节 hex 并打印
 #   IMAGE_PATH   微信图片临时目录（必填，且必须已存在）
@@ -22,7 +22,7 @@
 #     scripts/run_bridge.sh
 #
 #   scripts/run_bridge.sh --port 58081 --token "$(openssl rand -hex 32)" \
-#     --wechat-conf hook/versions/4_2_0_17_mac.json \
+#     --wechat-conf hook/versions/4_2_1_3_mac.json \
 #     --image-path "/path/to/xwechat_files/wxid_xxx/temp/2026-10/Img/"
 #
 set -euo pipefail
@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${ROOT_DIR}/bridge"
 
-WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_0_17_mac.json}"
+WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_1_3_mac.json}"
 PORT="${PORT:-58080}"
 TOKEN="${TOKEN:-}"
 IMAGE_PATH="${IMAGE_PATH:-}"
@@ -40,8 +40,8 @@ GADGET_ADDR="${GADGET_ADDR:-127.0.0.1:27042}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
 BRIDGE_BIN="${BRIDGE_BIN:-${BRIDGE_DIR}/onebot}"
 TOKEN_GENERATED=0
-# 安全默认：即使 Hook 版本 JSON / script.js 允许发送，也强制关闭 4.1.15 主动发送。
-# 真机验证 mode C 时显式传 HOOK_SEND_DISABLED=false 覆盖。
+# 安全默认：即使 Hook 版本 JSON / script.js 允许发送，也强制关闭主动发送。
+# 真机验证发送链路时显式传 HOOK_SEND_DISABLED=false 覆盖。
 HOOK_SEND_DISABLED="${HOOK_SEND_DISABLED:-true}"
 export HOOK_SEND_DISABLED
 
@@ -53,7 +53,7 @@ usage() {
 用法：scripts/run_bridge.sh [选项]
 
 选项：
-  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_0_17_mac.json）
+  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_1_3_mac.json）
   --port <port>         监听端口（默认 58080，仅绑定 127.0.0.1）
   --token <token>       OneBot token（默认随机生成 64 字符 hex）
   --image-path <dir>    微信图片临时目录（必填，必须已存在）
@@ -136,7 +136,48 @@ BRIDGE_DIR="$(cd "$(dirname "${BRIDGE_BIN}")" 2>/dev/null && pwd)" \
 
 [[ -x "${BRIDGE_BIN}" ]] || fail "未找到可执行文件：${BRIDGE_BIN}\n  先运行 scripts/build_bridge.sh"
 [[ -f "${BRIDGE_DIR}/script.js" ]] || fail "缺少 ${BRIDGE_DIR}/script.js；onebot 从当前工作目录读取它，必须与 onebot 同目录。"
-[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_0_17_mac.json。"
+# bridge 读取的是 bridge/script.js，开发时容易只改 hook/script.js 导致运行旧脚本
+# （2026-11-20 入站正文为空即由此引起）。启动前用唯一事实来源同步一次。
+if [[ -f "${ROOT_DIR}/scripts/sync_hook_script.sh" ]]; then
+  bash "${ROOT_DIR}/scripts/sync_hook_script.sh" --quiet \
+    || fail "无法同步 hook/script.js 到 ${BRIDGE_DIR}/script.js"
+fi
+[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_1_3_mac.json。"
+
+# HOOK_SEND_DISABLED 是 bridge 进程的环境变量，但 hook/script.js 运行在**微信进程**，
+# 它读到的 Process.env 是微信自己的环境，export 不会跨进程传过去。因此这里不能只
+# 设置环境变量就宣称"强制关闭主动发送"：true 时把配置复制一份并显式关闭发送开关，
+# 再让 bridge 使用该副本（不改用户原始 JSON）。
+HOOK_SEND_FORCED_OFF=0
+case "${HOOK_SEND_DISABLED}" in
+  1|true|TRUE|True) HOOK_SEND_FORCED_OFF=1 ;;
+esac
+SAFE_CONF=""
+if (( HOOK_SEND_FORCED_OFF == 1 )); then
+  # macOS 的 mktemp 只替换模板末尾的连续 X；扩展名必须放在 X 之前，否则会生成
+  # 字面量 XXXXXX 的固定文件（并发运行会互相覆盖）。
+  SAFE_CONF="$(mktemp "${TMPDIR:-/tmp}/wechatai-hook-conf.XXXXXX")" \
+    || fail "无法创建安全配置临时文件"
+  /usr/bin/python3 - "${WECHAT_CONF}" "${SAFE_CONF}" <<'PY' || fail "生成安全配置失败：${WECHAT_CONF}"
+import json
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, encoding="utf-8") as fh:
+    conf = json.load(fh)
+if not isinstance(conf, dict):
+    raise SystemExit("Hook 版本配置不是 JSON 对象")
+for key in ("enableSend", "r3AppMsgSend", "r3PatSend", "r3VoiceSend", "snsEnable", "snsWrite"):
+    conf[key] = "false"
+conf["req2bufSendMode"] = "off"
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(conf, fh, ensure_ascii=False, indent=2, sort_keys=True)
+PY
+  # exec 后不会执行 EXIT trap；临时文件留在系统临时目录，首次重启/系统清理会回收，
+  # 内容只有微信地址表与开关，不含 token/账号/正文。
+  WECHAT_CONF="${SAFE_CONF}"
+fi
+
 [[ -n "${IMAGE_PATH}" ]] || fail "缺少 IMAGE_PATH。\n  指向微信容器目录：.../xwechat_files/<wxid>/temp/<...>/Img/（App 负责探测/创建）。"
 [[ -d "${IMAGE_PATH}" ]] || fail "IMAGE_PATH 不存在或不是目录：${IMAGE_PATH}\n  请先确认微信已运行并创建该临时目录；App 侧会做同样检查。"
 mkdir -p "${MEDIA_DIR}" 2>/dev/null || fail "无法创建 MEDIA_DIR：${MEDIA_DIR}\n  请确认路径可写；入站图片获取会写入该目录。"
@@ -176,7 +217,7 @@ bridge : ${BRIDGE_BIN}
 cwd    : ${BRIDGE_DIR}
 listen : 127.0.0.1:${PORT} (WS /ws, HTTP /send_private_msg, /send_group_msg)
 gadget : ${GADGET_ADDR}
-conf   : ${WECHAT_CONF}
+conf   : ${WECHAT_CONF}${SAFE_CONF:+（安全副本：主动发送已关闭）}
 image  : ${IMAGE_PATH}
 media  : ${MEDIA_DIR}
 token  : ${token_display} ${token_note}

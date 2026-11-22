@@ -2077,7 +2077,17 @@ func snsBuildCommentRequest(post snsPostJSON, typ uint32, content string, reply 
 			action.ToNickname = reply.UserID
 		}
 	}
-	clientID := fmt.Sprintf("sns_comment:%d_%d_%d", postID, snsNow().Unix(), typ)
+	// clientId 前缀是 hook 的模板捕获标记（hook/script.js:3279 只把含
+	// "sns_comment:" 的真实请求体存成「评论模板」）。回复请求同样走 0xD5，历史
+	// 上都用 "sns_comment:" 前缀，于是回复体（SnsAction field 9/12）会把干净评论
+	// 模板覆盖掉；之后普通评论复用被污染模板，微信返回 BaseRet=1（HTTP 502
+	// sns_native_rejected，2026-11-22 真机）。回复改用 "sns_reply:" 标记后不再
+	// 命中捕获条件，评论模板只会由干净评论刷新。
+	clientPrefix := "sns_comment"
+	if reply != nil {
+		clientPrefix = "sns_reply"
+	}
+	clientID := fmt.Sprintf("%s:%d_%d_%d", clientPrefix, postID, snsNow().Unix(), typ)
 	// 真机捕获的评论请求只在 SnsCommentRequest 顶层带 clientId（field 3），
 	// SnsActionGroup 内没有 field 5；这里保持与真实任务同构。
 	return SNSCommentRequest{
@@ -2096,14 +2106,107 @@ func snsBuildCommentRequest(post snsPostJSON, typ uint32, content string, reply 
 // （2026-11-08 真机：任务 ret=0 但 12s 无 decoder 回包）。模板 patch 与发布
 // （snsPatchPostRequest）同一策略：保留未知字段，只替换目标/动作/clientId。
 // 未捕获模板时退回自拼报文（旧行为）。
+//
+// 模板健康检查（2026-11-22 真机）：评论/回复只在模板是「干净评论形态」时复用
+// ——SnsAction field 5 Type == 2 且没有回复字段 9/12。点赞形态模板（Type=1）
+// 缺评论特有字段、带点赞条件，patch 成 Type=2 后服务端仍返回 BaseRet=1
+// （HTTP 502 sns_native_rejected）；回复体覆盖的模板（含 9/12）同样不可用于
+// 普通评论。命中就忽略模板、退回自拼报文（4.2.1.3 实测自拼普通评论可被接受），
+// 等下一次干净评论以 "sns_comment:" 标记被 hook 重新捕获。
+// 点赞保持原行为：优先模板（自拼点赞体未真机验证，不扩大改动面）。
 func snsMarshalCommentBody(req SNSCommentRequest) []byte {
-	if template := snsCapturedSNSBody("comment"); len(template) > 0 {
+	template := snsCapturedSNSBody("comment")
+	action := req.Action.CurrentAction
+	isLike := action != nil && action.Type == 1
+	ignored := false
+	if !isLike && len(template) > 0 && !snsCommentTemplateIsPlainComment(template) {
+		if snsIsPlainCommentRequest(req) {
+			Warn("评论模板不是干净评论形态（SnsAction Type != 2 或含回复字段），已忽略，等待下一次干净评论重新捕获")
+		} else {
+			Warn("回复模板不是干净评论形态（SnsAction Type != 2 或含回复字段），已忽略，退回自拼回复报文（未经真机验证）")
+		}
+		template = nil
+		ignored = true
+	}
+	if len(template) > 0 {
 		if body, err := snsPatchCommentRequest(template, req); err == nil && len(body) > 0 {
 			return body
 		}
 	}
-	// 真机 4.2.0.17 实测：自拼报文会让服务端静默丢弃（任务 ret=0、12s 无回包）。
-	// 退回旧行为只为不改变协议面，日志提示用户先在微信里手动评论一次以捕获模板。
-	Warn("SNS 评论缺少真实请求模板，退回自拼报文（服务端可能静默丢弃）")
+	if !ignored {
+		// 真机 4.2.0.17 实测：自拼报文会让服务端静默丢弃（任务 ret=0、12s 无回包）。
+		// 退回旧行为只为不改变协议面，日志提示用户先在微信里手动评论一次以捕获模板。
+		Warn("SNS 评论缺少真实请求模板，退回自拼报文（服务端可能静默丢弃）")
+	}
 	return MarshalSNSCommentRequest(req)
+}
+
+// snsIsPlainCommentRequest 判断本次请求是否是不带回复目标的普通评论。
+func snsIsPlainCommentRequest(req SNSCommentRequest) bool {
+	action := req.Action.CurrentAction
+	return action != nil && action.Type == 2 &&
+		action.ReplyCommentID == 0 && action.ReplyCommentID2 == 0
+}
+
+// snsCommentTemplateIsPlainComment 判断捕获的评论请求模板是否是「干净评论形态」：
+// SnsAction field 5（Type）存在且等于 2，且没有回复字段 9/12。
+// 结构：SnsCommentRequest{2:SnsActionGroup{3:SnsAction{5:Type,9:ReplyCommentID,
+// 12:ReplyCommentID2}}}；点赞形态模板、被回复体覆盖的模板都返回 false。
+func snsCommentTemplateIsPlainComment(template []byte) bool {
+	typ, ok := snsCommentTemplateActionType(template)
+	return ok && typ == 2 && !snsCommentTemplateHasReplyField(template)
+}
+
+// snsCommentTemplateActionType 读取模板 SnsAction 的 Type（field 5）。
+// ok=false 表示模板结构不完整（解析不出 action 或 field 5）。
+func snsCommentTemplateActionType(template []byte) (uint32, bool) {
+	var typ uint32
+	found := false
+	_ = snsWalk(template, func(f snsWireField) error {
+		if f.num != 2 || f.typ != protowire.BytesType {
+			return nil
+		}
+		_ = snsWalk(f.bytes, func(g snsWireField) error {
+			if g.num != 3 || g.typ != protowire.BytesType {
+				return nil
+			}
+			_ = snsWalk(g.bytes, func(a snsWireField) error {
+				if a.num == 5 && a.typ == protowire.VarintType {
+					typ = uint32(a.varint)
+					found = true
+				}
+				return nil
+			})
+			return nil
+		})
+		return nil
+	})
+	return typ, found
+}
+
+// snsCommentTemplateHasReplyField 检查捕获的评论请求模板是否残留回复字段。
+// 结构：SnsCommentRequest{2:SnsActionGroup{3:SnsAction{9:ReplyCommentID,
+// 12:ReplyCommentID2}}}；只按字段存在与否判断（值为 0 也算残留），避免
+// 回复体覆盖模板后普通评论继续复用。
+func snsCommentTemplateHasReplyField(template []byte) bool {
+	found := false
+	_ = snsWalk(template, func(f snsWireField) error {
+		if f.num != 2 || f.typ != protowire.BytesType {
+			return nil
+		}
+		_ = snsWalk(f.bytes, func(g snsWireField) error {
+			if g.num != 3 || g.typ != protowire.BytesType {
+				return nil
+			}
+			_ = snsWalk(g.bytes, func(a snsWireField) error {
+				if a.num == 9 || a.num == 12 {
+					found = true
+				}
+				return nil
+			})
+			return nil
+		})
+		return nil
+	})
+	return found
 }

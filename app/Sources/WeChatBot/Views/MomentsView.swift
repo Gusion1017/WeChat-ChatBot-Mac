@@ -417,7 +417,9 @@ struct MomentsView: View {
             Text(L(text))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                // 不要在 NavigationSplitView 详情列的非滚动页面用 fixedSize：
+                // macOS 26 会把多行文案的换行高度叠加进窗口拟合高度，切页时
+                // 侧栏整体上移、底部状态胶囊被裁掉（EmptyState 已有同类修复）。
             Spacer(minLength: 0)
         }
     }

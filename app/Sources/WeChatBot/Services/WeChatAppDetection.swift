@@ -16,17 +16,48 @@ enum WeChatVersionSupport {
     }
 
     /// 顺序即 UI 展示顺序：默认目标在前，其后为历史版本。
+    ///
+    /// 2026-11-20：目标升级到 4.2.1.3 (270595)，并移除 4.1.x 支持；4.2.0.x 版本表保留，
+    /// 但安装脚本与应用内门禁都以 `4.2.1.3` 为默认目标。
     static let knownPairs: [Pair] = [
+        Pair(version: "4.2.1.3", build: "270595"),
         Pair(version: "4.2.0.17", build: "270353"),
         Pair(version: "4.2.0.12", build: "270348"),
         Pair(version: "4.2.0.9", build: "270345"),
         Pair(version: "4.2.0.5", build: "270341"),
-        Pair(version: "4.1.15.55", build: "270135"),
-        Pair(version: "4.1.12.53", build: "269365"),
     ]
 
     static var versions: Set<String> { Set(knownPairs.map(\.version)) }
     static var builds: Set<String> { Set(knownPairs.map(\.build)) }
+
+    /// 版本表仍标记为「未真机验证」的微信版本。
+    ///
+    /// 即使自定义 `versionConfigPath` 指向别的 JSON，这些版本也不允许启动 bridge：
+    /// 错误地址在 `Interceptor.attach` 或回调里是 SIGILL，无法靠 App 捕获。
+    /// 4.2.1.3 的入站/R3/朋友圈读写均已真机验证，2026-11-20 移出；写链路的独立
+    /// 安全闸见 `snsWriteSuppressedVersions`（当前为空）。
+    static let unverifiedHookVersions: Set<String> = []
+
+    /// 版本 JSON 的 `hookVerified` 与版本黑名单共同决定能否启动 bridge。
+    static func isHookAdaptationVerified(version: String, configVerified: Bool) -> Bool {
+        !unverifiedHookVersions.contains(version.trimmingCharacters(in: .whitespacesAndNewlines))
+            && configVerified
+    }
+
+    /// 朋友圈写链路尚未通过真机验证的版本：为空 = 当前所有受支持版本均允许读写。
+    ///
+    /// 4.2.1.3 已于 2026-11-22 真机验证发布/评论/回复/同步全部成功
+    /// （post_id 15060372050753696401、评论 id 99、回复 id 35 reply_to=3、
+    /// sync 解出 cmd 45/46，微信未崩溃），因此移出集合。
+    ///
+    /// 字段与 `SnsWriteGate` 安全闸保留：后续若某版本写链路未验证，只需把版本号
+    /// 加回这里，App 侧 snsWrite 覆盖、自动发布/自动互动调度、评论捕获提示与只读
+    /// UI 都会自动关闭，无需再改其它代码。
+    static let snsWriteSuppressedVersions: Set<String> = []
+
+    static func suppressesSNSWrite(version: String) -> Bool {
+        snsWriteSuppressedVersions.contains(version.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
     /// 版本或 build 任一命中已知组合即可（部分安装的 Info.plist 不带 build）。
     /// 两者都为空时视为未知，避免「未检测到版本」被当成受支持。
@@ -59,12 +90,10 @@ enum WeChatVersionSupport {
 
 /// 支持 R3 原生发送的微信版本。
 ///
-/// 4.2.0.17 (270353) 与 4.2.0.x（4.2.0.12 / 270348、4.2.0.9 / 270345、4.2.0.5 / 270341）
-/// 及 4.1.15.55 (270135) 共用同一 R3 发送链路；4.1.12 及更早版本保持 legacy 发送，不做任何覆盖。
+/// 4.2.1.3 (270595) 与 4.2.0.x（4.2.0.17 / 270353、4.2.0.12 / 270348、4.2.0.9 / 270345、
+/// 4.2.0.5 / 270341）共用同一 R3 发送链路；4.1.x 已不在支持范围。
 enum NativeSendVersionSupport {
-    static let pairs: [WeChatVersionSupport.Pair] = WeChatVersionSupport.knownPairs.filter {
-        $0.version != "4.1.12.53"
-    }
+    static let pairs: [WeChatVersionSupport.Pair] = WeChatVersionSupport.knownPairs
 
     static var versions: Set<String> { Set(pairs.map(\.version)) }
     static var builds: Set<String> { Set(pairs.map(\.build)) }
@@ -72,6 +101,19 @@ enum NativeSendVersionSupport {
     static func supports(version: String, build: String) -> Bool {
         versions.contains(version.trimmingCharacters(in: .whitespacesAndNewlines))
             || builds.contains(build.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
+/// 运行时选择微信安装路径的单一口径。
+///
+/// 版本门禁、运行期覆盖配置与 bridge 启动都必须针对「实际生效的微信」：运行中的进程
+/// （`HookManager` 刷新出的 `wechatDetectedPath`）优先于设置里的路径。设置路径可能在
+/// 微信重装/移动后失效；只用设置路径判断版本会把受支持的微信误判为未适配，并静默
+/// 关闭 R3 发送与朋友圈通道。
+enum WeChatRuntimeTarget {
+    static func path(configuredPath: String, detectedPath: String) -> String {
+        let detected = detectedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detected.isEmpty ? configuredPath : detected
     }
 }
 

@@ -739,6 +739,50 @@ final class CaptureSetupTests: XCTestCase {
         XCTAssertEqual(stopped.status, .botNotRunning)
     }
 
+    /// 弹窗轮询终止条件：所有条目「就绪或已判定不可用」后不再自动检测。
+    func testPlanIsSettledOnlyWhenEveryItemReadyOrBlocked() {
+        let ready = CaptureSetupPlan.make(
+            voiceReplyEnabled: true,
+            momentsEnabled: true,
+            voiceStatus: readyStatus(),
+            momentsPrimed: true,
+            momentsStatusKnown: true,
+            botRunning: true
+        )
+        XCTAssertTrue(ready.isSettled)
+
+        let missingVoice = CaptureSetupPlan.make(
+            voiceReplyEnabled: true,
+            momentsEnabled: false,
+            voiceStatus: readyStatus(voiceSeed: false),
+            momentsPrimed: false,
+            momentsStatusKnown: false,
+            botRunning: true
+        )
+        XCTAssertFalse(missingVoice.isSettled, "还缺可手动补齐的语音句柄，不能停轮询")
+
+        // 语音不受支持被标记 blocked、文字已就绪：无需继续轮询。
+        let blockedVoice = CaptureSetupPlan.make(
+            voiceReplyEnabled: true,
+            momentsEnabled: false,
+            voiceStatus: readyStatus(voiceSend: false),
+            momentsPrimed: false,
+            momentsStatusKnown: false,
+            botRunning: true
+        )
+        XCTAssertTrue(blockedVoice.isSettled)
+
+        let missingText = CaptureSetupPlan.make(
+            voiceReplyEnabled: false,
+            momentsEnabled: false,
+            voiceStatus: readyStatus(textSeed: false),
+            momentsPrimed: false,
+            momentsStatusKnown: false,
+            botRunning: true
+        )
+        XCTAssertFalse(missingText.isSettled)
+    }
+
     func testMissingItemsDrivesStatusSummary() {
         let plan = CaptureSetupPlan.make(
             voiceReplyEnabled: true,
@@ -828,6 +872,34 @@ final class CaptureSetupTests: XCTestCase {
         )
         XCTAssertFalse(unknown.readyItems.contains(.comment))
         XCTAssertFalse(unknown.isComplete)
+    }
+
+    /// 4.2.1.3 写链路已验证：切换「自动互动」开关时评论捕获提示恢复。
+    /// 只读门禁仍然保留——模拟只读版本时提示必须关闭。
+    func testCommentCapturePromptAfterToggleFollowsVerifiedWriteGate() {
+        XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.3"))
+        let writeAllowed = SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.3")
+        XCTAssertTrue(writeAllowed)
+        XCTAssertTrue(CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(
+            snsWriteSuppressed: !writeAllowed,
+            commentCaptureRequired: true,
+            commentStatusKnown: true,
+            commentReady: false
+        ))
+        // 模拟只读版本：门禁为 true，不提示。
+        XCTAssertFalse(CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(
+            snsWriteSuppressed: true,
+            commentCaptureRequired: true,
+            commentStatusKnown: true,
+            commentReady: false
+        ))
+        // 状态未知时不误报（与原 needsCommentCapturePrompt 语义一致）。
+        XCTAssertFalse(CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(
+            snsWriteSuppressed: false,
+            commentCaptureRequired: true,
+            commentStatusKnown: false,
+            commentReady: false
+        ))
     }
 
     func testNeedsCommentCapturePrompt() {

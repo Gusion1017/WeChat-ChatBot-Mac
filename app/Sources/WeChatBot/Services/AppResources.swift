@@ -98,6 +98,19 @@ enum AppResources {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// 版本 JSON 是否经过真机验证（`hookVerified`；缺键视为已验证，兼容自定义/旧配置）。
+    ///
+    /// 未验证的版本只允许安装/检查，不允许启动 bridge：错误地址表会让微信在
+    /// `Interceptor.attach` 或回调执行时直接崩溃（2026-11-20 的 4.2.1.3 实测）。
+    static func versionConfigVerified(version: String, explicitPath: String = "") -> Bool {
+        guard let url = versionConfig(version: version, explicitPath: explicitPath),
+              let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return true }
+        return (object["hookVerified"] as? String)?.lowercased() != "false"
+            && (object["hookVerified"] as? Bool) != false
+    }
+
     /// 把仓库里的版本 JSON 与运行期覆盖项（例如 4.1.15.55 / 4.2.0.x 的 R3 发送开关）合并，
     /// 写入 `Application Support/WeChatAI/runtime/`，返回给 bridge 使用的路径。
     /// 仓库 JSON 保持默认 off，产品行为完全由 App 设置决定。
