@@ -369,32 +369,10 @@ Content-Type: application/json
 > 「R3 原生发送」开关注入 `r3VoiceSend`），未开启或句柄/门禁未就绪时 App 自动降级文字；
 > `/voice_status` 提供登录稳定倒计时与句柄状态。
 
-## 4. 验证记录
+## 4. 验证
 
-- **构建与测试**：从完全干净状态（删除 `bridge/onebot` 与 `/tmp/chatbot-bridge-cache`）重跑
-  `scripts/build_bridge.sh` 成功：下载并校验 Go 1.25.14 与 devkit 17.8.0，编译、`-h` 自检与
-  `bridge/*_test.go` 全部通过（21 个 `_test.go`、Go 348 项用例 = 204 顶层 + 144 子测试，0 失败）；
-  Swift 1010 项执行（1008 通过 / 2 跳过 / 0 失败，58 个测试文件）；Python sidecar 72 项（2026-11-09 基线）。
-  `script.js` 的 5 个版本渲染结果由 `scripts/check_hook_template.py` 逐个 `node --check` 通过，
-  模板占位符与版本表一致。
-- **SNS 同步 CmdBuf**：`bridge/sns_sync_envelope_test.go` 覆盖外层信封 `{1: len, 2: payload}`、cmd45 与
-  cmd46 的 Type 1/2/3 解码、评论合并去重与 timeline `reply_to_user_id`；解码结构来自 2026-11-09 真机样本。
-  真机同时确认 Type=11 回复无正文，只产 `sns_comment_hint`（不计 unsupported、不伪造正文）；这是已知限制，不代表回复已打通。
-- **sns.db 只读补全**：`sns_db_schema_test.go` 覆盖 schema 探针 404/Bearer/keys 剥离/key_missing；
-  `sns_db_comments_test.go` 覆盖 signed `feed_id`、`SnsMessage_tmp3` 行映射、timeline 合并（原生优先/只补缺/
-  count/truncated）、DB 不可用静默降级、同一 32 位 `comment_id` 的多条正文保留；`/sns/db/comments` 仅 `snsProbe`。
-  真机已端到端验证：读到两条回复正文，P7 自动回复 c<id3>（reply_to=<id>、reply_to_user_id=<uid>）、页面评论；边界仅 4.2.0.17/依赖 key 缓存。
-- **无 Gadget**：`-gadget_addr` 指向无监听端口时，进程约 0.07 秒内 `exit 1`，打印
-  `FATAL ... 附加失败`，不挂起、不开端口、不重试（退出前会先创建 `./log/macos.log`）。
-  因为 HTTP 监听在 Gadget attach 成功之后才启动，无 Gadget 时无法对真实进程测 401。
-- **鉴权与参数校验**：`bridge/http_auth_test.go` 用 `httptest`（不连 Frida、不占真实端口）
-  覆盖 405/401/400 与 WS `get_login_info` 回包；并在真实 bridge 进程上用 curl 复测
-  `GET` → 405、无/错误 token → 401、非法 JSON / 空 `message` / 缺目标 → 400，与 §3.3 一致。
-  成功发送路径由真机联调覆盖（本项目不主动发送真实消息）。
-- **运行脚本**：无 Gadget 时同步输出配置并快速退出（exit 1）；`--wechat-conf`/`--image-path`
-  的相对路径会被转为绝对路径；缺少版本 JSON、`IMAGE_PATH` 或二进制时给出明确中文错误。
-
----
+构建、静态检查与接口测试由 `scripts/check.sh` / `scripts/build_bridge.sh` 覆盖；接口契约见 §3。
+真机验证与历史问题记录在 [`CHANGELOG.md`](../CHANGELOG.md)，不在此重复。
 
 ## 5. 与上游差异
 

@@ -19,22 +19,11 @@
 
 > 微信版本必须**精确匹配列表**；不在列表时向导会提示不匹配，不要强行安装 Hook。
 > 安装脚本默认以 4.2.1.3 (270595) 为目标，其余四个 4.2.0.x 历史版本仍可直接安装；4.1.x 的版本表与门禁已移除。
-> **4.2.1.3 (270595) 适配（2026-11-20，已启用）**：版本检测改读 `WeChatBundleVersion`
-> （`CFBundleShortVersionString` 只是 4.2.1），新增 `hook/versions/4_2_1_3_mac.json`。
-> 入站 Message finalizer/正文偏移、R3 发送任务/槽位、通讯录、图片下载、朋友圈 timeline 主动刷新
-> （`source=native` / `body_captured=true`）、**发布**（`post_id`、动态可见）、**评论**（`comment_id`）、
-> **回复**（`reply_comment_id` → `comment_id`，`reply_to`/`reply_to_user_id`/`reply_to_name` 正确）与
-> **主动同步**（cmd 45/46、`sns_new_post`/`sns_comment` 事件）均已真机验证。此前 comment/sync 任务类
-> 锚点错配（误填为同版本其它子系统的任务类）导致的评论崩溃已修正；版本 JSON 标记 `hookVerified=true`。
-> hook 保留 `task_layout_mismatch` 安全闸（捕获 vtable 与版本表不一致时拒绝发送，防未来版本漂移），
-> 这是防御机制不是限制。赞/取消赞与 objectop 写接口仍未打通（503），userpage 主动发送未验证（passive）。
-> **4.2.0.17 真机验证（2026-11-07）**：`manage_wechat.sh install` 完整备份（约 670MB）后注入 Gadget + ad-hoc 重签
-> （保留 sandbox entitlements）；模块基址与版本地址表解析通过；Message finalizer 入站（群聊文本、type=49 appmsg、
-> 自身消息）字段正常；R3 classA/service vptr、slot13 捕获、newsendmsg closure seed 均通过；R3 文本发送到
-> 文件传输助手（slot13 返回 0、worker result=1）；通讯录读取正常（联系人 / 群聊）；R3 模式下连续运行数分钟稳定。
-> 4.2.0.12 / 4.2.0.9 / 4.2.0.5 已完成真机验证（注入、入站消息、通讯录与 R3 文本发送）。
-> 语音发送、图片获取与群聊 @ 未在 4.2.0.17 逐一复测，历史记录见 `CHANGELOG.md`。
->
+> 4.2.1.3 已真机验证：入站、R3 文本发送、通讯录、图片下载 hook、朋友圈 timeline / 发布 / 评论 /
+> 回复 / 主动同步与 AI 自动互动；赞 / 取消赞 / objectop 未打通，userpage 主动发送保持 passive。
+> 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的历史验证见 `CHANGELOG.md`；语音发送、图片下载与
+> 群聊 @ 未在 4.2.0.17 逐一复测。
+
 > 如果微信来自 **App Store**，或 App 由 root 安装导致当前用户不可写，Hook 可能装不上；
 > 请改用微信官网下载的 arm64 版，并确认 `/Applications/WeChat.app` 属主是当前用户。
 > 修改微信仍有风险，安装前请保留官方备份。
