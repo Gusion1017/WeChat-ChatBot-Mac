@@ -878,6 +878,8 @@ final class CaptureSetupTests: XCTestCase {
     /// 只读门禁仍然保留——模拟只读版本时提示必须关闭。
     func testCommentCapturePromptAfterToggleFollowsVerifiedWriteGate() {
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.3"))
+        XCTAssertTrue(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"))
+        XCTAssertFalse(SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.5"))
         let writeAllowed = SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.3")
         XCTAssertTrue(writeAllowed)
         XCTAssertTrue(CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(

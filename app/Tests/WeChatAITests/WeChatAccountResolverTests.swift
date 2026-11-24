@@ -212,6 +212,22 @@ final class WeChatAccountResolverTests: XCTestCase {
         XCTAssertNil(resolver().imageDirectory(forAccountID: "wxid_notemp_test"))
     }
 
+    /// 首次安装/微信更新后微信可能还没生成 `temp/`：确认账号数据目录后应主动创建，
+    /// 不能一直让用户先去打开一张图片。
+    func testEnsureImageDirectoryCreatesTempForExistingAccount() throws {
+        let directory = try makeDataAccount(id: "wxid_ensure_test", activity: base, hasTemp: false)
+        let temp = directory.appendingPathComponent("temp", isDirectory: true)
+        XCTAssertFalse(fileManager.fileExists(atPath: temp.path))
+        XCTAssertNil(resolver().imageDirectory(forAccountID: "wxid_ensure_test"))
+
+        let ensured = try XCTUnwrap(resolver().ensureImageDirectory(forAccountID: "wxid_ensure_test"))
+        XCTAssertEqual(ensured.standardizedFileURL, temp.standardizedFileURL)
+        XCTAssertTrue(fileManager.fileExists(atPath: temp.path))
+
+        // 账号数据目录不存在时仍返回 nil，不猜测账号。
+        XCTAssertNil(resolver().ensureImageDirectory(forAccountID: "wxid_missing_dir_test"))
+    }
+
     // MARK: - 活动时间细节
 
     func testAccountActivityIncludesSessionDatabase() throws {

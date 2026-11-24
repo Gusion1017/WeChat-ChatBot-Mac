@@ -17,9 +17,11 @@ enum WeChatVersionSupport {
 
     /// 顺序即 UI 展示顺序：默认目标在前，其后为历史版本。
     ///
-    /// 2026-11-20：目标升级到 4.2.1.3 (270595)，并移除 4.1.x 支持；4.2.0.x 版本表保留，
-    /// 但安装脚本与应用内门禁都以 `4.2.1.3` 为默认目标。
+    /// 2026-11-25：目标升级到 4.2.1.5 (270597)；该版本已真机验证入站文本、
+    /// R3 文本发送与通讯录，版本表 `hookVerified=true`。SNS 写链路尚未复测，
+    /// 由 `snsWriteSuppressedVersions` 单独关闭。4.2.1.3 及 4.2.0.x 保留。
     static let knownPairs: [Pair] = [
+        Pair(version: "4.2.1.5", build: "270597"),
         Pair(version: "4.2.1.3", build: "270595"),
         Pair(version: "4.2.0.17", build: "270353"),
         Pair(version: "4.2.0.12", build: "270348"),
@@ -34,8 +36,9 @@ enum WeChatVersionSupport {
     ///
     /// 即使自定义 `versionConfigPath` 指向别的 JSON，这些版本也不允许启动 bridge：
     /// 错误地址在 `Interceptor.attach` 或回调里是 SIGILL，无法靠 App 捕获。
-    /// 4.2.1.3 的入站/R3/朋友圈读写均已真机验证，2026-11-20 移出；写链路的独立
-    /// 安全闸见 `snsWriteSuppressedVersions`（当前为空）。
+    /// 4.2.1.5 已于 2026-11-25 真机验证入站文本、R3 文本发送与通讯录，移出；
+    /// 4.2.1.3 的入站/R3/朋友圈读写均已真机验证；写链路的独立安全闸见
+    /// `snsWriteSuppressedVersions`（当前仅 4.2.1.5）。
     static let unverifiedHookVersions: Set<String> = []
 
     /// 版本 JSON 的 `hookVerified` 与版本黑名单共同决定能否启动 bridge。
@@ -46,13 +49,14 @@ enum WeChatVersionSupport {
 
     /// 朋友圈写链路尚未通过真机验证的版本：为空 = 当前所有受支持版本均允许读写。
     ///
-    /// 4.2.1.3 已于 2026-11-22 真机验证发布/评论/回复/同步全部成功，
-    /// 因此移出集合。
+    /// 4.2.1.3 已于 2026-11-22 真机验证发布/评论/回复/同步全部成功；4.2.1.5 只做了
+    /// 入站文本、R3 文本发送与通讯录验证，朋友圈写链路（发布/评论/回复/同步）尚未
+    /// 复测，因此先加入集合，App 侧强制只读，避免未知的写路径导致微信崩溃或被拒。
     ///
     /// 字段与 `SnsWriteGate` 安全闸保留：后续若某版本写链路未验证，只需把版本号
     /// 加回这里，App 侧 snsWrite 覆盖、自动发布/自动互动调度、评论捕获提示与只读
     /// UI 都会自动关闭，无需再改其它代码。
-    static let snsWriteSuppressedVersions: Set<String> = []
+    static let snsWriteSuppressedVersions: Set<String> = ["4.2.1.5"]
 
     static func suppressesSNSWrite(version: String) -> Bool {
         snsWriteSuppressedVersions.contains(version.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -89,8 +93,8 @@ enum WeChatVersionSupport {
 
 /// 支持 R3 原生发送的微信版本。
 ///
-/// 4.2.1.3 (270595) 与 4.2.0.x（4.2.0.17 / 270353、4.2.0.12 / 270348、4.2.0.9 / 270345、
-/// 4.2.0.5 / 270341）共用同一 R3 发送链路；4.1.x 已不在支持范围。
+/// 4.2.1.5 (270597)、4.2.1.3 (270595) 与 4.2.0.x（4.2.0.17 / 270353、4.2.0.12 / 270348、
+/// 4.2.0.9 / 270345、4.2.0.5 / 270341）共用同一 R3 发送链路；4.1.x 已不在支持范围。
 enum NativeSendVersionSupport {
     static let pairs: [WeChatVersionSupport.Pair] = WeChatVersionSupport.knownPairs
 

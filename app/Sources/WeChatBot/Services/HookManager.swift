@@ -8,6 +8,8 @@ enum HookError: LocalizedError {
     case installScriptMissing
     case gadgetPayloadMissing
     case versionConfigMissing(String)
+    /// 微信版本不在已知适配列表：即使自定义配置存在也不得启动，避免错误地址注入。
+    case weChatVersionUnsupported(String)
     case commandLineToolsMissing
     case weChatNotInstalled(String)
     case weChatRunning
@@ -34,6 +36,11 @@ enum HookError: LocalizedError {
             return L("Frida Gadget 文件缺失：hook/gadget/FridaGadget.dylib 及其配置")
         case .versionConfigMissing(let path):
             return Lf("缺少该微信版本的 Hook 配置：%@", path)
+        case .weChatVersionUnsupported(let display):
+            return Lf(
+                "微信 %@ 不在已适配的版本列表；为避免注入错误地址导致崩溃，已阻止启动。请换回受支持的微信版本，或等待该版本适配。",
+                display
+            )
         case .commandLineToolsMissing:
             return L("需要 Command Line Tools（含 python3 与 otool）。请在「设置 → Hook」安装后重试。")
         case .weChatNotInstalled(let path):
@@ -726,6 +733,16 @@ final class HookManager {
         let detection = await detectInstallation()
         let installation = detection.effective
         guard installation.exists else { throw HookError.weChatNotInstalled(detection.effectivePath) }
+        guard WeChatVersionSupport.isKnown(version: installation.version, build: installation.build) else {
+            let display = installation.versionDisplay.isEmpty
+                ? installation.appURL.path
+                : installation.versionDisplay
+            var updated = status
+            updated.state = .failed
+            updated.detail = "微信版本未适配：\(display)"
+            publish(updated)
+            throw HookError.weChatVersionUnsupported(display)
+        }
         guard Self.isWeChatRunning(configuredPath: installation.appURL.path) else {
             throw HookError.weChatNotRunning
         }

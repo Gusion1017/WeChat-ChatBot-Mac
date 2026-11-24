@@ -148,3 +148,4 @@ prompt.txt
 build/
 tmp/
 node_modules/
+.codesign-identity

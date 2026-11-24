@@ -42,14 +42,14 @@ enum RuntimeError: LocalizedError {
             return L("正在切换微信账号数据，请稍候再启动机器人")
         case .accountImagePathUnavailable(let masked):
             return Lf(
-                "未找到微信账号 %@ 的图片临时目录；请先在微信里打开任意聊天图片，或在设置 → OneBot 中确认图片目录后重试",
+                "未找到微信账号 %@ 的图片临时目录；请确认 WeChat AI 有权限访问微信数据（系统设置 → 隐私与安全性 → App 数据 / 完全磁盘访问权限），或先在微信里打开任意聊天图片后重试",
                 masked
             )
         case .hookOperationInProgress:
             return L("正在安装或还原微信 Hook，请等待当前操作完成")
         case .hookAdaptationUnverified(let version, let configFile):
             return Lf(
-                "微信 %@ 的 Hook 地址表尚未真机验证（%@）。启动 bridge 会修改微信内部函数，可能导致微信崩溃，已阻止启动。请换回已验证的微信版本（如 4.2.1.3），或等待该版本适配完成后再试。",
+                "微信 %@ 的 Hook 地址表尚未真机验证（%@）。启动 bridge 会修改微信内部函数，可能导致微信崩溃，已阻止启动。请换回已验证的微信版本（如 4.2.1.5），或等待该版本适配完成后再试。",
                 version,
                 configFile
             )
@@ -2378,12 +2378,15 @@ final class RuntimeCoordinator {
         if managedAccount {
             // 账号隔离启用后，图片目录必须与当前账号一致：忽略全局 onebot.imagePath
             // （它可能是上一个账号手工填写的路径，传错会把 bridge 的 self_id 也带错）。
-            return (bridgeSelfID, AccountProfile.activeImageDirectory()?.path ?? "")
+            let imageDirectory = AccountProfile.activeImageDirectory()
+                ?? AccountProfile.ensureActiveImageDirectory()
+            return (bridgeSelfID, imageDirectory?.path ?? "")
         }
         let imagePath: String
         if !store.settings.onebot.imagePath.isEmpty {
             imagePath = store.settings.onebot.imagePath
-        } else if let detected = AccountProfile.activeImageDirectory() {
+        } else if let detected = AccountProfile.activeImageDirectory()
+            ?? AccountProfile.ensureActiveImageDirectory() {
             imagePath = detected.path
         } else {
             imagePath = ""

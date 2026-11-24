@@ -3,19 +3,22 @@ import XCTest
 
 /// App 侧朋友圈写门禁（SnsWriteGate）单点开关测试。
 ///
-/// 2026-11-22：4.2.1.3 发布/评论/回复/同步真机验证通过后移出
-/// `snsWriteSuppressedVersions`（当前为空），4.2.1.3 与 4.2.0.17 行为一致；
-/// 安全闸仍保留，通过注入 suppressed 集合覆盖「未来某版本未验证」的回退路径。
+/// 2026-11-25：4.2.1.5 只验证了入站文本 / R3 文本发送 / 通讯录，朋友圈写链路未复测，
+/// 因此在 `snsWriteSuppressedVersions` 中强制只读；4.2.1.3 发布/评论/回复/同步已验证，
+/// 仍可写。安全闸保留，通过注入 suppressed 集合覆盖「未来某版本未验证」的回退路径。
 final class SnsWriteGateTests: XCTestCase {
     private let verifiedVersion = "4.2.1.3"
     private let olderVerifiedVersion = "4.2.0.17"
+    private let pendingWriteVersion = "4.2.1.5"
     private let simulatedSuppressedVersion = "9.9.9"
 
-    // MARK: - 当前默认：无强制只读版本
+    // MARK: - 当前默认：仅 4.2.1.5 强制只读
 
-    func testDefaultSuppressionSetIsEmpty() {
-        XCTAssertTrue(SnsWriteGate.suppressedVersions.isEmpty)
+    func testDefaultSuppressionSetOnlyContainsPendingVersion() {
         XCTAssertEqual(SnsWriteGate.suppressedVersions, WeChatVersionSupport.snsWriteSuppressedVersions)
+        XCTAssertEqual(SnsWriteGate.suppressedVersions, [pendingWriteVersion])
+        XCTAssertTrue(SnsWriteGate.isSuppressed(version: pendingWriteVersion))
+        XCTAssertTrue(SnsWriteGate.showsReadOnlyUI(version: pendingWriteVersion))
         XCTAssertFalse(SnsWriteGate.isSuppressed(version: verifiedVersion))
         XCTAssertFalse(SnsWriteGate.showsReadOnlyUI(version: verifiedVersion))
     }

@@ -17,8 +17,15 @@ BUNDLE="$DIST_DIR/$APP_NAME.app"
 SCRATCH="${BUILD_SCRATCH:-$ROOT_DIR/app/.build-release}"
 # 默认目标微信版本。仓库里必须带对应的 Hook 版本 JSON，否则 App 对当前微信
 # 会显示「Hook 版本文件未就绪」，无法安装/启动 Hook（发布包尤其不能缺）。
-DEFAULT_HOOK_VERSION="4.2.1.3"
-DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_3_mac.json"
+DEFAULT_HOOK_VERSION="4.2.1.5"
+DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_5_mac.json"
+# 本机反复重建时用固定签名身份，避免 ad-hoc 重签导致 TCC（完全磁盘访问/App 数据）
+# 与 Keychain 授权每次失效。发布包默认仍是 ad-hoc；可用
+# scripts/configure_codesign_identity.sh 写入 .codesign-identity（gitignored）。
+if [ -z "${CODESIGN_IDENTITY:-}" ] && [ -f "$ROOT_DIR/.codesign-identity" ]; then
+  CODESIGN_IDENTITY="$(/usr/bin/head -n 1 "$ROOT_DIR/.codesign-identity" | /usr/bin/tr -d '[:space:]')"
+fi
+SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 say() { echo "[build-app] $*" >&2; }
 fail() { echo "[build-app] ERROR: $*" >&2; exit 1; }
@@ -78,7 +85,7 @@ mkdir -p "$RES/bridge" "$RES/hook/versions" "$RES/hook/gadget" "$RES/tools"
 if [ -f "$ROOT_DIR/bridge/onebot" ]; then
   cp "$ROOT_DIR/bridge/onebot" "$RES/bridge/onebot"
   chmod +x "$RES/bridge/onebot"
-  /usr/bin/codesign -f -s - --timestamp=none "$RES/bridge/onebot" 2>/dev/null || true
+  /usr/bin/codesign -f -s "$SIGN_IDENTITY" --timestamp=none "$RES/bridge/onebot" 2>/dev/null || true
 else
   say "WARNING: bridge/onebot missing; app will not be able to start the bot until built"
 fi
@@ -90,7 +97,7 @@ elif [ -f "$ROOT_DIR/bridge/script.js" ]; then
   cp "$ROOT_DIR/bridge/script.js" "$RES/bridge/script.js"
 fi
 if [ ! -f "$DEFAULT_HOOK_JSON" ]; then
-  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_1_3_mac.json"
+  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_1_5_mac.json"
   say "WARNING: 该 App 会对 ${DEFAULT_HOOK_VERSION} 显示「Hook 版本文件未就绪」，无法安装/启动 Hook；发布前必须补齐（package_release.sh 会直接失败）。"
 fi
 if compgen -G "$ROOT_DIR/hook/versions/*.json" >/dev/null; then
@@ -101,7 +108,7 @@ fi
 if [ -f "$ROOT_DIR/hook/gadget/FridaGadget.dylib" ]; then
   cp "$ROOT_DIR/hook/gadget/FridaGadget.dylib" "$RES/hook/gadget/FridaGadget.dylib"
   chmod +x "$RES/hook/gadget/FridaGadget.dylib"
-  /usr/bin/codesign -f -s - --timestamp=none "$RES/hook/gadget/FridaGadget.dylib" 2>/dev/null || true
+  /usr/bin/codesign -f -s "$SIGN_IDENTITY" --timestamp=none "$RES/hook/gadget/FridaGadget.dylib" 2>/dev/null || true
 else
   say "WARNING: FridaGadget.dylib missing; run scripts/fetch_gadget.sh"
 fi
@@ -159,9 +166,13 @@ rm -rf "$RES/bridge/log"
 # Icon sanity (macOS uses AppIcon.icns declared in Info.plist).
 [ -s "$RES/AppIcon.icns" ] || say "WARNING: AppIcon.icns missing"
 
-say "ad-hoc signing app bundle"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  say "ad-hoc signing app bundle"
+else
+  say "signing app bundle with $SIGN_IDENTITY"
+fi
 /usr/bin/xattr -dr com.apple.quarantine "$BUNDLE" 2>/dev/null || true
-/usr/bin/codesign -f -s - --timestamp=none "$BUNDLE"
+/usr/bin/codesign -f -s "$SIGN_IDENTITY" --timestamp=none "$BUNDLE"
 /usr/bin/codesign --verify --strict "$BUNDLE" || fail "signature verification failed"
 
 say "built: $BUNDLE"

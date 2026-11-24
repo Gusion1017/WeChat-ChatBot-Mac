@@ -4,11 +4,13 @@
 > [`bridge.md`](bridge.md)；实现细节（函数地址、结构偏移、密钥派生、发送任务构造）只维护在
 > `hook/script.js` 与 `hook/versions/*.json`，**不写入本文档**（安全披露边界）。
 >
-> **目标微信版本**：macOS 微信 4.2.1.3（build 270595）、4.2.0.17（build 270353）与 4.2.0.12（build 270348）。
+> **目标微信版本**：macOS 微信 4.2.1.5（build 270597）、4.2.1.3（build 270595）、4.2.0.17（build 270353）与 4.2.0.12（build 270348）。
+> **4.2.1.5 写链路边界（2026-11-25）**：该版本目前只验证了聊天核心链路，朋友圈发布/评论/回复/同步未复测；
+> App 通过 `snsWriteSuppressedVersions` 强制只读，读取与时间线沿用同一套已验证地址。
 > **发布状态**：朋友圈（Moments）与 4.2.x 适配自 **4.0.0** 起提供；下文为当前 `main` 源码契约（App 版本已升至
-> **4.2.0 build 38** 已发布，含 4.2.1.3 适配；4.2.1.3 于 2026-11-20 接入。
+> **4.2.1 build 39** 已发布，含 4.2.1.5 / 4.2.1.3 适配；4.2.1.3 于 2026-11-20、4.2.1.5 于 2026-11-25 接入。
 > 其它版本不承诺；每个版本需要独立的 `hook/versions/<version>_mac.json`（含 SNS 锚点）。
-> 目前这三个版本 JSON 含 SNS 锚点；缺锚点时 SNS 读请求返回 503
+> 目前这四个版本 JSON 含 SNS 锚点（4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12；4.2.0.9 与 4.2.0.5 无）；缺锚点时 SNS 读请求返回 503
 > `sns_channel_unconfigured`，写接口同样不可用（发布还会先因无样本返回 503
 > `sns_publish_unavailable`）；不会影响聊天，但也不是 404 关闭。
 > 微信升级后需由 hook 适配流程重新定位 SNS 任务锚点/响应解码器并写入对应版本 JSON。
@@ -29,11 +31,11 @@
 
 ## 0. 当前状态
 
-- **读取**：被动缓存 + 4.2.0.17 / 4.2.1.3 主动刷新；图片 thumb/full 可用；视频仅占位。
-- **评论 / 点赞 / 回复**：展示与写入均可用；4.2.1.3 已真机验证，回复自己的评论会被微信拒绝。
+- **读取**：被动缓存 + 4.2.0.17 / 4.2.1.3 / 4.2.1.5 主动刷新；图片 thumb/full 可用；视频仅占位。
+- **评论 / 点赞 / 回复**：展示与写入均可用；4.2.1.3 已真机验证，回复自己的评论会被微信拒绝；4.2.1.5 写链路未复测，强制只读。
 - **发布**：自动发布文字动态；对象统一在「机器人 → 名单 → 朋友圈对象」配置；图片 / 视频未实现。
 - **AI 自动互动**：对象为聊天白名单私聊好友，默认关闭；4.2.1.3 评论 / 回复闭环。
-- **边界**：仅 4.2.0.12 / 4.2.0.17 / 4.2.1.3 含 SNS 锚点；赞 / 取消赞 / objectop 未打通，
+- **边界**：仅 4.2.0.12 / 4.2.0.17 / 4.2.1.3 / 4.2.1.5 含 SNS 锚点；赞 / 取消赞 / objectop 未打通，
   userpage 主动发送保持 passive。
 
 ## 1. 能力与行为
@@ -820,7 +822,7 @@ hook/script.js（微信进程）
 
 ### 6.1 版本 JSON 与运行期覆盖
 
-**仓库版本 JSON**（4.2.0.12 / 4.2.0.17 / 4.2.1.3 有 SNS 段）：
+**仓库版本 JSON**（4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 有 SNS 段；4.2.1.5 的写链路强制只读）：
 
 | 键 | 仓库默认 | 说明 |
 | --- | --- | --- |
@@ -828,15 +830,15 @@ hook/script.js（微信进程）
 | `snsProbe` | `"false"` | 调试探针（额外捕获日志、`/sns/sync` 的 `debug_commands`；默认关，不写产品日志/遥测） |
 | `snsDbRead` | 缺省（无键 = `false`） | 显式开启 sns.db 只读探针（`/sns/db/schema`）；与 `snsProbe` 任一为 `true` 即可用。App 运行期不下发，仅版本 JSON 手工设置；不返回 key/内容 |
 | SNS 任务锚点键 | 由实现写入 | 各 op 的任务锚点字段（具体键名与值只维护在版本 JSON，不写入文档）；缺键时该 op 的发送返回 503 `sns_channel_unconfigured`（不影响聊天） |
-| `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` | 4.2.0.17 / 4.2.1.3 写入 | 请求体捕获/重放的 **BL 返回点**锚点（必须是 4 字节对齐的真实调用返回地址，不是 vtable 槽位入口）；4.2.1.3 于 2026-11-22 修正三个值后**真机确认** timeline 主动刷新可用（`source=native`、`body_captured=true`、`ready=true`）；4.2.0.12 JSON 缺省 → 不捕获请求体（读取回退被动缓存；发布样本无法捕获，`/sns/post` 返回 503 `sns_publish_unavailable`） |
-| `snsCommentBodyReturn` | 4.2.1.3 写入（可选键） | `autoBufferWrite` 处按该返回地址捕获**原生评论请求体**；仅当 `SnsAction` Type==2 且无 field 9/12 时写入 `bodies.comment`，点赞体（Type=1）与回复体不会覆盖模板，解析失败保留旧模板。4.2.1.3 JSON 值 `0x2fd46e8`；`scripts/check_hook_template.py` 将其作为可选键校验 4 字节对齐（模板占位符 97） |
+| `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` | 4.2.1.5 / 4.2.1.3 / 4.2.0.17 写入 | 请求体捕获/重放的 **BL 返回点**锚点（必须是 4 字节对齐的真实调用返回地址，不是 vtable 槽位入口）；4.2.1.3 于 2026-11-22 修正三个值后**真机确认** timeline 主动刷新可用（`source=native`、`body_captured=true`、`ready=true`）；4.2.1.5 的值由 4.2.1.3 静态重定位生成（58/58 地址键 `verified`），读链路同源已验证、写链路未复测；4.2.0.12 JSON 缺省 → 不捕获请求体（读取回退被动缓存；发布样本无法捕获，`/sns/post` 返回 503 `sns_publish_unavailable`） |
+| `snsCommentBodyReturn` | 4.2.1.5 / 4.2.1.3 写入（可选键） | `autoBufferWrite` 处按该返回地址捕获**原生评论请求体**；仅当 `SnsAction` Type==2 且无 field 9/12 时写入 `bodies.comment`，点赞体（Type=1）与回复体不会覆盖模板，解析失败保留旧模板。具体值只维护在 `hook/versions/*.json`（本文不重复地址）；`scripts/check_hook_template.py` 将其作为可选键校验 4 字节对齐（模板占位符 97） |
 
 **App 运行期覆盖**（`AppStore+Runtime.nativeSendConfigOverrides` 生成 `runtime/hook-*.json`）：
 
 | 键 | App 默认 | 说明 |
 | --- | --- | --- |
 | `snsEnable` | 按「启用朋友圈」（默认 `false`） | 读取通道总开关；同时启用 SNS 任务捕获（含 0xD5 评论/点赞句柄）；仅在设置 → Hook 开启 R3 原生发送、微信版本在 R3 支持列表内、且由 App 启动 bridge 时才写入（注意：R3 支持列表里的 4.2.0.9 / 4.2.0.5 没有 SNS 锚点，见下方「版本与锚点」） |
-| `snsWrite` | `"false"` | 发布/评论/回复/点赞/删除等写接口（post/comment/like/objectop）总开关；关闭时均 404。按「允许发布（写操作）」设置下发；`WeChatVersionSupport.snsWriteSuppressedVersions` 当前为空（4.2.1.3 的发布/评论/回复/同步已于 2026-11-22 真机验证），无强制只读版本 |
+| `snsWrite` | `"false"` | 发布/评论/回复/点赞/删除等写接口（post/comment/like/objectop）总开关；关闭时均 404。按「允许发布（写操作）」设置下发；`WeChatVersionSupport.snsWriteSuppressedVersions` 当前为 `["4.2.1.5"]`：4.2.1.5 的写链路尚未复测，**无论用户设置如何 App 都强制只读**；4.2.1.3 / 4.2.0.x 不在抑制名单（4.2.1.3 的发布/评论/回复/同步已于 2026-11-22 真机验证） |
 | `snsReadMode` | 按「启用朋友圈」→ `native` / `off` | 功能开启即写 `native`（与写开关无关；未捕获请求体时 bridge 自动回退被动缓存）；功能关闭写 `off`（此时 `/sns/*` 404）。`passive` 是 bridge 支持的手工配置模式，App 不下发 |
 | `snsPostTimeWindows` | **v2 不再下发** | 旧版由 `publish.windows` 生成并下发给 bridge 作为全局可发时段，会把同一账号的**手动发布**也一起拦掉（例如自动发布时段 09:00–22:00 时，23:00 手动发布被 409）。v2 起时段只由 App 排程器执行；bridge 侧如需全局兜底可手工在版本 JSON 配置（App 不写入） |
 | `snsPostDailyLimit` | `"50"` | bridge 全局兜底每日上限（每对象频率由 App 调度器执行） |

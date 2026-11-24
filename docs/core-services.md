@@ -4,8 +4,8 @@
 > 描述**已实现**的服务能力、并发模型、错误与重连策略、安全边界，供 UI / bridge / hook 协作；
 > 总体架构见 [architecture.md](architecture.md)。
 >
-> **发布状态（2026-11-22）**：本文描述 **4.2.1**，包含微信 4.2.1.3 适配、备份与朋友圈（Moments）
-> 入口调整；安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.2.0.md`](releases/4.2.0.md)。
+> **发布状态（2026-11-25）**：本文描述 **4.2.1**，包含微信 4.2.1.5 适配（核心文本链路）、4.2.1.3 兼容、备份与
+> 朋友圈（Moments）入口调整；安装与版本支持见 [`install.md`](install.md)，发布说明见 [`releases/4.2.1.5.md`](releases/4.2.1.5.md)。
 
 ## 1. 文件清单
 
@@ -745,8 +745,9 @@ id != active 或 active == _unassigned
   评论 JSON 另有可选 `reply_to_user_id`（timeline 取 `ReplyUsername`、sync 取 `Action.ToUsername`），
   仅出现在 Type 2/3 评论上。评论通道（0xD5 句柄）与发布样本独立：`comment_ready=false` 时直接给出
   「先在微信里点一次评论/赞 + 重新检测」。回复发送协议（`ReplyCommentId2`/`ReferAction`）仍待真机；
-  **4.2.0.17 的「好友回复机器人评论」实测为 Type=11、无正文，页面/P7 当前无法展示或自动回复**，
-  不能写成回复已真机打通。
+  **4.2.0.17 的「好友回复机器人评论」实测为 Type=11、事件本身无正文**；正文经 sns.db 只读补全后，
+  页面与 P7 自动互动可以展示/回复该动作（见 [`sns.md`](sns.md) §5、§8），但**不能因此写成原生回复
+  协议已真机打通**。
 - **发布写路径**：`SnsClient.publish` 只在 `snsWrite` 打开时可用；`MomentsStore.publish` 内部按
   `isEnabled` / `isWriteEnabled` 门禁（默认关；App 不提供手动发布入口，仅自动发布在写开关下调用）。
   可见性默认 `partial`（仅当前私聊对象），
@@ -936,7 +937,7 @@ swift test --scratch-path .build-verify
   `CaptureSetupPlan` 条目裁剪/状态优先级/启动提示判定；Type=11 `sns_comment_hint` 的静默刷新路径
   （无 UI）；bridge 单测覆盖 CmdBuf 信封、Type=11 hint、sns.db signed feed_id/评论补全与失败静默。
 
-当前实测基线：Swift 1032 项执行（1030 通过 / 2 项按环境跳过，0 失败；58 个测试文件）；Go 373 项用例（221 顶层
+当前实测基线：Swift 1036 项执行（1034 通过 / 2 项按环境跳过，0 失败；61 个测试文件）；Go 373 项用例（221 顶层
 + 152 子测试，0 失败；25 个 `_test.go`）；Python sidecar（`devtools/cosyvoice`）72 项 unittest 通过。多账号隔离、
 记忆 v2、语音收敛为 Qwen3-TTS-1.7B 单模型等回归均已包含在上述覆盖中；用例总数随代码演进，以 `swift test`
 实际输出为准。

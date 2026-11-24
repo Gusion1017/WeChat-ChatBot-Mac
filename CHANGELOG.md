@@ -4,6 +4,36 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
+## [4.2.2] — 2026-11-25
+
+### 新增
+
+- **微信 4.2.1.5 (270597) 适配（2026-11-25，已真机验证核心链路）**：新增
+  `hook/versions/4_2_1_5_mac.json`，由 4.2.1.3 静态重定位生成，58/58 个地址键全部
+  `verified` / `high`（0 个 `medium` / `review` / `unresolved`）；`hookVerified=true`。
+  默认目标切到 4.2.1.5，`KNOWN_VERSION_PAIRS`、Swift `knownPairs`、安装 / 打包 /
+  `run_bridge.sh` 默认值与中英文版本文案同步更新；4.2.1.3 与 4.2.0.x 版本表保留。
+- **真机验证（2026-11-25）**：注入 / 启动、私聊文本入站（正文与时间正确）、R3 文本发送
+  （接收方确认实际收到）、通讯录与历史回放均通过；微信无 SIGILL / 崩溃。朋友圈写链路未复测，
+  `snsWriteSuppressedVersions` 暂含 `4.2.1.5`（App 强制只读），读取沿用已验证地址。
+- 新增 [`docs/releases/4.2.1.5.md`](docs/releases/4.2.1.5.md)，记录验证范围、升级 / 回退与已知限制。
+
+### 修复
+
+- **Sparkle 自动升级覆盖 Hook**：适配过程中完全退出微信后，微信自动升级到 4.2.1.9 (270601)，
+  官方签名覆盖 App 并移除 Gadget 注入。`manage_wechat.sh install/restore` 现在会清理
+  `~/Library/Caches/com.tencent.xinWeChat/org.sparkle-project.Sparkle/Installation` 里已下载的
+  更新缓存；写入 Sparkle 偏好失败（沙盒/TCC）时明确告警并提示到微信设置关闭自动更新，不再静默
+  “best effort”。文档补充用 4.2.1.5 官方备份回退后重新安装的步骤，并明确 4.2.1.9 未适配。
+- **反复重建后 TCC / Keychain 授权失效**：ad-hoc 重签会改变 code requirement，导致 macOS
+  「App 数据 / 完全磁盘访问」与 Keychain 授权每次重建都需重新确认。新增
+  `scripts/configure_codesign_identity.sh` 固定本机签名身份（写入 gitignored 的 `.codesign-identity`），
+  `build_app.sh` / `install_app.sh` 默认沿用；发布包仍保持 ad-hoc，避免把个人开发证书带进 Release。
+- **首次安装/微信更新后 `temp/` 缺失导致无法启动机器人**：旧实现要求用户先在微信里打开一张
+  聊天图片生成 `xwechat_files/<wxid>_<suffix>/temp/`。现在 App 在确认当前账号的数据目录存在后
+  自动创建空的 `temp/`（账号目录不存在时仍拒绝启动，不按 mtime 猜账号），首次启动与微信更新后
+  可直接启动 bridge；新增 `WeChatAccountResolver.ensureImageDirectory` 与回归测试。
+
 ## [4.2.1] — 2026-11-22
 
 ### 修复
@@ -1693,5 +1723,6 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...v4.2.0

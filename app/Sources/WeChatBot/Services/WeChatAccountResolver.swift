@@ -112,6 +112,23 @@ struct WeChatAccountResolver: Sendable {
         return imageDirectory(in: account.directory)
     }
 
+    /// 与 `imageDirectory(forAccountID:)` 相同，但账号数据目录存在而 `temp/` 缺失时
+    /// 主动创建空目录并返回。
+    ///
+    /// 首次安装/微信更新后，微信可能还没有生成 `temp/`（旧实现会直接阻止启动并让用户
+    /// 先打开一张聊天图片）。这里只在**已确认属于当前账号的数据目录**下创建，不会按
+    /// mtime 猜账号；账号目录本身不存在时仍返回 nil，保持“无法确认账号就不启动”的边界。
+    func ensureImageDirectory(forAccountID id: String) -> URL? {
+        guard AppAccount.isValidID(id) else { return nil }
+        guard let account = dataAccounts().first(where: { $0.id == id }) else { return nil }
+        let temp = account.directory.appendingPathComponent("temp", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: temp.path, isDirectory: &isDirectory) {
+            try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        }
+        return imageDirectory(in: account.directory)
+    }
+
     // MARK: - Data directories
 
     private struct DataAccount {

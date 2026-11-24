@@ -38,13 +38,18 @@ done
 [[ -x "$ROOT_DIR/bridge/onebot" ]] \
   || fail "缺少 bridge/onebot；先运行 bash scripts/build_bridge.sh"
 [[ -f "$ROOT_DIR/hook/script.js" ]] || fail "缺少 hook/script.js"
-# 默认目标微信版本必须带版本表：缺失时 App 能启动，但会对 4.2.1.3 显示
+# 默认目标微信版本必须带版本表：缺失时 App 能启动，但会对 4.2.1.5 显示
 # 「Hook 版本文件未就绪」，发布包等于不可用。发布前显式拦截。
-[[ -f "$ROOT_DIR/hook/versions/4_2_1_3_mac.json" ]] \
-  || fail "缺少默认微信 4.2.1.3 的 Hook 版本 JSON：hook/versions/4_2_1_3_mac.json（发布包必须包含该文件）"
+[[ -f "$ROOT_DIR/hook/versions/4_2_1_5_mac.json" ]] \
+  || fail "缺少默认微信 4.2.1.5 的 Hook 版本 JSON：hook/versions/4_2_1_5_mac.json（发布包必须包含该文件）"
 
 if (( SKIP_BUILD == 0 )); then
-  bash "$ROOT_DIR/scripts/build_app.sh"
+  # 发布包默认 ad-hoc：忽略本机 .codesign-identity，避免把个人开发证书带进 Release。
+  # 确需签名发布时显式设置 RELEASE_CODESIGN_IDENTITY。
+  CODESIGN_IDENTITY="${RELEASE_CODESIGN_IDENTITY:--}" \
+    bash "$ROOT_DIR/scripts/build_app.sh"
+elif [ -f "$ROOT_DIR/.codesign-identity" ]; then
+  say "WARNING: 检测到本机 .codesign-identity；--skip-build 会沿用 dist 里已有的签名，发布前请确认。"
 fi
 
 [[ -d "$BUNDLE" ]] || fail "未找到 ${BUNDLE}；先运行 bash scripts/build_app.sh"
@@ -54,7 +59,7 @@ for required in \
   "Contents/Resources/bridge/onebot" \
   "Contents/Resources/bridge/script.js" \
   "Contents/Resources/hook/gadget/FridaGadget.dylib" \
-  "Contents/Resources/hook/versions/4_2_1_3_mac.json" \
+  "Contents/Resources/hook/versions/4_2_1_5_mac.json" \
   "Contents/Resources/LICENSE" \
   "Contents/Resources/ThirdPartyNotices.txt" \
   "Contents/Resources/LICENSES/Apache-2.0.txt" \
@@ -85,9 +90,14 @@ say "  ${ZIP}.sha256"
 say ""
 say "SHA256："
 cat "$ZIP.sha256"
+if [ "${RELEASE_CODESIGN_IDENTITY:--}" = "-" ] && [ -f "$ROOT_DIR/.codesign-identity" ]; then
+  say ""
+  say "⚠️  发布打包使用 ad-hoc 签名，dist 里的 App 已被替换；本机继续使用前请重新运行"
+  say "   bash scripts/build_app.sh（会沿用 .codesign-identity），再 bash scripts/install_app.sh。"
+fi
 say ""
 say "下一步：把 zip 与 .sha256 上传到 GitHub Releases，并在说明中写清"
-say "  - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.3、4.2.0.17、4.2.0.12、4.2.0.9 或 4.2.0.5"
+say "  - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.5、4.2.1.3、4.2.0.17、4.2.0.12、4.2.0.9 或 4.2.0.5"
 say "  - 安装 Hook 需要 Xcode Command Line Tools（首启向导可检测与引导安装）"
 say "  - ad-hoc 签名、未公证；macOS 15+ 已取消右键打开，首次需在「系统设置 → 隐私与安全性 → 仍要打开」，"
 say "    或执行 xattr -dr com.apple.quarantine /Applications/WeChat\\ AI.app"

@@ -59,7 +59,7 @@ fail() {
 }
 
 # 已知可用版本（version:build），首个为默认目标；未显式设置环境变量时历史 4.2.0.x 仍可安装。
-KNOWN_VERSION_PAIRS="4.2.1.3:270595 4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341"
+KNOWN_VERSION_PAIRS="4.2.1.5:270597 4.2.1.3:270595 4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341"
 version_is_known_supported() {
   local v="$1" b="$2" pair
   for pair in $KNOWN_VERSION_PAIRS; do
@@ -85,14 +85,14 @@ stage 0.03 "检查微信版本与文件"
 if [ "$FORCE" -ne 1 ]; then
   V="$(/usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
   B="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
-  EXPECTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.1.3}"
-  EXPECTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270595}"
+  EXPECTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.1.5}"
+  EXPECTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270597}"
   if [ "$V" != "$EXPECTED_VERSION" ] || [ "$B" != "$EXPECTED_BUILD" ]; then
     if [ -z "${WECHAT_SUPPORTED_VERSION:-}" ] && [ -z "${WECHAT_SUPPORTED_BUILD:-}" ] \
       && version_is_known_supported "$V" "$B"; then
       stage 0.04 "检测到已支持的历史版本：${V} (${B})"
     else
-      fail "微信版本不匹配：${V:-?} (${B:-?})，当前适配 4.2.1.3 (270595) 与历史 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5（可用 WECHAT_SUPPORTED_VERSION / WECHAT_SUPPORTED_BUILD 覆盖）"
+      fail "微信版本不匹配：${V:-?} (${B:-?})，当前适配 4.2.1.5 (270597) 与 4.2.1.3 (270595)、历史 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5（可用 WECHAT_SUPPORTED_VERSION / WECHAT_SUPPORTED_BUILD 覆盖）"
     fi
   fi
 fi

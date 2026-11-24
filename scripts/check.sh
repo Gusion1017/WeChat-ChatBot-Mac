@@ -140,6 +140,16 @@ else
   FAILED=1
 fi
 
+# ---------- 4d. wxport 单元测试 ----------
+step "wxport 单元测试"
+if PYTHONPATH="${ROOT_DIR}/tools" python3 -m unittest discover \
+    -s "${ROOT_DIR}/tools/wechat_port/tests" -q; then
+  :
+else
+  say "  ✘ tools/wechat_port/tests 失败"
+  FAILED=1
+fi
+
 if (( DOCS_ONLY == 1 )); then
   step "结果"
   if (( FAILED == 0 )); then say "✅ 静态检查全部通过"; else say "❌ 有检查失败"; fi

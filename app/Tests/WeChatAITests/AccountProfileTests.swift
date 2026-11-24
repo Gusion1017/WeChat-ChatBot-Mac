@@ -626,4 +626,19 @@ final class AccountProfileTests: XCTestCase {
         XCTAssertNil(AccountProfile.activeImageDirectory())
         XCTAssertEqual(AccountProfile.detectedAccountID(), "wxid_detected_test")
     }
+
+    /// 数据目录存在但 `temp/` 尚未生成时，启动路径应主动创建，而不是要求用户先打开图片。
+    func testEnsureActiveImageDirectoryCreatesMissingTemp() throws {
+        let id = "wxid_ensure_profile_test"
+        let accountDirectory = documentsRoot
+            .appendingPathComponent("xwechat_files/\(id)_abcd", isDirectory: true)
+        try fileManager.createDirectory(at: accountDirectory, withIntermediateDirectories: true)
+        try AccountProfile.activate(id)
+        XCTAssertNil(AccountProfile.activeImageDirectory())
+
+        let ensured = try XCTUnwrap(AccountProfile.ensureActiveImageDirectory())
+        XCTAssertEqual(ensured.lastPathComponent, "temp")
+        XCTAssertTrue(fileManager.fileExists(atPath: ensured.path))
+        XCTAssertEqual(AccountProfile.activeImageDirectory()?.path, ensured.path)
+    }
 }

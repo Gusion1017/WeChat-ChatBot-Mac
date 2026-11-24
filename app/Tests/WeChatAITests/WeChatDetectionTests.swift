@@ -40,17 +40,18 @@ final class WeChatDetectionTests: XCTestCase {
     // MARK: Version support
 
     func testKnownVersionPairsMatchInstallScripts() {
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 5)
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.1.3")
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270595")
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 6)
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.1.5")
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270597")
         XCTAssertTrue(WeChatVersionSupport.versions.contains("4.2.0.5"))
         XCTAssertTrue(WeChatVersionSupport.builds.contains("270341"))
-        XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.1.3 (270595)"))
+        XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.1.5 (270597)"))
         XCTAssertFalse(WeChatVersionSupport.versions.contains("4.1.15.55"))
         XCTAssertFalse(WeChatVersionSupport.builds.contains("270135"))
     }
 
     func testVersionSupportRequiresKnownVersionOrBuild() {
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.5", build: "270597"))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: "270595"))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: ""))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "", build: "270595"))
@@ -64,6 +65,7 @@ final class WeChatDetectionTests: XCTestCase {
     }
 
     func testNativeSendVersionListExcludesLegacyOnly() {
+        XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.2.1.5", build: "270597"))
         XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.2.1.3", build: "270595"))
         XCTAssertTrue(NativeSendVersionSupport.supports(version: "4.2.0.17", build: "270353"))
         XCTAssertFalse(NativeSendVersionSupport.supports(version: "4.1.15.55", build: ""))
@@ -274,8 +276,8 @@ final class WeChatDetectionTests: XCTestCase {
     }
 
     func testCompactVersionListIsLanguageAware() {
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 5 个版本"))
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("5 versions"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 6 个版本"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("6 versions"))
     }
 
     // MARK: Quit confirmation

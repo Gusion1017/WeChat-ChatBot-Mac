@@ -17,7 +17,7 @@
 | Xcode | 27（已验证 27.1） | 工具链 Swift 6.4；`app/Package.swift` 的 `swift-tools-version` 为 6.2，使用 Swift 5 语言模式 |
 | Go | 1.25 | 仅构建 bridge 需要；`scripts/build_bridge.sh` 固定使用 Go 1.25.14 |
 | Frida Gadget | 17.8.0 | 用 `bash scripts/fetch_gadget.sh` 下载并校验 SHA256 |
-| 微信 | 4.2.1.3 (270595)、4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345) 或 4.2.0.5 (270341) | 当前源码支持范围；4.2.1.3 为默认目标，其余四个 4.2.0.x 为保留版本，4.1.x 已移除支持 |
+| 微信 | 4.2.1.5 (270597)、4.2.1.3 (270595)、4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345) 或 4.2.0.5 (270341) | 当前源码支持范围；**4.2.1.5 为默认目标**（已真机验证入站 / R3 文本发送 / 通讯录，朋友圈写链路未复测、强制只读），4.2.1.3 与四个 4.2.0.x 为保留版本，4.1.x 已移除支持 |
 | Python 3 | 可选 | `devtools/` Mock 与 `tools/` 辅助脚本 |
 
 ## 2. 本地构建与测试
@@ -43,7 +43,7 @@ open "$HOME/Applications/WeChat AI.app"
 ```bash
 cd app
 swift build
-swift test                                  # 全量单测：997 项执行（995 通过 / 2 项按环境跳过 / 0 失败）
+swift test                                  # 全量单测：1036 项执行（1034 通过 / 2 项按环境跳过 / 0 失败）
 swift test --scratch-path .build-verify     # 并行开发时避免构建锁冲突
 ```
 
@@ -58,8 +58,8 @@ cd bridge
 go test ./... && gofmt -l .
 ```
 
-当前测试基线：Swift 997 项执行（995 通过 / 2 项按环境跳过 / 0 失败；58 个测试文件）；Go 348 项用例
-（204 顶层 + 144 子测试，0 失败；21 个 `_test.go`）。
+当前测试基线：Swift 1036 项执行（1034 通过 / 2 项按环境跳过 / 0 失败；61 个测试文件）；Go 373 项用例
+（221 顶层 + 152 子测试，0 失败；25 个 `_test.go`）。
 
 提交前跑质量门禁（脚本语法、文档链接、hook/bridge 副本一致性、**hook 模板与版本表深度校验**、Swift 测试）：
 
@@ -67,6 +67,12 @@ go test ./... && gofmt -l .
 bash scripts/check.sh            # 静态 + Swift（含 check_hook_template.py）
 bash scripts/check.sh --docs     # 只查文档/脚本/模板/版本表
 bash scripts/check.sh --with-go  # 额外构建并测试 bridge
+```
+
+微信更新后的 Hook 适配与回测见 [`docs/hook-porting.md`](docs/hook-porting.md) 和
+[`tools/wechat_port/README.md`](tools/wechat_port/README.md)；工具单元测试：
+```bash
+PYTHONPATH=tools python3 -m unittest discover -s tools/wechat_port/tests -v
 ```
 
 `scripts/check_hook_template.py`（`check.sh` 的“Hook 模板占位符与版本表一致性”步骤）校验 `hook/script.js`
@@ -146,7 +152,7 @@ bash scripts/clean.sh --yes
 - 运行时依赖：`hook/gadget/FridaGadget.dylib`（用 `scripts/fetch_gadget.sh` 重新下载）
 - 数据与归档：`*.sqlite` / `*.sqlite-shm` / `*.sqlite-wal`、`*.zip` / `*.dmg`、`*.dSYM/`、
   `DerivedData/`、`*.xcarchive` / `*.xcresult`
-- 本地研究证据（已移到仓库外本机归档）：`_local/`、`_research/`（含 `archive/`）、根目录 `versions/`
+- 本地研究证据：`_local/`、`_research/`、根目录 `versions/`（**默认不在仓库内**，本机研究区放仓库外；`.gitignore` 保留同名规则作误建兜底，任何情况下都不要提交）
 - 密钥与凭据：`.env`、API Key、OneBot token 导出、Cookie、证书、登录二维码截图
 - 真实微信数据：聊天记录备份、数据库文件、导出文件、界面截图
 

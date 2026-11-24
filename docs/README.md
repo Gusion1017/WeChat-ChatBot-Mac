@@ -1,6 +1,6 @@
 # 文档索引
 
-> 文档只描述**当前版本 4.2.0**。历史变更见 [`CHANGELOG.md`](../CHANGELOG.md)，历史发布说明见
+> 文档只描述**当前版本 4.2.2**。历史变更见 [`CHANGELOG.md`](../CHANGELOG.md)，历史发布说明见
 > [`releases/`](releases/)。
 
 ## 核心文档
@@ -16,13 +16,15 @@
 | [`cosyvoice.md`](cosyvoice.md) | Qwen3-TTS 安装、HTTP 契约与故障排查 |
 | [`sns.md`](sns.md) | 朋友圈读取 / 发布 / 评论 / 同步、开关与隐私边界 |
 | [`bridge.md`](bridge.md) | Go bridge：构建、运行、HTTP / WS 接口 |
+| [`hook-porting.md`](hook-porting.md) | 微信更新后的 Hook 版本适配：工具、流程、验证矩阵与回滚 |
 | [`core-services.md`](core-services.md) | Swift 核心服务：AppStore、事件、调度、并发 |
 | [`ui-design.md`](ui-design.md) | SwiftUI 信息架构、页面、组件与交互约定 |
 | [`copy-style.md`](copy-style.md) | 界面文案、术语、本地化规范 |
 
 ## 发布记录
 
-- 最新：[`releases/4.2.0.md`](releases/4.2.0.md)
+- App 发布说明：最新 [`releases/4.2.2.md`](releases/4.2.2.md)（版本号 `4.2.2 (build 40)`）
+- 微信版本适配说明：[`releases/4.2.1.5.md`](releases/4.2.1.5.md)（随 App 4.2.2 发布）
 - 历史版本按版本号存放在 [`releases/`](releases/)，只用于追溯，不再作为操作手册。
 
 ## 约定

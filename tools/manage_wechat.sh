@@ -29,11 +29,11 @@ GADGET_SRC="${WECHAT_GADGET_SRC:-$ROOT_DIR/hook/gadget/FridaGadget.dylib}"
 CONFIG_SRC="${WECHAT_GADGET_CONFIG:-$ROOT_DIR/hook/gadget/FridaGadget.config}"
 INJECTOR="$ROOT_DIR/tools/inject_load_dylib.py"
 BACKUP_ROOT="${WECHAT_BACKUP_DIR:-$HOME/Library/Application Support/WeChatAI/backups}"
-SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.1.3}"
-SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270595}"
+SUPPORTED_VERSION="${WECHAT_SUPPORTED_VERSION:-4.2.1.5}"
+SUPPORTED_BUILD="${WECHAT_SUPPORTED_BUILD:-270597}"
 # 已知可用版本（version:build），首个为默认目标。未显式设置 WECHAT_SUPPORTED_VERSION/BUILD 时，
 # 历史 4.2.0.x 仍可安装；4.1.x 自 2026-11-20 起不再支持。
-KNOWN_VERSION_PAIRS="4.2.1.3:270595 4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341"
+KNOWN_VERSION_PAIRS="4.2.1.5:270597 4.2.1.3:270595 4.2.0.17:270353 4.2.0.12:270348 4.2.0.9:270345 4.2.0.5:270341"
 LOAD_PATH="@executable_path/../Frameworks/FridaGadget.dylib"
 
 ACTION="${1:-status}"
@@ -172,6 +172,30 @@ print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
 }
 
+# Sparkle 自动更新：写入偏好并清理已下载的更新缓存。
+# 写入失败时明确告警：静默 "best effort" 会让用户在下次退出微信时被自动升级覆盖 Hook。
+disable_sparkle_auto_update() {
+  [ "$APP" = "/Applications/WeChat.app" ] || return 0
+  local ok=1
+  /usr/bin/defaults write com.tencent.xinWeChat SUEnableAutomaticChecks -bool false 2>/dev/null || ok=0
+  /usr/bin/defaults write com.tencent.xinWeChat SUAutomaticallyUpdate -bool false 2>/dev/null || ok=0
+  # 已下载的更新会在退出微信时直接替换 App（2026-11-25 实测 4.2.1.5 → 4.2.1.9），
+  # 安装/还原完成后一并清掉。
+  local cache="$HOME/Library/Caches/com.tencent.xinWeChat/org.sparkle-project.Sparkle/Installation"
+  if [ -d "$cache" ]; then
+    if rm -rf -- "$cache"; then
+      note "removed staged WeChat update cache: $cache"
+    else
+      note "WARNING: 无法清理已下载的微信更新缓存：$cache（请手动删除，或到微信设置关闭自动更新）"
+    fi
+  fi
+  if [ "$ok" -eq 1 ]; then
+    note "Sparkle automatic update checks disabled"
+  else
+    note "WARNING: 无法写入微信 Sparkle 偏好（沙盒/TCC 限制）；请到微信「设置 → 通用」关闭自动更新，否则退出微信后可能被自动升级。"
+  fi
+}
+
 ensure_backup() {
   mkdir -p "$BACKUP_ROOT"
   local backup ent
@@ -303,11 +327,7 @@ PY
   gadget_installed || die "load command injection failed"
   # 只对标准安装路径改微信偏好；用 --app 指向备份副本/测试 bundle 时不应影响
   # 本机真实微信的更新设置。
-  if [ "$APP" = "/Applications/WeChat.app" ]; then
-    note "disabling Sparkle automatic update checks (best effort)"
-    /usr/bin/defaults write com.tencent.xinWeChat SUEnableAutomaticChecks -bool false 2>/dev/null || true
-    /usr/bin/defaults write com.tencent.xinWeChat SUAutomaticallyUpdate -bool false 2>/dev/null || true
-  fi
+  disable_sparkle_auto_update
 
   note "OK. Launch WeChat, then start the bridge."
   print_status
@@ -354,6 +374,8 @@ do_restore() {
   /usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
   /usr/bin/codesign --verify --strict "$APP" || die "restored app failed signature verification"
   note "restore complete: official signature is back."
+  # 还原到旧版本后也要关闭自动更新并清掉已下载的新版本，否则下次退出微信又会被升级。
+  disable_sparkle_auto_update
   # 没有 CLT 时不要调用 print_status（otool/python3 会触发系统安装弹窗）。
   if command_line_tools_available; then
     print_status

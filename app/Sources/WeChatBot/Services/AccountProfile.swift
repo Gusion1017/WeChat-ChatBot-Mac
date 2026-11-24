@@ -304,6 +304,13 @@ enum AccountProfile {
         return snapshot.resolver.imageDirectory(forAccountID: snapshot.activeID)
     }
 
+    /// 当前账号在微信容器里的 `temp/`；缺失且账号数据目录存在时主动创建。
+    /// 用于首次安装/微信更新后微信尚未生成 `temp/` 的场景，避免启动机器人被卡住。
+    static func ensureActiveImageDirectory() -> URL? {
+        let snapshot = currentState()
+        return snapshot.resolver.ensureImageDirectory(forAccountID: snapshot.activeID)
+    }
+
     // MARK: Activation
 
     /// 校验 id、建目录、原子写 `account-state.json` 并切换 active。

@@ -23,11 +23,13 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   衍生说明见 [`bridge/NOTICE`](../bridge/NOTICE)）
 - 本项目以上游 `onebot/` 为基线，**Go 源码有修改与新增**（自消息方向、入站归一化、
   通讯录目录、原生发送状态持久化等）；逐文件清单与原因见 [`bridge/NOTICE`](../bridge/NOTICE)。
-  `script.js` 同步 `hook/script.js` 的微信版本化适配（4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 /
-  4.2.0.5；4.1.x 自 2026-11-20 起移除，见 §5）。
+  `script.js` 同步 `hook/script.js` 的微信版本化适配（4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 /
+  4.2.0.9 / 4.2.0.5；4.1.x 自 2026-11-20 起移除，见 §5）。默认适配目标 4.2.1.5，见 §5 与
+  [`hook-porting.md`](hook-porting.md)。
 
-> **发布状态（2026-11-22）**：本文描述 **4.2.1**，包含朋友圈 `/sns/*` 与 4.2.1.3 适配；下载用户见
-> [`install.md`](install.md) 与 [`releases/4.2.0.md`](releases/4.2.0.md)。
+> **发布状态（2026-11-25）**：本文描述 **4.2.1**，包含朋友圈 `/sns/*` 与 4.2.1.5 / 4.2.1.3 适配
+> （4.2.1.5 的朋友圈写链路强制只读）；下载用户见 [`install.md`](install.md)、
+> [`releases/4.2.1.md`](releases/4.2.1.md) 与 [`releases/4.2.1.5.md`](releases/4.2.1.5.md)。
 
 ---
 
@@ -140,7 +142,7 @@ scripts/run_bridge.sh [选项]
 
 | 环境变量 | 命令行参数 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `WECHAT_CONF` | `--wechat-conf` | `hook/versions/4_2_1_3_mac.json` | Hook 版本 JSON |
+| `WECHAT_CONF` | `--wechat-conf` | `hook/versions/4_2_1_5_mac.json` | Hook 版本 JSON |
 | `PORT` | `--port` | `58080` | HTTP/WS 监听端口；`run_bridge.sh` 固定只绑定 `127.0.0.1`（App 用设置里的 host，默认 `127.0.0.1`） |
 | `TOKEN` | `--token` | 随机生成 64 字符 hex | OneBot token；HTTP 鉴权用 |
 | `IMAGE_PATH` | `--image-path` | 无（**必填**） | 微信图片/语音/视频/文件临时目录，必须已存在 |
@@ -155,7 +157,7 @@ scripts/run_bridge.sh [选项]
 ```bash
 IMAGE_PATH="$HOME/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_xxxxxxxx/temp/2026-10/Img" \
   scripts/run_bridge.sh --port 58081 --token "$(openssl rand -hex 32)" \
-  --wechat-conf hook/versions/4_2_1_3_mac.json
+  --wechat-conf hook/versions/4_2_1_5_mac.json
 ```
 
 脚本会先做前置检查（二进制、`script.js`、版本 JSON、`IMAGE_PATH`、端口占用），
@@ -206,7 +208,7 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
 - 朋友圈（SNS）没有独立命令行参数：`/sns/*` 是否可用由 `-wechat_conf` 指向的版本 JSON 的
   `snsEnable` / `snsWrite` / `snsProbe` / `snsReadMode` 决定，App 启动 bridge 前按设置合并生成运行期
   配置；仓库 JSON 默认 `snsEnable=false`，因此默认所有 `/sns/*` 返回 404。当前只有
-  `hook/versions/4_2_0_12_mac.json`、`4_2_0_17_mac.json` 与 `4_2_1_3_mac.json` 含 SNS 锚点；其它版本即使被 App 运行期
+  `hook/versions/4_2_0_12_mac.json`、`4_2_0_17_mac.json`、`4_2_1_3_mac.json` 与 `4_2_1_5_mac.json` 含 SNS 锚点；其它版本即使被 App 运行期
   写入 `snsEnable=true`，具体 op 也会返回 503 `sns_channel_unconfigured`（见 [`sns.md`](sns.md) §6.1）。
 
 ---
@@ -237,7 +239,7 @@ App 强制把 `-image_path` / `-media_dir` 指向当前账号目录（忽略用�
   文本占位替换成**无 data 的** `{"type":"image","data":{}}`。新增结构化字段不携带
   aeskey/CDN key，运行日志也不打印；`raw_message` 仍保留原始图片 XML（与历史行为一致）。
   实际下载发生在 App 调用 `POST /fetch_image` 时（按需，见 §3.4），不会阻塞事件推送；该链路已在
-  微信 4.2.0.5 真机验证。4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的入站路径不再同步下载媒体，
+  微信 4.2.0.5 真机验证。4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 的入站路径不再同步下载媒体，
   推送只带结构化占位，下载由 App 按需发起。
 
 ### 3.2 WebSocket 动作（App → bridge）
@@ -408,7 +410,7 @@ Content-Type: application/json
    与 `scripts/run_bridge.sh`（参数化启动与前置检查）。
 5. **`script.js`**：唯一被修改的上游脚本，已同步 `hook/script.js` 的版本化适配（入站消息、原生发送、
    通讯录、SNS 捕获/发送；4.2.1.3 / 4.2.0.5 / 4.2.0.9 / 4.2.0.12 / 4.2.0.17）。
-   其中 4.2.1.3 版本文件自 2026-11-20 起成为默认目标，并随此后新构建的发布包分发
+   其中 4.2.1.5 版本文件自 2026-11-25 起成为默认目标，4.2.1.3 及更早版本保留并随新构建的发布包分发
    它以 `hook/script.js` 为唯一事实来源，细节见 NOTICE。
 
 ---
