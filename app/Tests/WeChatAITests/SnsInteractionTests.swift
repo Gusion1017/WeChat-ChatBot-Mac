@@ -477,7 +477,7 @@ final class SnsInteractionPlannerTests: XCTestCase {
 
         // bridge 标记来源/未确认时，即使是长 ID 也跳过。
         let marked = makeComment(
-            id: "1794234885123456789",
+            id: "1234567890123456789",
             userID: friendID,
             replyTo: "",
             replyToUserID: selfID,

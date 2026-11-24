@@ -699,15 +699,15 @@ final class SnsModelTests: XCTestCase {
         func decode(_ json: String) throws -> SnsComment {
             try JSONDecoder().decode(SnsComment.self, from: Data(json.utf8))
         }
-        let native = try decode(#"{"comment_id":"1794234885123456789","user_id":"wxid_a","text":"真不错"}"#)
+        let native = try decode(#"{"comment_id":"1234567890123456789","user_id":"wxid_a","text":"真不错"}"#)
         XCTAssertTrue(native.canBeReplyTarget)
 
         // bridge 显式标记：32 位列未确认。
-        let marked = try decode(#"{"comment_id":"1794234885123456789","user_id":"wxid_a","text":"真不错","comment_id_unconfirmed":true}"#)
+        let marked = try decode(#"{"comment_id":"1234567890123456789","user_id":"wxid_a","text":"真不错","comment_id_unconfirmed":true}"#)
         XCTAssertFalse(marked.canBeReplyTarget)
 
         // bridge 标记 db 来源但没有 confirmed：仍不能作为回复目标。
-        let db = try decode(#"{"comment_id":"1794234885123456789","user_id":"wxid_a","text":"真不错","source":"db"}"#)
+        let db = try decode(#"{"comment_id":"1234567890123456789","user_id":"wxid_a","text":"真不错","source":"db"}"#)
         XCTAssertTrue(db.isDatabaseCompleted)
         XCTAssertFalse(db.canBeReplyTarget)
 

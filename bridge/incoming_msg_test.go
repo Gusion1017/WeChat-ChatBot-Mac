@@ -129,7 +129,7 @@ func TestHandleMsgToleratesInboundImageSegmentWithoutText(t *testing.T) {
 		"sender":{"user_id":"wxid_user","nickname":"用户"},
 		"time":1760000000000,
 		"post_type":"message",
-		"message_id":"2313155729072926134",
+		"message_id":"1234567890123456789",
 		"message":[{"type":"image","data":{}}],
 		"raw_message":"<msg><img aeskey=\"00112233445566778899aabbccddeeff\" cdnmidimgurl=\"0102\" length=\"32\" md5=\"00112233445566778899aabbccddeeff\"/></msg>",
 		"show_content":"[图片]",

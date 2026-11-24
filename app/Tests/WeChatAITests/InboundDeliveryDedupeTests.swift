@@ -11,7 +11,7 @@ final class InboundDeliveryDedupeTests: XCTestCase {
     private let createdAt = Date(timeIntervalSince1970: 1_795_335_281)
 
     private func makeEvent(
-        messageID: String = "7710906317249970176",
+        messageID: String = "1234567890123456789",
         userID: String = "wxid_friend",
         selfID: String = "wxid_bot",
         timestamp: Date? = nil,
@@ -42,8 +42,8 @@ final class InboundDeliveryDedupeTests: XCTestCase {
 
     /// 同一条消息换 `message_id`（序号变化）+ 不同 rawJSON 仍是同一指纹。
     func testFingerprintIgnoresMessageID() throws {
-        let first = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "7710906317249970176")))
-        let replay = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "7710906317249970177")))
+        let first = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "1234567890123456789")))
+        let replay = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "1234567890123456790")))
         XCTAssertEqual(first, replay)
     }
 
@@ -101,8 +101,8 @@ final class InboundDeliveryDedupeTests: XCTestCase {
     /// 真机场景：同一条消息 2 分钟后再投递一次（换 ID）→ 第二次必须被丢弃。
     func testReplayWithNewMessageIDIsDuplicate() throws {
         var dedupe = InboundDeliveryDedupe()
-        let first = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "7710906317249970176")))
-        let replay = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "7710906317249970177")))
+        let first = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "1234567890123456789")))
+        let replay = try XCTUnwrap(InboundDeliveryFingerprint(event: makeEvent(messageID: "1234567890123456790")))
         XCTAssertFalse(dedupe.isDuplicate(first))
         XCTAssertTrue(dedupe.isDuplicate(replay))
         // 未重复的消息照常通过（不同正文 + 不同秒）。
