@@ -2,7 +2,7 @@
 
 > 本项目是 **macOS 原生 App + 微信 Hook**，不是双击即用的普通应用：GitHub 的「Download ZIP」默认只给
 > **源码**，不含已编译的 App、bridge 二进制和 Frida Gadget；非开发者请用 Releases 里的 App 压缩包，
-> 只有源码时按「源码构建」操作。当前发布版本：**4.2.2（build 40，2026-11-25）**，压缩包约 70 MB（66 MiB）。
+> 只有源码时按「源码构建」操作。当前发布版本：**4.2.3（build 41，2026-11-25）**，压缩包约 70 MB（66 MiB）。
 
 ## 1. 先确认环境
 
@@ -33,18 +33,18 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.2（约 70 MB / 66 MiB）**。
+发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.3（约 70 MB / 66 MiB）**。
 
-1. 下载 `WeChat-AI-4.2.2.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
+1. 下载 `WeChat-AI-4.2.3.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-4.2.2.zip.sha256
+   shasum -a 256 -c WeChat-AI-4.2.3.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）；下文分别示例。
 
-3. **首次打开会被 Gatekeeper 拦截**（App 是 ad-hoc 签名、未做 Apple 公证）。**macOS 15 起（含 macOS 26）
-   已取消「右键 → 打开」这个绕过入口**，正确流程：
+3. **首次打开会被 Gatekeeper 拦截**（App 未做 Apple 公证；签名身份取决于构建配置，默认沿用发布者的固定
+   身份，未配置时为 ad-hoc）。**macOS 15 起（含 macOS 26）已取消「右键 → 打开」这个绕过入口**，正确流程：
 
    - 双击 App，看到“无法验证开发者 / 无法打开”的拦截提示；
    - 打开「系统设置 → 隐私与安全性」，滚动到底部，找到刚被拦截的 App，点「仍要打开」；
@@ -119,17 +119,20 @@
   「更新」行显示「新」徽标、主窗口与菜单栏 footer 显示「有新版本 X」并弹一次提醒。只检测**正式版**，不提供 beta 通道。
 - **执行更新**：确认后 App 停止机器人，下载 `WeChat-AI-<version>.zip` 并核对同名 `.sha256`、校验 bundle id/版本号/签名，
   然后退出；更新助手把旧 App 备份为同目录 `WeChat AI.app.update-backup-<epoch>`，展开新版本、移除 quarantine、
-  ad-hoc 重签并重新打开。全程约一次完整下载（当前包约 70 MB / 66 MiB），更新期间机器人停止，完成后需手动重新启动。
+  **保留发布包签名并校验**后重新打开（不再 ad-hoc 重签）。全程约一次完整下载（当前包约 70 MB / 66 MiB），
+  更新期间机器人停止，完成后需手动重新启动。
 - **更新要求**：必须 `.app` 方式运行（bundle id `com.gusionw.wechatai`，`swift run` 不可更新）；不能处于
   App Translocation 路径；安装目录对当前用户可写（无写权限直接提示，不弹管理员授权）；网络可达 GitHub API
   与资产域名（未认证接口限流 60 次/小时）；开发构建可更新但界面会提示。
-- **失败回退**：App 内失败（下载/校验/解压/门禁/助手启动）不退出、保持当前版本并可重试；助手阶段失败（替换/重签/校验/打开）
+- **失败回退**：App 内失败（下载/校验/解压/门禁/助手启动）不退出、保持当前版本并可重试；助手阶段失败（替换/签名校验/打开）
   会删除半成品、恢复 `.update-backup-*` 并重新打开旧版本，详情见 `~/Library/Logs/WeChatAI/update.log`；
   新版本成功启动后不自动降级，旧备份在新版本**首次启动**时清理。
 - **与手动安装的关系**：应用内更新使用与 Releases 相同的 zip 和 SHA256，只是自动化「下载 → 解压 → 拖入 Applications」；
-  自动更新不可用（网络/限流/门禁/校验失败）时仍可按方式 A 手动下载覆盖，手动覆盖同样会因 ad-hoc 签名触发 Gatekeeper 首次放行。
-- **签名与 Gatekeeper**：App 仍为 ad-hoc 签名、未公证；助手会移除新包 quarantine 并重签，但首次打开仍可能
-  需「系统设置 → 隐私与安全性 → 仍要打开」，替换/重签后「App 数据」「App 管理」等 TCC 授权可能需重新允许。
+  自动更新不可用（网络/限流/门禁/校验失败）时仍可按方式 A 手动下载覆盖，手动覆盖同样未公证，可能触发 Gatekeeper 首次放行。
+- **签名与 Gatekeeper**：App 未公证；发布包默认沿用固定签名身份（未配置时 ad-hoc）。稳定签名身份跨版本不变，
+  更新后「完全磁盘访问 / App 数据」授权会保留；ad-hoc 的代码要求是 cdhash，每次更新都会变，必须把 App 从
+  「完全磁盘访问权限」移除再重新添加。助手只移除新包 quarantine 并校验签名、不再重签；首次打开仍可能需
+  「系统设置 → 隐私与安全性 → 仍要打开」。详见 [`updates.md`](updates.md) §5.2.1。
 
 > 如果发布者没有提供 Releases 压缩包，只能用方式 B。
 
@@ -150,7 +153,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
    bash scripts/fetch_gadget.sh      # 下载 Frida Gadget 17.8.0（校验 SHA256）
    bash scripts/build_bridge.sh      # 构建 bridge/onebot（含 Go 测试）
    bash scripts/build_app.sh         # 生成 dist/WeChat AI.app
-   bash scripts/install_app.sh       # 安装到 ~/Applications（移除 quarantine 并重签）
+   bash scripts/install_app.sh       # 安装到 ~/Applications（移除 quarantine；默认保留构建签名）
    open "$HOME/Applications/WeChat AI.app"
    ```
 
@@ -163,7 +166,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
 
 ## 4. 发布者：如何制作可下载的 App 压缩包
 
-当前源码版本 **4.2.2（build 40）**（Releases 最新为 4.2.2），zip 约 **70 MB（66 MiB）**；版本与 build 由
+当前源码版本 **4.2.3（build 41）**（Releases 最新为 4.2.3），zip 约 **70 MB（66 MiB）**；版本与 build 由
 `app/Packaging/Info.plist` 决定（`package_release.sh` 不再写死版本号）。在具备 Xcode 27 / CLT 的机器上按顺序构建：
 
 ```bash
@@ -173,45 +176,50 @@ bash scripts/build_app.sh
 bash scripts/package_release.sh      # 或 make release
 ```
 
-> **本机反复重建**：ad-hoc 签名每次构建都会变化，会让 macOS 的「App 数据 / 完全磁盘访问」与
-> Keychain 授权失效，表现为重装后启动机器人提示找不到图片目录、或 API Key 需要重填。先运行一次
-> `bash scripts/configure_codesign_identity.sh` 固定本机 code signing 身份（写入 gitignored 的
-> `.codesign-identity`），之后 `build_app.sh` / `install_app.sh` 会沿用，TCC 授权不再每次失效。
-> 发布包仍默认 ad-hoc：`package_release.sh` 会忽略该文件，除非显式设置
-> `RELEASE_CODESIGN_IDENTITY`。
+> **本机反复重建 / 发布签名**：ad-hoc 签名每次构建都会变化，会让 macOS 的「App 数据 / 完全磁盘访问」与
+> Keychain 授权失效，表现为重装/更新后启动机器人提示找不到图片目录、或 API Key 需要重填。本机自建可先运行
+> `bash scripts/configure_codesign_identity.sh` 固定身份（写入 gitignored 的 `.codesign-identity`），
+> `build_app.sh` / `install_app.sh` 会沿用。**公开 Release 默认 ad-hoc**，`package_release.sh` 不读取
+> 个人 `.codesign-identity`，避免公开证书姓名 / Team ID；确需稳定签名时显式设置中性的
+> `RELEASE_CODESIGN_IDENTITY`。原理见 [`updates.md`](updates.md) §5.2.1。
 
-脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.2.zip` + `.sha256`）；
+脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.3.zip` + `.sha256`）；
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包，也可手动执行（版本号请按 Info.plist 替换）：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.2.zip"
-( cd dist && shasum -a 256 "WeChat-AI-4.2.2.zip" > "WeChat-AI-4.2.2.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.3.zip"
+( cd dist && shasum -a 256 "WeChat-AI-4.2.3.zip" > "WeChat-AI-4.2.3.zip.sha256" )
 ```
 
 签名与公证的预期：
 
-- App 为 **ad-hoc 签名**、未走 Apple 公证；`codesign -dv --verbose=4 "dist/WeChat AI.app"`
-  会显示 `Signature=adhoc`、无 Team ID；
+- App **未走 Apple 公证**。默认沿用 `.codesign-identity` / `RELEASE_CODESIGN_IDENTITY` 的固定签名身份；
+  `codesign -dv --verbose=4 "dist/WeChat AI.app"` 会显示 `Authority=...` 与 `TeamIdentifier=...`，
+  `codesign -d -r-` 的 designated requirement 是 identifier + 证书信息（跨版本稳定）。未配置身份时才显示
+  `Signature=adhoc`、无 Team ID。
 - `codesign --verify --strict "dist/WeChat AI.app"` 应通过；
-  `spctl --assess --type execute -vv "dist/WeChat AI.app"` **预期返回 `rejected`**（来源不可识别 / 未公证），
-  这是 ad-hoc 分发的正常结果，不代表压缩包损坏；
+  `spctl --assess --type execute -vv "dist/WeChat AI.app"` **预期返回 `rejected`**（未公证 / 非 Developer ID
+  分发），这是本项目的正常结果，不代表压缩包损坏；
+- 要让应用内更新后保留「完全磁盘访问 / App 数据」授权，发布包必须使用与上一版**相同**的稳定签名身份；
+  ad-hoc 的代码要求是 cdhash，每次构建都会变，用户更新后需要移除再重新添加；
 - 用户首次打开仍需按方式 A 第 3 步的 Gatekeeper 流程操作。
 
 上传前校验：
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-4.2.2.zip.sha256
+shasum -a 256 -c WeChat-AI-4.2.3.zip.sha256
 ```
 
-把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.2`，当前源码为
-`4.2.2 (build 40)`，发布前请确认 Info.plist 版本号），在说明里写清：
+把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.3`，当前源码为
+`4.2.3 (build 41)`，发布前请确认 Info.plist 版本号），在说明里写清：
 
 - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5；4.1.x 已移除；
 - **安装 Hook 需要 Xcode Command Line Tools**（`xcode-select --install`，无需开发者账号），首启向导会检测并引导安装；
-- App 为 ad-hoc 签名、未公证；macOS 15+ 已无「右键 → 打开」，
+- App 未公证（默认固定签名身份，未配置时为 ad-hoc）；macOS 15+ 已无「右键 → 打开」，
   首次需在 系统设置 → 隐私与安全性 → 仍要打开，或用 `xattr -dr com.apple.quarantine`；
+- 请保持发布签名身份跨版本一致：稳定签名才能让应用内更新后保留「完全磁盘访问」授权；
 - 安装 Hook 会修改微信、需完整备份（约 670MB），存在账号风控与签名失效风险；
 - 按 GPL-3.0 提供对应源码（仓库地址即可）；SHA256 指向 `.sha256` 文件，不在说明正文里手抄。
 
@@ -234,7 +242,8 @@ shasum -a 256 -c WeChat-AI-4.2.2.zip.sha256
 | 微信启动/退出后状态不更新 | 正常情况下 `NSWorkspace` 通知会实时同步；若仍过期，点总览/设置 → Hook 的「刷新状态」，或切回 App 触发一次轻量核对。持续异常时看运行日志中 `Hook` 来源的错误 |
 | 「登录时启动」打不开或系统没反应 | 该开关写入 `~/Library/LaunchAgents/com.gusionw.wechatai.loginitem.plist`；首次可能被 macOS 拦在 系统设置 → 通用 → 登录项，需要允许 WeChat AI 在后台运行。源码 `swift run` 不是 `.app`，开关会禁用；App 移动位置后重新开启即可写回新路径 |
 | 退出时没有确认弹窗 / 误触退出 | 只有在「设置 → 通用 → 退出前确认」开启且机器人或 bridge 正在运行时才弹确认，默认按钮是「取消」；关闭机器人后再退出不会打扰 |
-| 重建/重装 App 后启动机器人提示「未找到微信账号 … 的图片临时目录」 | 先确认 App 能看到微信账号目录：重签/重装会改变代码签名，macOS 之前授予的「App 数据 / 完全磁盘访问权限」对新签名失效（TCC 日志会报 `Failed to match existing code requirement`）。到 系统设置 → 隐私与安全性 → 完全磁盘访问权限（以及「App 数据」/「文件与文件夹」）把 **WeChat AI** 关闭再打开或重新添加，完全退出并重开 App 后重试。App 会在确认账号数据目录后自动创建 `xwechat_files/<wxid>_<suffix>/temp/`；只有账号目录本身不可见（TCC）时才会继续提示。反复重建时用 `scripts/configure_codesign_identity.sh` 固定签名身份可避免每次都失效。 |
+| 重建/重装 App 后启动机器人提示「未找到微信账号 … 的图片临时目录」 | 先确认 App 能看到微信账号目录：签名身份变化（ad-hoc 重签、换证书、换机器、更新包被 ad-hoc 重签）会改变代码签名，macOS 之前授予的「App 数据 / 完全磁盘访问权限」对新签名失效（TCC 日志会报 `Failed to match existing code requirement`）。到 系统设置 → 隐私与安全性 → 完全磁盘访问权限（以及「App 数据」/「文件与文件夹」）把 **WeChat AI** 关闭再打开或重新添加，完全退出并重开 App 后重试。App 会在确认账号数据目录后自动创建 `xwechat_files/<wxid>_<suffix>/temp/`；只有账号目录本身不可见（TCC）时才会继续提示。反复重建时用 `scripts/configure_codesign_identity.sh` 固定签名身份可避免每次都失效。 |
+| **应用内更新后**「完全磁盘访问权限」失效，需要移除再添加 | macOS TCC 按**代码签名要求**识别 App，不是按 bundle id/路径。旧版更新助手会把新版本 `codesign -f -s -` ad-hoc 重签，`package_release.sh` 也曾默认忽略 `.codesign-identity`，因此每次更新 cdhash 都变，旧授权不再匹配（`tccd` 日志 `Failed to match existing code requirement`）。当前版本已改为：发布包默认沿用固定签名身份，更新助手只校验、不重签。把 **WeChat AI** 从「完全磁盘访问权限」移除再添加一次后，后续更新会保留授权。若仍每次失效，检查 `dist` 包是否为 `Signature=adhoc`，或发布证书/身份是否变化；这与 macOS 27 无关。详见 [`updates.md`](updates.md) §5.2.1。 |
 | 图片/语音获取失败，或 `image_path` 检测失败 | 检查 系统设置 → 隐私与安全性 → App 数据 中是否允许 WeChat AI；拒绝授权会导致这些功能失败。修改微信时可能还需要「App 管理」授权 |
 | 手动 `run_bridge.sh` 时出站图片/语音在微信目录同级生成散落文件 | 旧 bridge 把 `-image_path` 与文件名直接字符串拼接；现改用 `filepath.Join`，目录末尾有没有 `/` 都可以。更新 bridge 后重试，无需修改配置 |
 | 安装 Hook 后微信打不开 | 先完全退出微信，再用 App 的「设置 → Hook → 还原官方微信」或 `bash tools/manage_wechat.sh restore` 还原 |

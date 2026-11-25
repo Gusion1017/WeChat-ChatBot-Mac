@@ -605,7 +605,8 @@ Window("WeChat AI", id: "main")
 - **更新内容渲染与收尾**：`ReleaseNotesDocument` 从 Release 正文提取「本版重点/更新内容」，过滤下载表格、
   安装步骤、隐私说明等模板段落；`ReleaseNotesView` 按标题/列表/代码/引用分块排版，行内加粗、代码与链接
   交给 `AttributedString`。新版本首次启动清理旧 `.update-backup-*` 与超过 24 小时的更新工作目录；
-  ad-hoc 签名未公证，首次打开可能需 Gatekeeper「仍要打开」放行，页面与安装文档给出提醒。
+  App 未公证（默认沿用固定签名身份，未配置时 ad-hoc），首次打开可能需 Gatekeeper「仍要打开」放行；
+  稳定签名身份跨版本一致时，应用内更新会保留「完全磁盘访问」授权，页面与安装文档给出提醒。
 
 ### 5.11 首次启动向导
 

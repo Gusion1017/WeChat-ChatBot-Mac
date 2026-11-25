@@ -5,8 +5,9 @@
 > [`core-services.md`](core-services.md) §5.12，页面交互见 [`ui-design.md`](ui-design.md) §5.10；
 > 手动下载/覆盖安装的关系见 [`install.md`](install.md) §2.1。
 >
-> 发布状态：应用内更新自 **3.1.0** 起提供；Releases **4.2.2 (build 40)** 已包含；
+> 发布状态：应用内更新自 **3.1.0** 起提供；Releases **4.2.3 (build 41)** 已包含；
 > 更早版本仍按 [`install.md`](install.md) §2 手动下载覆盖安装。
+> 签名保留修复（更新助手不再 ad-hoc 重签）需重新打包含该提交的发布包才生效，见 §5.2.1。
 
 ## 1. 用户可感知行为
 
@@ -139,11 +140,33 @@ App bundle，而不是 `/Applications` 猜测路径。
 | 1 | 等待旧进程退出 | 最多等待约 **60 秒**；超时发信号前用 `/bin/ps -p <pid> -o comm=` 确认 PID 仍是本 App（防 PID 复用误杀），再 SIGTERM → SIGKILL |
 | 2 | 备份旧版 | 旧 App `mv` 到同目录 `WeChat AI.app.update-backup-<epoch>` |
 | 3 | 展开新版本 | 用 `ditto` 把暂存 App 展开到安装目标 |
-| 4 | 去 quarantine、重签并校验 | `xattr -dr com.apple.quarantine <目标 App>`；`/usr/bin/codesign -f -s - --timestamp=none <目标 App>`；`/usr/bin/codesign --verify --strict <目标 App>` |
+| 4 | 去 quarantine、保留签名并校验 | `xattr -dr com.apple.quarantine <目标 App>`；**不再 ad-hoc 重签**（重签会改变 TCC 的代码签名要求，导致完全磁盘访问 / App 数据授权失效）；`codesign --verify --strict` 通过才继续 |
 | 5 | 重新打开与收尾 | `open <目标 App>`（打不开按失败回滚）；保留旧版备份、删除本次 `update-<UUID>` 工作目录，新版本启动时由 `UpdateInstaller.cleanupAfterUpdate` 清理旧备份与残留目录 |
 
 - 等待旧 PID 超时后先发 `SIGTERM`、仍未退出再发 `SIGKILL`，仍无法结束则按失败回滚；`xattr -dr
   com.apple.quarantine` 返回非 0（通常是没有 quarantine 属性）只记录日志，继续下一步。
+
+### 5.2.1 签名与 TCC（完全磁盘访问）
+
+macOS 的「完全磁盘访问」「App 数据」等 TCC 授权绑定 App 的**代码签名要求**，不是 bundle id 或安装路径：
+
+- 稳定签名身份（Developer ID / 同一张自签名证书）的代码要求是 `identifier + 证书信息`，跨版本不变；
+  用户授权一次后，后续更新保留权限。
+- ad-hoc 签名的代码要求是 `cdhash`，每次构建/发布都会变；macOS 会把它当成另一个 App。
+  表现为权限列表里仍有 WeChat AI，但实际访问被拒，`tccd` 日志报
+  `Failed to match existing code requirement`；需要把 App 从「完全磁盘访问权限」移除再重新添加。
+
+规则：
+
+- **本机自建**：`scripts/configure_codesign_identity.sh` 写入 gitignored 的 `.codesign-identity`，
+  `build_app.sh` / `install_app.sh` 沿用，反复重建保留 TCC / Keychain 授权。
+- **公开 Release**：`package_release.sh` 默认 ad-hoc，**不读取** `.codesign-identity`，避免把个人
+  Apple Development 证书中的姓名 / Team ID 打进公开包。确需跨版本稳定签名时，显式设置中性的
+  `RELEASE_CODESIGN_IDENTITY`；更新助手只校验签名、不再重签。
+- **升级影响**：ad-hoc → 稳定签名（或相反）会改变代码身份，首次切换需一次性重新授权；之后同身份更新
+  保留授权。公开包为 ad-hoc 时，更新后可能需重新授权。
+
+这与 macOS 27 无关：TCC 一直按代码身份记录授权。
 
 失败回滚（任一步失败）：
 
@@ -223,14 +246,15 @@ Translocation 中的副本；不提供「忽略错误继续安装」的隐藏开
 强制更新、不自动重启机器人（更新前明确告知会停止机器人并退出 App）；只使用固定仓库的 GitHub 正式 Release。
 
 **信任边界**：zip 与 `.sha256` 同源于 GitHub Release，SHA256 用于完整性校验，不是独立发布者签名，发布链路
-信任仍以 GitHub 仓库/TLS 为准；App 为 ad-hoc 签名、未公证，更新助手会 ad-hoc 重签新版本，首次打开可能仍需
-Gatekeeper 放行，见 §8。
+信任仍以 GitHub 仓库/TLS 为准；发布包默认沿用固定签名身份（`.codesign-identity`，未配置时 ad-hoc）、未公证，
+更新助手**保留发布包签名并校验，不再 ad-hoc 重签**，首次打开可能仍需 Gatekeeper 放行，见 §8。
 
 ## 8. 已知限制
 
 | 限制 | 影响 | 处理 |
 | --- | --- | --- |
-| ad-hoc 签名、未公证 | 替换后的新版本首次打开可能被 Gatekeeper 拦截 | 按 [`install.md`](install.md) §2 Gatekeeper 流程「仍要打开」；助手会移除新包 quarantine（失败只记日志），但不改变未公证事实 |
+| 发布签名身份需跨版本一致 | 换证书 / 换机器 / 回退 ad-hoc 会改变 TCC 代码要求，用户需把 App 从「完全磁盘访问权限」移除再重新添加一次 | 发布前固定 `.codesign-identity` 或 `RELEASE_CODESIGN_IDENTITY`；身份变化时在 Release Notes 说明并给一次性重授权步骤，见 §5.2.1 |
+| 未公证 | 替换后的新版本首次打开可能被 Gatekeeper 拦截 | 按 [`install.md`](install.md) §2 Gatekeeper 流程「仍要打开」；助手保留签名并移除新包 quarantine（失败只记日志），但不改变未公证事实 |
 | 需可写安装目录 | `/Applications` 属主异常或只读卷上不能原地更新 | 安装到 `~/Applications`，或修正目录权限后重试；不提供提权 |
 | 仅正式版、无增量更新 | 每次更新下载完整 `WeChat-AI-<version>.zip`（约 70 MB / 66 MiB） | 进度条展示大小；网络慢时等待完成 |
 | 助手等待旧 PID 最多约 60 秒 | 旧 App 若未及时退出，助手按失败回滚 | 确保更新时 App 能正常退出；失败后查看 `update.log` |
@@ -248,10 +272,10 @@ Gatekeeper 放行，见 §8。
 | 2 | 自动检查 | 启动后约 8 秒发起一次；`lastCheckedAt` 写入；6 小时内重启不重复请求；关闭开关后启动不再自动检查 |
 | 3 | 检查失败 | 断网/限流/404 显示对应可读提示并可重试；自动检查失败只写日志、不弹错误 |
 | 4 | 新版本提示与跳过 | 设置分类侧栏「更新」行显示「新」，主窗口侧栏与菜单栏 footer 显示「有新版本 X」；自动检查只弹一次 toast；重启/再次检查同一 tag 不重复弹；跳过/取消跳过后徽标与 toast 相应消失/恢复 |
-| 5 | 更新内容与确认 | 已最新显示本版本「本版重点」、有更新显示新版本更新内容（无下载/安装/隐私模板段落，标题/列表/代码块有层级）；点「下载并安装」的弹窗先显示更新内容，再显示退出/替换/重签提示与取消按钮 |
+| 5 | 更新内容与确认 | 已最新显示本版本「本版重点」、有更新显示新版本更新内容（无下载/安装/隐私模板段落，标题/列表/代码块有层级）；点「下载并安装」的弹窗先显示更新内容，再显示退出/替换/签名保留提示与取消按钮 |
 | 6 | 安装门禁与校验 | 非 `.app` 运行、伪造 bundle id、Translocation、只读目录分别给出对应提示且不下载/不替换；损坏 `.sha256` → SHA256 不匹配提示，缺失 `.sha256` → 拒绝安装，伪造非 GitHub 下载地址 → 解析失败提示 |
-| 7 | 正常更新与清理 | 机器人运行中点击更新 → 确认 → 下载/校验/安装 → App 退出 → 助手替换并重新打开 → 版本号更新、`update.log` 记录各步骤；本次 `update-<UUID>` 目录立即删除，新版本首次启动清理旧 `.update-backup-*`，人为制造超过 24h 的失败残留后重启会被清理 |
-| 8 | 回滚与安全 | 人为制造替换/重签失败 → 已替换时半成品删除、旧版恢复并重新打开、退出码 1、`update.log` 有失败原因；抓包确认只访问 GitHub API/资产域名、请求不含 Cookie/API Key/本地路径、http 地址被拒；新版本 ad-hoc 签名有效（`codesign --verify --strict` 通过）、首次打开按系统提示可放行；更新页 GitHub/Release 链接与更新日志入口可用、相对链接无失效 |
+| 7 | 正常更新与清理 | 机器人运行中点击更新 → 确认 → 下载/校验/安装 → App 退出 → 助手替换并重新打开 → 版本号更新、`update.log` 记录「保留发布包签名，未重签」各步骤；本次 `update-<UUID>` 目录立即删除，新版本首次启动清理旧 `.update-backup-*`，人为制造超过 24h 的失败残留后重启会被清理 |
+| 8 | 回滚与安全 | 人为制造替换/签名校验失败 → 已替换时半成品删除、旧版恢复并重新打开、退出码 1、`update.log` 有失败原因；抓包确认只访问 GitHub API/资产域名、请求不含 Cookie/API Key/本地路径、http 地址被拒；新版本签名有效（`codesign --verify --strict` 通过），稳定签名时 `codesign -d -r-` 的 designated requirement 升级前后一致、更新后完全磁盘访问授权仍有效；首次打开按系统提示可放行；更新页 GitHub/Release 链接与更新日志入口可用、相对链接无失效 |
 
 ### 9.2 单测覆盖点（`UpdateTests.swift` / `ReleaseNotesTests.swift`）
 
@@ -270,7 +294,7 @@ Gatekeeper 放行，见 §8。
 | 状态机 | 忙状态不重入；自动检查失败不进入 `failed`；跳过/取消跳过；可用更新徽标判定 | `shouldPrompt` 已覆盖，`UpdateCenter` 状态迁移仍待补 |
 | 设置解码 | 旧 `config.json` 缺 `updates` 回退默认；段内缺字段逐项回退；不影响其它设置段 | 旧配置/往返已覆盖，逐字段损坏待补 |
 | 清理 | 旧 `.update-backup-*` 与超过 24h 工作目录的清理；未到期目录保留 | 已覆盖 |
-| 助手脚本 | 包含等待 PID（含 `ps -p` 身份校验）、备份、`ditto`、quarantine、ad-hoc 重签、verify、open、失败恢复与退出码 1；真实替换/回滚/工作目录自清理集成 | 已覆盖 |
+| 助手脚本 | 包含等待 PID（含 `ps -p` 身份校验）、备份、`ditto`、quarantine、**保留发布包签名（不重签）**、verify、open、失败恢复与退出码 1；真实替换/回滚/工作目录自清理集成，并断言安装前后 cdhash 不变 | 已覆盖 |
 | `ReleaseNotesDocument` | 「本版重点/更新内容」小节提取、模板段落过滤、嵌套标题、列表/代码/引用/表格、CRLF+BOM、软换行合并、空正文 | 已覆盖（`ReleaseNotesTests`） |
 
 运行方式：

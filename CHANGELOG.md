@@ -4,6 +4,19 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
+## [4.2.3] — 2026-11-25
+
+### 修复
+
+- **应用内更新后「完全磁盘访问」授权失效（TCC 报 `Failed to match existing code requirement`）**：
+  更新助手原先在替换后执行 `codesign -f -s -` ad-hoc 重签，`package_release.sh` 也默认忽略
+  `.codesign-identity` 强制 ad-hoc；macOS TCC 按代码签名要求识别 App，ad-hoc 的要求是 cdhash，
+  每次构建/更新都会变，于是权限列表里仍有 WeChat AI 但实际访问被拒，必须移除再重新添加。
+  更新助手只校验签名、不再重签，保留发布包签名。本机自建可用固定身份保留 TCC；公开 Release
+  默认 ad-hoc，避免把个人证书中的姓名 / Team ID 打进公开包（需要稳定签名时显式设置中性
+  `RELEASE_CODESIGN_IDENTITY`）。ad-hoc 更新仍可能需一次性重新授权。
+  macOS 27 不是原因：TCC 一直按代码身份记录授权。详见 `docs/updates.md` §5.2.1。
+
 ## [4.2.2] — 2026-11-25
 
 ### 新增
@@ -1723,6 +1736,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.3]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.1.0...v4.2.0

@@ -3431,7 +3431,7 @@
 "未找到会话：%@" = "Conversation not found: %@";
 "切换微信账号数据失败（%@），请查看日志或重启 App 后重试" = "Failed to switch WeChat account data (%@). Check the logs or restart the app and try again.";
 "正在切换微信账号数据，请稍候再启动机器人" = "WeChat account data is switching; wait before starting the bot.";
-"未找到微信账号 %@ 的图片临时目录；请确认 WeChat AI 有权限访问微信数据（系统设置 → 隐私与安全性 → App 数据 / 完全磁盘访问权限），或先在微信里打开任意聊天图片后重试" = "Couldn't find the image temp folder for WeChat account %@. Make sure WeChat AI can access WeChat data (System Settings → Privacy & Security → App Data / Full Disk Access), or open any chat image in WeChat and retry.";
+"未找到微信账号 %@ 的图片临时目录；请确认 WeChat AI 有权限访问微信数据（系统设置 → 隐私与安全性 → App 数据 / 完全磁盘访问权限）。若刚更新/重装过 App，请把 WeChat AI 从「完全磁盘访问权限」中移除后重新添加（macOS 按代码签名识别权限）；也可先在微信里打开任意聊天图片后重试" = "Couldn't find the image temp folder for WeChat account %@. Make sure WeChat AI can access WeChat data (System Settings → Privacy & Security → App Data / Full Disk Access). If you just updated or reinstalled the app, remove WeChat AI from Full Disk Access and add it again (macOS identifies apps by code signature); you can also open any chat image in WeChat and retry.";
 "启动未完成：运行时未就绪" = "Start didn't finish: the runtime isn't ready";
 
 "打开日志" = "Open logs";

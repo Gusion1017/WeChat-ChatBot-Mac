@@ -1,6 +1,6 @@
 # 文档索引
 
-> 文档只描述**当前版本 4.2.2**。历史变更见 [`CHANGELOG.md`](../CHANGELOG.md)，历史发布说明见
+> 文档只描述**当前版本 4.2.3**。历史变更见 [`CHANGELOG.md`](../CHANGELOG.md)，历史发布说明见
 > [`releases/`](releases/)。
 
 ## 核心文档
@@ -23,8 +23,8 @@
 
 ## 发布记录
 
-- App 发布说明：最新 [`releases/4.2.2.md`](releases/4.2.2.md)（版本号 `4.2.2 (build 40)`）
-- 微信版本适配说明：[`releases/4.2.1.5.md`](releases/4.2.1.5.md)（随 App 4.2.2 发布）
+- App 发布说明：最新 [`releases/4.2.3.md`](releases/4.2.3.md)（版本号 `4.2.3 (build 41)`）
+- 微信版本适配说明：[`releases/4.2.1.5.md`](releases/4.2.1.5.md)（随后续 App 发布）
 - 历史版本按版本号存放在 [`releases/`](releases/)，只用于追溯，不再作为操作手册。
 
 ## 约定

@@ -50,7 +50,7 @@ memory, voice and image understanding.
 ### 快速开始
 
 1. 从 [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest) 下载
-   `WeChat-AI-4.2.2.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
+   `WeChat-AI-4.2.3.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
 2. App 未公证，首次启动被 Gatekeeper 拦截时，在「系统设置 → 隐私与安全性」点「仍要打开」，或执行：
 
    ```bash
@@ -96,7 +96,9 @@ make release                        # 构建、打包、签名校验与 SHA256
 ```
 
 当前基线：Swift 1036 项执行（1034 通过 / 2 项环境跳过），Go 373 项用例。
-本机反复重建 App 时先运行 `bash scripts/configure_codesign_identity.sh` 固定签名身份，避免 TCC / Keychain 授权每次失效；发布包仍默认 ad-hoc。
+本机反复重建/发布 App 时先运行 `bash scripts/configure_codesign_identity.sh` 固定签名身份，避免 TCC / Keychain
+授权每次失效；公开 Release 默认 ad-hoc，避免把个人证书姓名/Team ID 打进包；需要稳定签名时显式设置
+中性 `RELEASE_CODESIGN_IDENTITY`（ad-hoc 的代码要求是 cdhash，更新后可能需重新授权）。
 修改 `hook/script.js` 后运行 `bash scripts/sync_hook_script.sh`；接口或行为变更先改 `docs/`。
 
 微信更新后的 Hook 适配走 `tools/wxport`（见 [`docs/hook-porting.md`](docs/hook-porting.md)）。
@@ -164,7 +166,7 @@ Hook installation needs Xcode Command Line Tools; source builds need Xcode 27.
 
 ### Quick Start
 
-1. Download `WeChat-AI-4.2.2.zip` and `.sha256` from
+1. Download `WeChat-AI-4.2.3.zip` and `.sha256` from
    [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest), unzip and move
    `WeChat AI.app` to `~/Applications` or `/Applications`.
 2. If Gatekeeper blocks the first launch, choose "Open Anyway" under System Settings → Privacy &

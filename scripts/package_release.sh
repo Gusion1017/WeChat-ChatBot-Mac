@@ -13,6 +13,12 @@
 # 前置：
 #   bash scripts/fetch_gadget.sh
 #   bash scripts/build_bridge.sh
+#
+# 签名：
+#   公开 Release 默认 ad-hoc，避免把本机个人证书（姓名 / Team ID）打进公开包；
+#   确需稳定签名时显式设置 RELEASE_CODESIGN_IDENTITY（推荐中性发布证书）。
+#   ad-hoc 的 TCC 代码要求是 cdhash，每次发布都会变，用户更新后需重新授权；
+#   本机自建可用 scripts/configure_codesign_identity.sh 固定身份。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +33,7 @@ for arg in "$@"; do
   case "${arg}" in
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help)
-      sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) fail "未知参数：${arg}（可用：--skip-build / --help）" ;;
   esac
@@ -44,12 +50,12 @@ done
   || fail "缺少默认微信 4.2.1.5 的 Hook 版本 JSON：hook/versions/4_2_1_5_mac.json（发布包必须包含该文件）"
 
 if (( SKIP_BUILD == 0 )); then
-  # 发布包默认 ad-hoc：忽略本机 .codesign-identity，避免把个人开发证书带进 Release。
-  # 确需签名发布时显式设置 RELEASE_CODESIGN_IDENTITY。
+  # 公开 Release 不读取 .codesign-identity：该文件通常是个人 Apple Development 证书，
+  # 签名会公开证书中的姓名 / Team ID。需要稳定签名时必须显式指定中性发布证书。
   CODESIGN_IDENTITY="${RELEASE_CODESIGN_IDENTITY:--}" \
     bash "$ROOT_DIR/scripts/build_app.sh"
 elif [ -f "$ROOT_DIR/.codesign-identity" ]; then
-  say "WARNING: 检测到本机 .codesign-identity；--skip-build 会沿用 dist 里已有的签名，发布前请确认。"
+  say "WARNING: --skip-build 会沿用 dist 里已有的签名；发布前请确认它不含个人证书信息。"
 fi
 
 [[ -d "$BUNDLE" ]] || fail "未找到 ${BUNDLE}；先运行 bash scripts/build_app.sh"
@@ -72,6 +78,25 @@ done
 
 /usr/bin/codesign --verify --strict "$BUNDLE" || fail "签名校验失败：${BUNDLE}"
 
+IS_ADHOC=0
+if /usr/bin/codesign -dvv "$BUNDLE" 2>&1 | /usr/bin/grep -q 'Signature=adhoc'; then
+  IS_ADHOC=1
+fi
+SIGNATURE_SUMMARY="$(/usr/bin/codesign -dvv "$BUNDLE" 2>&1 \
+  | /usr/bin/grep -E '^(Authority|TeamIdentifier)=' \
+  | /usr/bin/head -3 \
+  | /usr/bin/tr '\n' ' ')"
+if (( IS_ADHOC == 1 )); then
+  say "签名：ad-hoc（隐私优先，不包含个人证书）"
+  say "   macOS 以代码签名要求识别 App；ad-hoc 的要求是 cdhash，发布/更新后会变，"
+  say "   用户可能需要在「完全磁盘访问权限」中移除再重新添加。"
+else
+  say "签名：${SIGNATURE_SUMMARY:-未知}"
+  if printf '%s' "$SIGNATURE_SUMMARY" | /usr/bin/grep -q 'Apple Development:'; then
+    say "⚠️  当前是个人 Apple Development 证书，公开包会暴露证书姓名；公开 Release 请改用中性发布证书或 ad-hoc。"
+  fi
+fi
+
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
   "$ROOT_DIR/app/Packaging/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
@@ -90,16 +115,19 @@ say "  ${ZIP}.sha256"
 say ""
 say "SHA256："
 cat "$ZIP.sha256"
-if [ "${RELEASE_CODESIGN_IDENTITY:--}" = "-" ] && [ -f "$ROOT_DIR/.codesign-identity" ]; then
+if (( IS_ADHOC == 1 )); then
   say ""
-  say "⚠️  发布打包使用 ad-hoc 签名，dist 里的 App 已被替换；本机继续使用前请重新运行"
-  say "   bash scripts/build_app.sh（会沿用 .codesign-identity），再 bash scripts/install_app.sh。"
+  say "⚠️  发布包使用 ad-hoc 签名：每次发布/更新都会改变代码签名要求，用户更新后需要重新授权"
+  say "   完全磁盘访问 / App 数据。配置 scripts/configure_codesign_identity.sh 或设置"
+  say "   RELEASE_CODESIGN_IDENTITY 后重新打包，可让后续更新保留授权。"
+  say "   dist 里的 App 已被替换；本机继续使用前请重新运行 bash scripts/build_app.sh"
+  say "   （会沿用 .codesign-identity），再 bash scripts/install_app.sh。"
 fi
 say ""
 say "下一步：把 zip 与 .sha256 上传到 GitHub Releases，并在说明中写清"
 say "  - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.5、4.2.1.3、4.2.0.17、4.2.0.12、4.2.0.9 或 4.2.0.5"
 say "  - 安装 Hook 需要 Xcode Command Line Tools（首启向导可检测与引导安装）"
-say "  - ad-hoc 签名、未公证；macOS 15+ 已取消右键打开，首次需在「系统设置 → 隐私与安全性 → 仍要打开」，"
-say "    或执行 xattr -dr com.apple.quarantine /Applications/WeChat\\ AI.app"
+say "  - 签名身份见上方输出：稳定签名可让应用内更新保留「完全磁盘访问」授权；未公证，macOS 15+ 已取消右键打开，"
+say "    首次需在「系统设置 → 隐私与安全性 → 仍要打开」，或执行 xattr -dr com.apple.quarantine /Applications/WeChat\\ AI.app"
 say "  - 安装 Hook 会修改微信，存在账号风控与签名失效风险"
 say "  - 按 GPL-3.0 提供对应源码（仓库地址）"

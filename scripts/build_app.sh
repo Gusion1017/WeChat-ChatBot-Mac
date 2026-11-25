@@ -19,9 +19,10 @@ SCRATCH="${BUILD_SCRATCH:-$ROOT_DIR/app/.build-release}"
 # 会显示「Hook 版本文件未就绪」，无法安装/启动 Hook（发布包尤其不能缺）。
 DEFAULT_HOOK_VERSION="4.2.1.5"
 DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_5_mac.json"
-# 本机反复重建时用固定签名身份，避免 ad-hoc 重签导致 TCC（完全磁盘访问/App 数据）
-# 与 Keychain 授权每次失效。发布包默认仍是 ad-hoc；可用
-# scripts/configure_codesign_identity.sh 写入 .codesign-identity（gitignored）。
+# 本机反复重建/发布时用固定签名身份，避免 ad-hoc 重签导致 TCC（完全磁盘访问/App 数据）
+# 与 Keychain 授权每次失效。身份来自 CODESIGN_IDENTITY，或
+# scripts/configure_codesign_identity.sh 写入的 .codesign-identity（gitignored）；
+# 两者都没有时退回 ad-hoc（仅建议临时本地测试）。
 if [ -z "${CODESIGN_IDENTITY:-}" ] && [ -f "$ROOT_DIR/.codesign-identity" ]; then
   CODESIGN_IDENTITY="$(/usr/bin/head -n 1 "$ROOT_DIR/.codesign-identity" | /usr/bin/tr -d '[:space:]')"
 fi
@@ -168,12 +169,18 @@ rm -rf "$RES/bridge/log"
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
   say "ad-hoc signing app bundle"
+  say "WARNING: ad-hoc 签名的代码要求是 cdhash；重装/更新后 TCC 授权会失效。"
+  say "WARNING: 需要跨版本保留「完全磁盘访问」授权时，先运行 scripts/configure_codesign_identity.sh。"
 else
   say "signing app bundle with $SIGN_IDENTITY"
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$BUNDLE" 2>/dev/null || true
 /usr/bin/codesign -f -s "$SIGN_IDENTITY" --timestamp=none "$BUNDLE"
 /usr/bin/codesign --verify --strict "$BUNDLE" || fail "signature verification failed"
+
+# 打印 designated requirement：TCC（完全磁盘访问 / App 数据）按它识别 App。
+# 稳定身份会显示 identifier + certificate …；ad-hoc 会显示 cdhash，每次构建都变。
+say "designated requirement: $(/usr/bin/codesign -d -r- "$BUNDLE" 2>&1 | /usr/bin/tail -n 1)"
 
 say "built: $BUNDLE"
 /usr/bin/du -sh "$BUNDLE"

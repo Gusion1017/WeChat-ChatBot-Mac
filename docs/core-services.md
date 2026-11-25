@@ -700,15 +700,17 @@ id != active 或 active == _unassigned
   不执行 `sudo`。
 - **助手脚本与回滚**：App 内先停止机器人、写入并启动更新助手，再 `NSApp.terminate`。助手在旧进程退出后（最多等
   约 60 秒）把旧 App 移到同目录 `.update-backup-<epoch>`，用 `ditto` 展开暂存 App，`xattr -dr
-  com.apple.quarantine` 后 `/usr/bin/codesign -f -s - --timestamp=none` ad-hoc 重签，`codesign --verify --strict`
-  通过再 `open`。等待超时先校验 PID 身份（`ps -p`，防 PID 复用）再 SIGTERM/SIGKILL；`xattr` 非 0 只记日志继续。
+  com.apple.quarantine` 后**保留发布包签名、不再重签**（重签会把稳定身份降级为 ad-hoc，改变 TCC 代码要求），
+  `codesign --verify --strict` 通过再 `open`。等待超时先校验 PID 身份（`ps -p`，防 PID 复用）再
+  SIGTERM/SIGKILL；`xattr` 非 0 只记日志继续。
   任一步失败时，已替换则删除半成品、恢复旧备份，未替换则保持旧版原样，随后重新打开旧版并以退出码 1 结束。成功后
   保留备份、删除本次工作目录；新版本启动完成约 8 秒后（`scheduleLaunchCheck`）由
   `UpdateInstaller.cleanupAfterUpdate` 删除旧备份与超过 24 小时的失败残留目录。日志
   `~/Library/Logs/WeChatAI/update.log`。
 - **安全**：不发送 API Key/Cookie/账号/本地路径；拒绝非 https 或非 GitHub 域名资产；SHA256、bundle id、版本、
-  `codesign` 任一失败即拒绝；无静默安装、后台强制更新、beta 通道或自定义更新源。ad-hoc 未公证，更新后首次打开
-  可能需 Gatekeeper「仍要打开」。
+  `codesign` 任一失败即拒绝；无静默安装、后台强制更新、beta 通道或自定义更新源。发布包默认沿用固定签名身份
+  （未配置时 ad-hoc），未公证，更新后首次打开可能需 Gatekeeper「仍要打开」；稳定签名身份跨版本一致时，
+  「完全磁盘访问 / App 数据」授权在应用内更新后保留。
 - **测试**：`UpdateTests.swift` 与 `ReleaseNotesTests.swift` 覆盖版本解析/比较、6 小时边界、资产选择与 `.sha256`
   配对、200/404/403/429 与传输错误映射、URL 白名单、SHA256 解析/校验、安装目标（bundle id/版本/Translocation/
   只读目录）、包元数据与 `codesign` 校验、解包、清理与助手脚本（含真实替换/回滚/工作目录自清理集成），以及

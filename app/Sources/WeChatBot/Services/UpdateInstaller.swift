@@ -272,8 +272,8 @@ enum UpdateInstaller {
     /// 1. 等 `pid` 退出（最多 60s；发信号前用 `ps -p` 确认 PID 仍是本 App，避免 PID
     ///    复用误杀其它进程；超时先 SIGTERM 再 SIGKILL）；
     /// 2. 旧 App `mv` 成同目录 `*.update-backup-<epoch>` 备份；
-    /// 3. `ditto` 安装暂存 App → `xattr -dr com.apple.quarantine` → ad-hoc `codesign` 重签 →
-    ///    `codesign --verify --strict` 验证；
+    /// 3. `ditto` 安装暂存 App → `xattr -dr com.apple.quarantine` →
+    ///    `codesign --verify --strict` 验证（**保留发布包签名，不重签**）；
     /// 4. 任一步失败：删半成品、恢复备份、重新打开旧版本、exit 1；
     /// 5. 成功：打开新版本、保留备份（由新版本 `cleanupAfterUpdate` 清理）、删除临时工作目录。
     /// 不使用 `set -e`（失败会跳过回滚），只 `set -u` 并逐条检查返回码。
@@ -440,26 +440,25 @@ enum UpdateInstaller {
             log "xattr 清理隔离属性返回非 0（通常是本来没有该属性，继续）"
         fi
 
-        # 6. ad-hoc 重签名（与 build_app.sh 一致：/usr/bin/codesign -f -s - --timestamp=none）。
-        if ! /usr/bin/codesign -f -s - --timestamp=none "${APP_PATH}" 2>>"${LOG_FILE}"; then
-            rollback "codesign 重新签名失败"
-        fi
-        log "已重新签名（ad-hoc）"
-
-        # 7. 严格校验签名，失败必须回滚。
+        # 6. 保留发布包签名，不做 ad-hoc 重签。
+        #    macOS 的「完全磁盘访问 / App 数据」等 TCC 授权绑定 App 的代码签名要求；
+        #    ad-hoc 签名的要求是 cdhash，每次构建/更新都会变化。重签会把发布包的
+        #    稳定签名（如 Developer ID / Apple Development）降级成 ad-hoc，导致用户
+        #    更新后必须把 App 从「完全磁盘访问权限」移除再添加。ditto 会保留原签名，
+        #    这里只做严格校验；失败必须回滚，不能带病打开新版本。
         if ! /usr/bin/codesign --verify --strict "${APP_PATH}" 2>>"${LOG_FILE}"; then
             rollback "codesign --verify --strict 校验失败"
         fi
-        log "签名校验通过"
+        log "签名校验通过（保留发布包签名，未重签）"
 
-        # 8. 启动新版本；打不开视为安装失败并回滚。
+        # 7. 启动新版本；打不开视为安装失败并回滚。
         if ! open_app "${APP_PATH}" "新版本"; then
             rollback "无法打开新版本：${APP_PATH}"
         fi
         log "✅ 更新成功：${APP_PATH}"
         log "旧版本备份保留在 ${BACKUP_PATH}，由新版本启动时 cleanupAfterUpdate 清理"
 
-        # 9. 清理下载/解压的临时工作目录（含 zip 与本脚本自身）。
+        # 8. 清理下载/解压的临时工作目录（含 zip 与本脚本自身）。
         #    只允许删除 .../updates/update-* 约定目录：路径异常时宁可不清理，也不误删。
         case "${WORK_DIR}" in
             */updates/update-*)

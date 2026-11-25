@@ -534,13 +534,19 @@ final class UpdateTests: XCTestCase {
         XCTAssertTrue(script.contains("*WeChatAI*"))
         XCTAssertTrue(script.contains("已不是 WeChat AI"))
 
-        // 备份 → ditto 安装 → 去隔离 → ad-hoc 重签 → 严格校验。
+        // 备份 → ditto 安装 → 去隔离 → 保留发布包签名 → 严格校验。
         XCTAssertTrue(script.contains("BACKUP_PATH=\"${APP_PATH}.update-backup-${BACKUP_EPOCH}\""))
         XCTAssertTrue(script.contains("/bin/mv \"${APP_PATH}\" \"${BACKUP_PATH}\""))
         XCTAssertTrue(script.contains("/usr/bin/ditto --noqtn \"${STAGED_APP}\" \"${APP_PATH}\""))
         XCTAssertTrue(script.contains("/usr/bin/xattr -dr com.apple.quarantine \"${APP_PATH}\""))
-        XCTAssertTrue(script.contains("/usr/bin/codesign -f -s - --timestamp=none \"${APP_PATH}\""))
         XCTAssertTrue(script.contains("/usr/bin/codesign --verify --strict \"${APP_PATH}\""))
+        // TCC 按代码签名要求识别 App；更新助手重签会改变 cdhash，使完全磁盘访问 /
+        // App 数据授权失效。发布包已在 App 内校验过签名，ditto 会原样保留。
+        XCTAssertFalse(
+            script.contains("/usr/bin/codesign -f -s -"),
+            "更新助手不得 ad-hoc 重签：重签会改变 TCC 代码签名要求"
+        )
+        XCTAssertTrue(script.contains("保留发布包签名，未重签"))
 
         // 回滚：删半成品、恢复备份、重新打开旧版本、exit 1。
         XCTAssertTrue(script.contains("rollback()"))
@@ -974,8 +980,13 @@ final class UpdateTests: XCTestCase {
         XCTAssertTrue(log.contains("等待旧进程"))
         XCTAssertTrue(log.contains("旧版本已备份"))
         XCTAssertTrue(log.contains("新版本已复制"))
-        XCTAssertTrue(log.contains("已重新签名"))
+        XCTAssertTrue(log.contains("保留发布包签名"))
         XCTAssertTrue(log.contains("签名校验通过"))
+        XCTAssertEqual(
+            try cdhash(of: oldApp),
+            try cdhash(of: stagedApp),
+            "更新助手应保留发布包签名（cdhash 不变），不能重签"
+        )
         XCTAssertTrue(log.contains("更新成功"))
         XCTAssertTrue(log.contains("3.0.0"), "日志应记录旧版本")
         XCTAssertTrue(log.contains("3.1.0"), "日志应记录新版本")
@@ -1155,6 +1166,27 @@ final class UpdateTests: XCTestCase {
         let data = try Data(contentsOf: appURL.appendingPathComponent("Contents/Info.plist"))
         let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
         return (plist as? [String: Any])?["CFBundleShortVersionString"] as? String
+    }
+
+    /// 读取 App 主签名 CDHash（`codesign -dvvv` 输出的 `CDHash=` 行）。
+    /// 更新助手不重签时，安装后的 cdhash 应与暂存包完全一致。
+    private func cdhash(of appURL: URL) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["-dvvv", appURL.path]
+        let pipe = Pipe()
+        process.standardError = pipe
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "读取签名失败：\(appURL.path)")
+        let output = String(decoding: data, as: UTF8.self)
+        for line in output.split(separator: "\n") where line.hasPrefix("CDHash=") {
+            return String(line.dropFirst("CDHash=".count))
+        }
+        XCTFail("签名输出缺少 CDHash：\(appURL.path)")
+        return ""
     }
 
     /// ad-hoc 签名（与 build_app.sh 一致，不加 --deep）。签名 shell 占位可执行文件也能通过。
