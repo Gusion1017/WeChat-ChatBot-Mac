@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+
+SNS_PREFIXES = ["snsTimeline", "snsSync", "snsPost", "snsUserpage", "snsComment"]
+SNS_SUFFIXES = ["Ctor", "Vtable", "Size", "ClosureVtable", "Decoder"]
+SNS_BODY_RETURN_KEYS = ["snsTimelineBodyReturn", "snsSyncBodyReturn",
+                       "snsPostBodyReturn", "snsCommentBodyReturn"]
 
 PRIMARY_FILES = [
     "tools/manage_wechat.sh",
@@ -158,6 +164,63 @@ def scan(root: str, version: str, build: str, default_version: Optional[str] = N
     checks.append(Check(release_note, "release_notes",
                         os.path.isfile(os.path.join(root, release_note)),
                         "release note for the new version", 0, required=False))
+
+    # 朋友圈完整读写是版本注册的硬性要求：新版本不能只适配聊天链路。
+    # 完全没有 SNS 锚点的历史版本（4.2.0.5 / 4.2.0.9）只做提示，不阻断注册。
+    version_json = "hook/versions/%s_mac.json" % version.replace(".", "_")
+    table_path = os.path.join(root, version_json)
+    table_available = os.path.isfile(table_path)
+    try:
+        with open(table_path, encoding="utf-8") as fh:
+            table = json.load(fh)
+    except (OSError, ValueError):
+        table = {}
+    has_sns = any(prefix + suffix in table for prefix in SNS_PREFIXES for suffix in SNS_SUFFIXES)
+    missing_sns: List[str] = []
+    if table_available:
+        if has_sns:
+            for prefix in SNS_PREFIXES:
+                for suffix in SNS_SUFFIXES:
+                    key = prefix + suffix
+                    if key not in table:
+                        missing_sns.append(key)
+            for key in SNS_BODY_RETURN_KEYS:
+                if key not in table:
+                    missing_sns.append(key)
+    else:
+        missing_sns = ["<missing version table>"]
+    if not table_available:
+        sns_detail = "缺少版本 JSON：%s" % ", ".join(missing_sns)
+        sns_ok = False
+    elif not has_sns:
+        sns_detail = "该版本没有 SNS 锚点（历史版本可接受）；新版本必须完成朋友圈完整读写适配"
+        sns_ok = True
+    elif missing_sns:
+        sns_detail = ("朋友圈读写锚点缺失：%s（新版本必须完成完整读写适配，"
+                      "见 docs/hook-porting.md §2.7/§5.1）" % ", ".join(missing_sns))
+        sns_ok = False
+    else:
+        sns_detail = "朋友圈完整读写锚点齐全"
+        sns_ok = True
+    checks.append(Check(version_json, "sns_read_write", sns_ok, sns_detail,
+                        required=table_available))
+    suppressed_match = re.search(
+        r"snsWriteSuppressedVersions\s*:\s*Set<String>\s*=\s*\[(.*?)\]", swift, re.S)
+    suppressed = set(re.findall(r'"([0-9]+(?:\.[0-9]+)+)"', suppressed_match.group(1))) \
+        if suppressed_match else set()
+    if not suppressed_match:
+        sns_gate_ok = False
+        sns_gate_detail = ("无法解析 App 的 snsWriteSuppressedVersions（检查器需要同步更新）")
+    elif version in suppressed:
+        sns_gate_ok = False
+        sns_gate_detail = "版本仍在 snsWriteSuppressedVersions 中；完成 §5.1 真机读写验证后再移出"
+    else:
+        sns_gate_ok = True
+        sns_gate_detail = "版本未在 snsWriteSuppressedVersions（App 强制只读名单）中"
+    checks.append(Check(
+        "app/Sources/WeChatBot/Services/WeChatAppDetection.swift", "sns_read_write",
+        sns_gate_ok, sns_gate_detail, required=has_sns,
+    ))
 
     return {
         "version": version,

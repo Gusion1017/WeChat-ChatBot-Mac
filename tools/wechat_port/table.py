@@ -67,7 +67,17 @@ SNS_PREFIXES = ["snsTimeline", "snsSync", "snsPost", "snsUserpage", "snsComment"
 SNS_SUFFIXES = ["Ctor", "Vtable", "Size", "ClosureVtable", "Decoder"]
 SNS_BODY_RETURN_KEYS = ["snsTimelineBodyReturn", "snsSyncBodyReturn",
                        "snsPostBodyReturn", "snsCommentBodyReturn"]
+# 读取主动刷新 + 发布模板所必需的三个返回点；snsCommentBodyReturn 是 4.2.1.3 起才有的
+# 可选键（4.2.0.17 没有，评论退回自拼报文）。
+SNS_CORE_BODY_RETURN_KEYS = ["snsTimelineBodyReturn", "snsSyncBodyReturn", "snsPostBodyReturn"]
 SNS_SWITCH_KEYS = ["snsEnable", "snsProbe"]
+# 朋友圈「完整读写」要求的键：五组任务锚点 + 四个请求体返回点。
+# 这里只用于适配完整性检查，不改变模板占位符的可选性（4.2.0.5/4.2.0.9 无 SNS 段）。
+SNS_OP_KEYS = {prefix: [prefix + suffix for suffix in SNS_SUFFIXES]
+               for prefix in SNS_PREFIXES}
+# 适配时必须从基线继承的 SNS 键（开关/桥接键不算能力，不参与比较）。
+SNS_ADAPTATION_KEYS = [key for prefix in SNS_PREFIXES for key in SNS_OP_KEYS[prefix]]
+SNS_ADAPTATION_KEYS += SNS_BODY_RETURN_KEYS
 SEND_PAT_KEYS = [
     "sendPatTaskCtorAddr",
     "sendPatTaskVtable",
@@ -164,6 +174,71 @@ def is_address_key(key: str, value: object) -> bool:
         return False
     parsed = int(value, 16)
     return parsed > 0x1000
+
+
+def sns_anchor_keys(data: Dict[str, object]) -> List[str]:
+    """表里出现的 SNS 任务锚点键（按固定顺序）。"""
+    keys: List[str] = []
+    for prefix in SNS_PREFIXES:
+        for suffix in SNS_SUFFIXES:
+            name = prefix + suffix
+            if name in data:
+                keys.append(name)
+    return keys
+
+
+def sns_body_return_keys(data: Dict[str, object]) -> List[str]:
+    return [key for key in SNS_BODY_RETURN_KEYS if key in data]
+
+
+def sns_capable(data: Dict[str, object]) -> bool:
+    """版本表是否声明了朋友圈通道（任一锚点/返回点/开关存在）。"""
+    if sns_anchor_keys(data) or sns_body_return_keys(data):
+        return True
+    return any(key in data for key in ("snsEnable", "snsProbe", "snsWrite", "snsDbRead"))
+
+
+def sns_missing_keys(data: Dict[str, object], *, require_body_returns: bool = True) -> List[str]:
+    """朋友圈完整读写缺失的键；表未声明 SNS 通道时返回空列表。"""
+    if not sns_capable(data):
+        return []
+    missing: List[str] = []
+    if not sns_anchor_keys(data):
+        # 只有开关、没有任何锚点：视为未适配，要求整组锚点。
+        for keys in SNS_OP_KEYS.values():
+            missing.extend(keys)
+    else:
+        for prefix in SNS_PREFIXES:
+            keys = SNS_OP_KEYS[prefix]
+            if not all(key in data for key in keys):
+                missing.extend(key for key in keys if key not in data)
+    if require_body_returns:
+        missing.extend(key for key in SNS_CORE_BODY_RETURN_KEYS if key not in data)
+    return missing
+
+
+def sns_coverage(data: Dict[str, object], *, require_body_returns: bool = True) -> Dict[str, object]:
+    """给报告/CLI 用的朋友圈读写适配摘要。"""
+    capable = sns_capable(data)
+    tasks = {}
+    for prefix in SNS_PREFIXES:
+        keys = SNS_OP_KEYS[prefix]
+        present = [key for key in keys if key in data]
+        tasks[prefix] = {
+            "complete": len(present) == len(keys),
+            "present": present,
+            "missing": [key for key in keys if key not in data],
+        }
+    bodies = {key: key in data for key in SNS_BODY_RETURN_KEYS}
+    missing = sns_missing_keys(data, require_body_returns=require_body_returns)
+    return {
+        "capable": capable,
+        "complete": capable and not missing,
+        "tasks": tasks,
+        "body_returns": bodies,
+        "missing": missing,
+        "require_body_returns": require_body_returns,
+    }
 
 
 def key_kind(key: str, value: object) -> str:
@@ -304,6 +379,11 @@ def validate_table(table: VersionTable) -> List[str]:
         if present and len(present) != len(SNS_SUFFIXES):
             missing = [prefix + suffix for suffix in SNS_SUFFIXES if prefix + suffix not in data]
             errors.append(f"{prefix} anchor group incomplete: missing {', '.join(missing)}")
+    body_present = sns_body_return_keys(data)
+    if body_present:
+        missing = [key for key in SNS_CORE_BODY_RETURN_KEYS if key not in data]
+        if missing:
+            errors.append(f"SNS body return keys incomplete: missing {', '.join(missing)}")
     pat_present = [key for key in SEND_PAT_KEYS if key in data]
     if pat_present and len(pat_present) != len(SEND_PAT_KEYS):
         missing = [key for key in SEND_PAT_KEYS if key not in data]

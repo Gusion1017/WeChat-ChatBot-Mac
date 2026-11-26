@@ -78,7 +78,9 @@ PYTHONPATH=tools python3 -m unittest discover -s tools/wechat_port/tests -v
 `scripts/check_hook_template.py`（`check.sh` 的“Hook 模板占位符与版本表一致性”步骤）校验 `hook/script.js`
 占位符（当前 97 个）与 `hook/versions/*.json`：缺键、SNS 锚点组完整性、消息偏移成对、BodyReturn 4 字节对齐
 （含可选 `snsCommentBodyReturn`）、布尔开关格式、
-默认版本与安装/构建/打包脚本及 App `knownPairs` 一致；有 `node` 时对每个版本渲染结果做 `node --check`。
+默认版本与安装/构建/打包脚本及 App `knownPairs` 一致；还会检查**默认版本的朋友圈完整读写锚点**
+（五组任务锚点 + 四个请求体返回点）以及 `snsWriteSuppressedVersions` 不含任何已支持版本（新版本不允许
+「聊天能用、朋友圈只读」就发布）；有 `node` 时对每个版本渲染结果做 `node --check`。
 新增/修改版本表或模板占位符后必须先跑通它。
 
 常用命令也可以走根目录 `Makefile`（`make help` 查看全部目标）。

@@ -45,6 +45,7 @@ def build_result(
     registration: Optional[dict] = None,
     manual_keys: Optional[Dict[str, str]] = None,
     workdir: Optional[str] = None,
+    sns: Optional[dict] = None,
 ) -> dict:
     summary = summarize(results)
     if manual_keys:
@@ -74,6 +75,7 @@ def build_result(
         "manual_keys": manual_keys or {},
         "manual_values": {key: candidate.data.get(key) for key in (manual_keys or {})},
         "registration": registration or {},
+        "sns": sns or {},
     }
 
 
@@ -162,7 +164,47 @@ def build_markdown(result: dict) -> str:
     lines.append("  并写入 `hookVerified=\"false\"`；未证明的地址会从候选表中删除，避免静默注入错误地址。")
     lines.append("")
 
-    lines.append("## 5. 下一步")
+    sns = result.get("sns") or {}
+    lines.append("## 5. 朋友圈（SNS）读写适配")
+    lines.append("")
+    if not sns.get("capable"):
+        lines.append("基线与候选表都没有声明朋友圈通道（无 SNS 锚点）；仅当目标版本确实不支持朋友圈时才是预期状态。")
+    else:
+        complete = sns.get("candidate_complete", False)
+        retained = not sns.get("missing_vs_baseline")
+        lines.append(f"- 朋友圈完整读写：{'✅ 齐全' if complete and retained else '❌ 不完整（候选表会退化为 503 / 只读）'}")
+        lines.append(f"- 与基线相比缺少的 SNS 键：{'无' if retained else '`' + '`、`'.join(sns.get('missing_vs_baseline') or []) + '`'}")
+        lines.append("")
+        lines.append("| 任务 | 锚点组 | 说明 |")
+        lines.append("| --- | --- | --- |")
+        meanings = {
+            "snsTimeline": "读取时间线（主动刷新/分页）",
+            "snsSync": "mmsnssync 增量同步",
+            "snsPost": "发布动态",
+            "snsUserpage": "查看他人主页动态",
+            "snsComment": "评论 / 回复 / 点赞（0xD5 通道）",
+        }
+        for prefix, meaning in meanings.items():
+            item = (sns.get("candidate_tasks") or {}).get(prefix) or {}
+            mark = "✅" if item.get("complete") else "❌"
+            missing = item.get("missing") or []
+            lines.append(f"| `{prefix}` | {mark} | {meaning}{'；缺 ' + '、'.join(missing) if missing else ''} |")
+        lines.append("")
+        bodies = sns.get("candidate_body_returns") or {}
+        body_ok = all(bodies.values())
+        lines.append(f"- 请求体返回点（BodyReturn）：{'✅ 齐全' if body_ok else '❌ 缺 ' + '、'.join(k for k, v in bodies.items() if not v)}")
+        lines.append("")
+        lines.append("**真机验证（必须完成，见 `docs/hook-porting.md` §5.1）**：")
+        lines.append("1. 微信里手动打开一次朋友圈 → `POST /sns/timeline` 返回 `source=native`，`POST /sns/sync` 返回命令与游标；")
+        lines.append("2. 手动发一条文字朋友圈（私密或部分可见）→ `POST /sns/post` 返回 `post_id` 且时间线可见；")
+        lines.append("3. 手动评论一次捕获 0xD5 → `POST /sns/comment` 返回 `comment_id`，再带 `reply_comment_id` 回复他人评论；")
+        lines.append("4. 四项全部通过、微信未崩溃后，才可切换默认版本并把该版本移出 `snsWriteSuppressedVersions`。")
+        lines.append("")
+        lines.append("> 新版本不允许「聊天能用、朋友圈只读」就发布：`adapt/verify/promote` 会拒绝缺少 SNS 键的候选表，")
+        lines.append("> 默认版本的 SNS 完整性与只读名单由 `scripts/check_hook_template.py` 检查。")
+    lines.append("")
+
+    lines.append("## 6. 下一步")
     lines.append("")
     lines.append("1. 对第 2 节的每个 `review/unresolved` 键，用 `wxport explain --key <key>` 看新旧反汇编和候选；")
     lines.append("   确认后写入 `hook/versions/<version>_mac.json`。")
@@ -172,11 +214,14 @@ def build_markdown(result: dict) -> str:
     lines.append("4. `bash scripts/check.sh --docs`，再跑 Swift/Go 测试。")
     lines.append("5. 真机验证（先只读）：安装 Hook → 私聊文本入站 → 群聊 @ → 拍一拍 → R3 文本发送 →")
     lines.append("   重启恢复；任何 SIGILL / task_layout_mismatch 立即回滚。")
-    lines.append("6. 只有真机验证通过后，才把版本表 `hookVerified` 改为 `\"true\"`，并从")
+    lines.append("6. 朋友圈读写真机验证（硬性项）：按第 5 节与 `docs/hook-porting.md` §5.1 完成")
+    lines.append("   timeline 主动刷新 / sync / 发布 / 评论 / 回复；未通过前不得切默认，也不得把版本")
+    lines.append("   长期留在 `snsWriteSuppressedVersions`。")
+    lines.append("7. 只有真机验证（含朋友圈读写）通过后，才把版本表 `hookVerified` 改为 `\"true\"`，并从")
     lines.append("   `WeChatVersionSupport.unverifiedHookVersions` 移除。")
     lines.append("")
 
-    lines.append("## 6. 关键键明细")
+    lines.append("## 7. 关键键明细")
     lines.append("")
     lines.append("| 键 | 旧值 | 新值 | Δ | 状态 | 方法 | 检查 |")
     lines.append("| --- | --- | --- | --- | --- | --- | --- |")
@@ -198,14 +243,14 @@ def build_markdown(result: dict) -> str:
     lines.append("")
 
     if result.get("registration"):
-        lines.append("## 7. 注册检查")
+        lines.append("## 8. 注册检查")
         lines.append("")
         for item in result["registration"].get("checks", []):
             mark = "✅" if item["ok"] else "❌"
             lines.append(f"- {mark} `{item['file']}` — {item['detail']}")
         lines.append("")
 
-    lines.append("## 8. 复现命令")
+    lines.append("## 9. 复现命令")
     lines.append("")
     lines.append("```bash")
     lines.append("# 重新生成候选与报告")

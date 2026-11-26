@@ -874,12 +874,12 @@ final class CaptureSetupTests: XCTestCase {
         XCTAssertFalse(unknown.isComplete)
     }
 
-    /// 4.2.1.3 写链路已验证：切换「自动互动」开关时评论捕获提示恢复。
-    /// 只读门禁仍然保留——模拟只读版本时提示必须关闭。
+    /// 4.2.1.3 / 4.2.1.5 写链路均已验证：切换「自动互动」开关时评论捕获提示恢复。
+    /// 只读门禁仍然保留——注入只读集合时提示必须关闭。
     func testCommentCapturePromptAfterToggleFollowsVerifiedWriteGate() {
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.3"))
-        XCTAssertTrue(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"))
-        XCTAssertFalse(SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.5"))
+        XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"))
+        XCTAssertTrue(SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.5"))
         let writeAllowed = SnsWriteGate.requiresCommentHandleCapture(version: "4.2.1.3")
         XCTAssertTrue(writeAllowed)
         XCTAssertTrue(CaptureSetupPlan.shouldPromptCommentCaptureAfterToggle(

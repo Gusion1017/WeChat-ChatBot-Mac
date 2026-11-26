@@ -32,6 +32,9 @@ if __package__ in (None, ""):
         diff_tables,
         render_template,
         SAFETY_SWITCHES,
+        SNS_ADAPTATION_KEYS,
+        sns_body_return_keys,
+        sns_coverage,
         template_key_sets,
         validate_table,
     )
@@ -45,9 +48,12 @@ else:
     from .table import (
         VersionTable,
         SAFETY_SWITCHES,
+        SNS_ADAPTATION_KEYS,
         check_template_syntax,
         diff_tables,
         render_template,
+        sns_body_return_keys,
+        sns_coverage,
         template_key_sets,
         validate_table,
     )
@@ -194,6 +200,33 @@ def manual_keys(baseline: VersionTable) -> Dict[str, str]:
     return notes
 
 
+def sns_adaptation_summary(baseline: VersionTable, candidate: VersionTable):
+    """朋友圈「完整读写」适配摘要 + 硬性错误。
+
+    规则：基线只要声明了朋友圈通道（含任一 SNS 锚点），候选表就必须保留基线里的
+    全部 SNS 锚点与请求体返回点；否则新版本会在发布后静默退化为止读/503。
+    """
+    require_body = bool(sns_body_return_keys(baseline.data))
+    base = sns_coverage(baseline.data, require_body_returns=require_body)
+    cand = sns_coverage(candidate.data, require_body_returns=require_body)
+    missing_vs_baseline = [key for key in SNS_ADAPTATION_KEYS
+                           if key in baseline.data and key not in candidate.data]
+    errors: List[str] = []
+    if base["capable"] and missing_vs_baseline:
+        errors.append("候选表缺少基线中的 SNS 键（朋友圈会退化为 503/只读）："
+                      + ", ".join(missing_vs_baseline))
+    summary = {
+        "capable": base["capable"],
+        "candidate_complete": cand["complete"],
+        "candidate_tasks": cand["tasks"],
+        "candidate_body_returns": cand["body_returns"],
+        "missing_vs_baseline": missing_vs_baseline,
+        "require_body_returns": require_body,
+        "missing_in_candidate": cand["missing"],
+    }
+    return summary, errors
+
+
 def resolve_and_report(args) -> int:
     workdir = os.path.abspath(args.workdir)
     baseline = VersionTable.load(args.baseline)
@@ -256,6 +289,8 @@ def resolve_and_report(args) -> int:
         schema_errors = validate_table(candidate)
         if missing_keys:
             schema_errors.append(f"候选表缺少模板键：{', '.join(missing_keys)}")
+        sns, sns_errors = sns_adaptation_summary(baseline, candidate)
+        schema_errors.extend(sns_errors)
 
         registration = None
         if getattr(args, "registration", False) and version:
@@ -273,9 +308,10 @@ def resolve_and_report(args) -> int:
             registration=registration,
             manual_keys=manual_keys(baseline),
             workdir=workdir,
+            sns=sns,
         )
         write_report(result, os.path.join(workdir, "REPORT.md"), os.path.join(workdir, "verification.json"))
-        print(build_markdown(result).split("## 6.")[0].rstrip())
+        print(build_markdown(result).split("## 7.")[0].rstrip())
         print()
         print(f"候选表：{candidate_path}")
         print(f"报告：{os.path.join(workdir, 'REPORT.md')}")
@@ -370,6 +406,8 @@ def command_verify(args) -> int:
     missing = sorted(key for key in required_keys if key not in candidate.data)
     if missing:
         schema_errors.append(f"候选表缺少模板键：{', '.join(missing)}")
+    sns, sns_errors = sns_adaptation_summary(baseline, candidate)
+    schema_errors.extend(sns_errors)
     render_ok = True
     render_detail = "模板不存在，已跳过"
     if Path(args.script).is_file():
@@ -394,6 +432,9 @@ def command_verify(args) -> int:
     ok = render_ok and not schema_errors
     print(("✅ 通过" if ok else "❌ 失败"))
     print(render_detail)
+    if sns.get("capable"):
+        print(f"朋友圈读写：{'齐全' if sns.get('candidate_complete') else '不完整'}"
+              f"（缺失 {len(sns.get('missing_in_candidate') or [])} 键）")
     for error in schema_errors:
         print("  - " + error)
     return 0 if ok else 1
@@ -523,6 +564,16 @@ def command_promote(args) -> int:
     if blocking:
         eprint(f"❌ 仍有 {blocking} 个 medium/review/unresolved 键，拒绝 promotion；先处理 REPORT.md 第 2 节。")
         return 2
+    baseline_path = (report.get("baseline") or {}).get("path")
+    if baseline_path:
+        baseline_table = VersionTable.load(baseline_path)
+        candidate_table = VersionTable.load(os.path.join(args.workdir, "candidate.json"))
+        _sns, sns_errors = sns_adaptation_summary(baseline_table, candidate_table)
+        if sns_errors:
+            for error in sns_errors:
+                eprint("❌ " + error)
+            eprint("❌ 朋友圈读写适配不完整，拒绝 promotion；按 docs/hook-porting.md §2.7/§5.1 补齐。")
+            return 2
     if not report.get("render", {}).get("ok"):
         eprint("❌ 模板渲染未通过，拒绝 promotion。")
         return 2
@@ -544,8 +595,8 @@ def command_promote(args) -> int:
     print("下一步：")
     print("  1. wxport registration --version <version> --build <build>")
     print("  2. bash scripts/check.sh --docs")
-    print("  3. 真机验证矩阵（docs/hook-porting.md 第 5 节）")
-    print('  4. 通过后才把 hookVerified 改为 "true"')
+    print("  3. 真机验证矩阵（docs/hook-porting.md 第 5 节，含朋友圈读写 §5.1）")
+    print('  4. 全部通过（含朋友圈发布/评论/回复）后才把 hookVerified 改为 "true"')
     return 0
 
 def command_doctor(args) -> int:

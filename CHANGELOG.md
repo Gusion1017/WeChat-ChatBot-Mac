@@ -4,6 +4,26 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
+## [4.2.4] — 2026-11-26
+
+### 修复
+
+- **朋友圈互动评论/回复与自动发布在 4.2.1.5 上被强制只读（2026-11-26）**：4.2.1.5 适配时只复测了聊天
+  核心链路，`WeChatVersionSupport.snsWriteSuppressedVersions` 暂含 `4.2.1.5`，App 侧强制
+  `snsWrite=false`，导致「允许发布」、自动发布与自动互动（评论/回复）都被跳过，朋友圈页只显示只读。
+  现已完成 4.2.1.5 朋友圈**完整读写**真机验证（timeline 主动刷新、`/sns/sync`、发布、评论、回复），
+  清空只读名单；运行期 `snsWrite`、自动发布/自动互动调度、评论句柄捕获提示与设置页只读文案随门禁
+  自动恢复，App 其它代码无需改动。验证范围见 [`docs/releases/4.2.1.5.md`](docs/releases/4.2.1.5.md)。
+
+### 新增
+
+- **移植工具强制朋友圈完整读写**：`wxport adapt/verify/promote` 在基线含 SNS 锚点时拒绝丢失任何
+  SNS 键（五组任务锚点 + 四个请求体返回点）；`REPORT.md` 新增第 5 节列出各 op 锚点状态与真机验证
+  清单；`wxport registration` 检查新版本 SNS 锚点齐全且不在 App 只读名单；
+  `scripts/check_hook_template.py` 检查默认版本 SNS 完整、已支持版本不得留在
+  `snsWriteSuppressedVersions`。`docs/hook-porting.md` 新增 §2.7 / §5.1，把朋友圈读写列为版本
+  适配的硬性验收项（禁止「聊天能用、朋友圈先只读」就发布）。
+
 ## [4.2.3] — 2026-11-25
 
 ### 修复
@@ -1736,6 +1756,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.4]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.3...v4.2.4
 [4.2.3]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...v4.2.1

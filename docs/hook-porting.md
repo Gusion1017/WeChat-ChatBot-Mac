@@ -123,6 +123,22 @@ python3 tools/wechat_port/cli.py explain \
   只有新版本确实改了布局才动。
 - 语音发送未验证时保持 `r3VoiceSend=false`。
 
+### 2.7 朋友圈（SNS）读写锚点：不是可选项
+
+新版本的适配目标是**完整读写**，不是「聊天能用、朋友圈先只读」。基线表只要含 SNS
+锚点（4.2.0.12 起），候选表就必须保留全部 SNS 键，否则 `adapt/verify/promote`
+会以 schema 失败拒绝：
+
+- 五组任务锚点 `snsTimeline*` / `snsSync*` / `snsPost*` / `snsUserpage*` / `snsComment*`
+  （每组 `Ctor` / `Vtable` / `Size` / `ClosureVtable` / `Decoder` 齐全）；
+- 请求体返回点（4 字节对齐的真实 BL 返回点）：读取/发布三件套
+  `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` 必需；
+  `snsCommentBodyReturn`（4.2.1.3 起）可选，缺省时评论退回自拼报文——新版本建议一并补齐。
+
+处理方式仍是先看报告：`verified/high` 直接用；`medium/review/unresolved` 用
+`explain --disasm` 按 §2.1–§2.3 处理。**不要**为了「先让聊天跑起来」把 SNS 键删掉，
+那会让 App 的朋友圈直接退化为 503 / 只读。适配完成后用 §5.1 做真机读写验证。
+
 ## 3. 候选表写入与注册
 
 当报告第 2 节为空（或只剩 manual 项已确认）：
@@ -147,7 +163,7 @@ python3 tools/wechat_port/cli.py registration \
 - `scripts/run_bridge.sh` / `scripts/build_app.sh` / `scripts/package_release.sh`：
   默认版本/打包版本
 - `app/Sources/WeChatBot/Services/WeChatAppDetection.swift`：`knownPairs`、
-  `unverifiedHookVersions`
+  `unverifiedHookVersions`、`snsWriteSuppressedVersions`（新版本完成 §5.1 后必须为空）
 - `app/Packaging/{zh-Hans,en}.lproj/Localizable.strings`：版本列表文案
 - `README.md`、`docs/architecture.md`、`docs/install.md`、`docs/releases/`、
   `CONTRIBUTING.md`、`CHANGELOG.md`
@@ -175,6 +191,11 @@ PYTHONPATH=tools python3 -m unittest discover -s tools/wechat_port/tests -v
 
 先只读：`HOOK_SEND_DISABLED=1` 或版本表保持 `enableSend=false`。
 
+> **朋友圈读写是硬性验收项**：新版版本表在 §2.7 的锚点齐全后，必须在同一轮适配里完成
+> 下面的第 9 项（timeline 主动刷新 / `/sns/sync` / 发布 / 评论 / 回复），才允许把
+> 版本加入 `KNOWN_VERSION_PAIRS` 并切换默认。**不要**用
+> `snsWriteSuppressedVersions` 把某个已支持版本长期留在只读状态。
+
 | # | 场景 | 判定 |
 | --- | --- | --- |
 | 1 | 注入后微信正常启动/登录 | 无 SIGILL、无启动崩溃 |
@@ -185,7 +206,7 @@ PYTHONPATH=tools python3 -m unittest discover -s tools/wechat_port/tests -v
 | 6 | 图片/语音入站 | 有占位/可获取；不崩 |
 | 7 | R3 文本发送 | 微信实际发出，非假成功 |
 | 8 | 通讯录 | 昵称/群名可读 |
-| 9 | 朋友圈（若开启） | timeline/发布/评论/回复至少各一次 |
+| 9 | 朋友圈读写（必做） | ① 手动打开一次朋友圈后 `/sns/timeline` 返回 `source=native`；② `/sns/sync` 返回命令/游标；③ `/sns/post` 发布一条（测试用仅自己可见）并出现在时间线；④ `/sns/comment` 对自己的动态评论成功并返回 `comment_id`；⑤ 带 `reply_comment_id` 回复他人评论成功（回复自己的评论会被微信拒绝 `ret=-2`，属服务端语义） |
 | 10 | App/bridge/微信重启恢复 | 不重复投递、不需重新捕获 |
 | 11 | 历史回放 | 120s 外不回自动回复，无重复入库 |
 
@@ -199,12 +220,36 @@ PYTHONPATH=tools python3 -m unittest discover -s tools/wechat_port/tests -v
 证据只放本机、且放**仓库外**（例如 `$PORT_HOME/`）：日志、截图、地址候选、DB 备份都不入仓库；
 `.gitignore` 仍保留 `_research/`、`_local/` 规则，仅作误建兜底。公开文档只写结论与日期。
 
+### 5.1 朋友圈读写验证步骤（可直接照做）
+
+前置：hook 已安装、bridge 以写开关启动（`snsEnable=true` / `snsWrite=true`，App 设置里打开
+「启用朋友圈」+「允许发布」；或手动以 `HOOK_SEND_DISABLED=false scripts/run_bridge.sh` 启动，
+并用版本 JSON 的运行期覆盖开启 `snsWrite`）。
+
+1. 在微信里**手动打开一次朋友圈**（捕获 timeline 请求体与 service/closure；`/sns/status`
+   的 `cached`/`ready`/`body_captured` 变为 true）。
+2. 在微信里**手动发一条文字朋友圈**（「私密/仅自己可见」或「部分可见 + 单个目标好友」均可；
+   捕获 post 请求模板后 `write_ready=true`）。
+3. 在这条动态下**手动评论一次**（捕获 0xD5 评论句柄；`comment_ready=true`）。
+4. `POST /sns/timeline {"max_id":"0"}` → `source=native`；`POST /sns/sync` → 返回 `commands`/`cursor`。
+5. `POST /sns/post {"text":"...","visibility":"partial","visible_user_ids":["<单个目标好友>"],"confirm":true}`
+   → 返回 `post_id`，时间线可见且微信未崩溃（`private` 在 mac 侧可能回包成功但不显示，见 sns.md §8）。
+6. `POST /sns/comment {"post_id":"<id>","text":"...","confirm":true}` → 返回 `comment_id`。
+7. 找一条他人评论，带 `reply_comment_id` 再发一次 → 返回 `comment_id` 且 `reply_to` 正确
+   （回复自己的评论返回 `ret=-2` 是预期语义，不算通过）。
+8. 结果写进 `docs/releases/<version>.md`（日期 + 微信版本/build + 已验证/未复测范围），
+   再把版本移出 `snsWriteSuppressedVersions` 并切默认。
+
+> 捕获样本含真实请求体（`ClientCheckDat` 等），只落账号目录 `sns-capture.json`（0600），
+> 不入库、不写日志；验证截图/日志放仓库外 `$PORT_HOME/evidence/`。
+
 ## 6. 标记 verified
 
-只有第 5 节全部通过后：
+只有第 5 节全部通过（包含 §5.1 朋友圈读写）后：
 
 1. `hook/versions/<new>_mac.json` 的 `hookVerified` 改为 `"true"`。
-2. `WeChatVersionSupport.unverifiedHookVersions` 移除该版本（如果曾加入）。
+2. `WeChatVersionSupport.unverifiedHookVersions` 移除该版本（如果曾加入），并确认
+   `WeChatVersionSupport.snsWriteSuppressedVersions` 里没有该版本。
 3. 更新 `CHANGELOG.md` / `docs/releases/<new>.md`，写清验证日期、验证范围、未复测项。
 4. 再跑 `bash scripts/check.sh --docs`。
 5. 切默认版本（如需要）：`manage_wechat.sh` / `install_gadget.sh` /

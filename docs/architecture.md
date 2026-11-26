@@ -381,8 +381,9 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 验证状态：4.2.0.17（2026-11-07）、4.2.0.12、4.2.0.9、4.2.0.5 均已完成真机验证（注入、入站消息、通讯录与
   R3 文本发送）；4.2.1.3 的入站消息、R3 文本发送、通讯录、朋友圈发布/评论/回复/主动同步与 timeline
   主动刷新（`source=native` / `body_captured=true`）已于 2026-11-22 真机验证；4.2.1.5 于 2026-11-25
-  真机验证注入/启动、入站文本、R3 文本发送与通讯录，朋友圈写链路未复测（App 强制只读）；hook 的
-  `task_layout_mismatch` 安全闸保留（捕获 vtable 与版本表不一致时拒绝发送，防未来版本漂移，不是限制）。
+  真机验证注入/启动、入站文本、R3 文本发送与通讯录，2026-11-26 补齐朋友圈发布/评论/回复/主动同步与
+  timeline 主动刷新，读写全部真机验证；hook 的 `task_layout_mismatch` 安全闸保留（捕获 vtable 与版本表
+  不一致时拒绝发送，防未来版本漂移，不是限制）。
 - 启动门禁：版本 JSON 的 `hookVerified` 与 `WeChatVersionSupport.unverifiedHookVersions` 共同决定能否启动
   bridge；当前六个受支持版本的 JSON 均为 `hookVerified=true`，`unverifiedHookVersions` 为空。若自定义
   `versionConfigPath` 指向 `hookVerified=false` 的 JSON，启动时仍抛出 `RuntimeError.hookAdaptationUnverified`
@@ -394,9 +395,10 @@ bridge 推送的 JSON（`WechatMessage`，字段可能缺省）：
 - 朋友圈（SNS）：`hook/versions/4_2_0_12_mac.json`、`4_2_0_17_mac.json`、`4_2_1_3_mac.json` 与 `4_2_1_5_mac.json` 含 SNS 锚点；其余版本 JSON
   没有 SNS 键，bridge 因此保持 SNS 关闭。App 运行期按设置合并 `snsEnable` / `snsWrite` / `snsReadMode` 与
   发布策略后传给 bridge；仓库 JSON 始终保持 `snsEnable=false` / `snsProbe=false`。锚点具体键名与地址只以
-  版本 JSON 为准，契约见 [`sns.md`](sns.md) §6.1。`snsWriteSuppressedVersions` 当前为 `4.2.1.5`（写链路未复测，
-  App 强制只读）；4.2.1.3 的 comment/sync 任务类锚点已于 2026-11-22 修正并真机验证
-  （`task_layout_mismatch` 安全闸保留）。
+  版本 JSON 为准，契约见 [`sns.md`](sns.md) §6.1。`snsWriteSuppressedVersions` 当前为空：4.2.1.3（2026-11-22）
+  与 4.2.1.5（2026-11-26）的发布/评论/回复/同步均已真机验证，comment/sync 任务类锚点已与真机捕获一致
+  （`task_layout_mismatch` 安全闸保留）。新版本适配必须完成同样的朋友圈读写矩阵，见
+  [`hook-porting.md`](hook-porting.md) §2.7 / §5.1。
 - **SNS 模板采集策略（2026-11-22）**：hook 新增 `snsCommentBodyReturn`（4.2.1.3 起），在
   `autoBufferWrite` 按返回地址捕获原生评论请求体，仅 `SnsAction` Type==2 且无 field 9/12 时写入模板；同时
   保留 clientId 前缀（回复 `sns_reply:`、普通评论/点赞 `sns_comment:`）兼容。模板复用前健康检查 Type==2 且无

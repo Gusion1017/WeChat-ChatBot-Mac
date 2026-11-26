@@ -31,18 +31,20 @@ final class HookVerificationTests: XCTestCase {
         XCTAssertTrue(AppResources.versionConfigVerified(version: "4.2.1.3", explicitPath: missingURL.path))
     }
 
-    /// 4.2.1.3 写链路已真机验证：启动门禁通过且不再强制关闭朋友圈写。
+    /// 4.2.1.3 / 4.2.1.5 写链路均已真机验证：启动门禁通过且不强制关闭朋友圈写。
     func testVerifiedVersionAllowsStartupAndSNSWrite() {
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.3", configVerified: true))
         XCTAssertFalse(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.3", configVerified: false))
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.0.17", configVerified: true))
         XCTAssertFalse(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.0.17", configVerified: false))
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.5", configVerified: true))
-        XCTAssertTrue(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"),
-                      "4.2.1.5 朋友圈写链路尚未复测，必须强制只读")
+        XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"),
+                       "4.2.1.5 朋友圈读写已验证，不再强制只读")
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.3"),
                        "4.2.1.3 写链路已验证，不再强制只读")
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.0.17"))
+        XCTAssertTrue(WeChatVersionSupport.snsWriteSuppressedVersions.isEmpty,
+                      "已适配版本不得把朋友圈写链路长期留在只读名单")
     }
 
     /// 微信自动升级到未适配版本（如 4.2.1.9）时，即使残留/自定义版本表存在也不能启动 bridge。

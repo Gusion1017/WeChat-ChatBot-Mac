@@ -71,8 +71,9 @@ final class NativeSendConfigTests: XCTestCase {
         XCTAssertEqual(overrides["snsPostMinIntervalMs"], "60000")
     }
 
-    /// 4.2.1.5 只验证了入站 / R3 文本 / 通讯录：朋友圈写开关即使打开也必须被强制关闭。
-    func testRuntimeOverridesForceReadOnlyForPendingWriteVersion() throws {
+    /// 4.2.1.5 已补齐朋友圈发布/评论/回复/同步真机验证（2026-11-26）：
+    /// 用户打开「允许发布」时应下发 snsWrite=true，与 4.2.1.3 一致。
+    func testRuntimeOverridesAllowWriteForVerified4215() throws {
         let installation = WeChatInstallation(
             appURL: URL(fileURLWithPath: "/Applications/WeChat.app"),
             version: "4.2.1.5",
@@ -90,7 +91,7 @@ final class NativeSendConfigTests: XCTestCase {
         XCTAssertEqual(overrides["enableSend"], "true")
         XCTAssertEqual(overrides["req2bufSendMode"], "r3")
         XCTAssertEqual(overrides["snsEnable"], "true")
-        XCTAssertEqual(overrides["snsWrite"], "false", "4.2.1.5 写链路未复测，必须强制只读")
+        XCTAssertEqual(overrides["snsWrite"], "true", "4.2.1.5 朋友圈写链路已验证，允许发布时应放开写")
         XCTAssertEqual(overrides["snsReadMode"], "native")
     }
 

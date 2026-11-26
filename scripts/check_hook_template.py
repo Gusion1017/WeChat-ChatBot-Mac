@@ -49,6 +49,8 @@ SNS_PREFIXES = ["snsTimeline", "snsSync", "snsPost", "snsUserpage", "snsComment"
 SNS_SUFFIXES = ["Ctor", "Vtable", "Size", "ClosureVtable", "Decoder"]
 SNS_BODY_RETURN_KEYS = ["snsTimelineBodyReturn", "snsSyncBodyReturn", "snsPostBodyReturn",
                        "snsCommentBodyReturn"]
+# 读取主动刷新/发布模板必需的三件套；snsCommentBodyReturn 是 4.2.1.3 起才有的可选键。
+SNS_CORE_BODY_RETURN_KEYS = ["snsTimelineBodyReturn", "snsSyncBodyReturn", "snsPostBodyReturn"]
 SNS_SWITCH_KEYS = ["snsEnable", "snsProbe"]
 
 ERRORS = []
@@ -174,6 +176,13 @@ def check_version_json(path, data, required, optional, known):
             value = parse_hex(data[key])
             if value is None or value % 4 != 0:
                 fail("%s 的 %s 不是 4 字节对齐的返回地址：%r" % (name, key, data[key]))
+    # 请求体返回点按「读取 + 发布」三件套成组出现：只补一半会让主动刷新/发布模板
+    # 在某条链路上静默失效。snsCommentBodyReturn 可选（缺省时评论退回自拼报文）。
+    body_return_present = [key for key in SNS_BODY_RETURN_KEYS if key in data]
+    if body_return_present:
+        absent = [key for key in SNS_CORE_BODY_RETURN_KEYS if key not in data]
+        if absent:
+            fail("%s 的 SNS 请求体返回点不完整（缺 %s）" % (name, ", ".join(absent)))
 
     if "hookVerified" not in data:
         fail("%s 缺少 hookVerified（仓库版本表必须显式标注真机验证状态）" % name)
@@ -280,6 +289,43 @@ def check_version_defaults(json_files):
         fail("默认版本 JSON 缺少 hookVerified（App 视为已验证；应显式写 true/false）")
     elif str(data["hookVerified"]).lower() != "true":
         fail("默认版本 JSON 的 hookVerified=%r；App 启动门禁会拒绝启动 bridge" % data["hookVerified"])
+
+    # 默认版本必须完成朋友圈完整读写适配：新版本不允许「聊天能用、朋友圈只读」就切默认。
+    # 如果默认版本 JSON 声明了 SNS 段，必须五组锚点 + 四个请求体返回点齐全；完全没有
+    # SNS 段的旧版本（4.2.0.5 / 4.2.0.9）不在本条约束内。
+    sns_declared = any(key in data for prefix in SNS_PREFIXES
+                       for key in (prefix + suffix for suffix in SNS_SUFFIXES))
+    if sns_declared:
+        missing_groups = []
+        for prefix in SNS_PREFIXES:
+            for suffix in SNS_SUFFIXES:
+                if prefix + suffix not in data:
+                    missing_groups.append(prefix + suffix)
+        missing_bodies = [key for key in SNS_BODY_RETURN_KEYS if key not in data]
+        if missing_groups or missing_bodies:
+            fail("默认版本 %s 的朋友圈读写适配不完整（缺 %s）；新版本必须在同一轮适配完成"
+                 " SNS 读写并按 docs/hook-porting.md §5.1 真机验证，不能只留聊天链路"
+                 % (manage_version, ", ".join(missing_groups + missing_bodies)))
+
+    # 已支持版本不得被 App 的写门禁强制只读：只读名单只能用于「新版本尚未完成 SNS 读写
+    # 验证」的临时状态，不能把 shared KNOWN_VERSION_PAIRS 里的版本长期留在里面。
+    suppressed_match = re.search(
+        r"snsWriteSuppressedVersions\s*:\s*Set<String>\s*=\s*\[(.*?)\]",
+        app_detection, re.S)
+    if not suppressed_match:
+        fail("无法从 WeChatAppDetection.swift 解析 snsWriteSuppressedVersions；"
+             "请保持 `static let snsWriteSuppressedVersions: Set<String> = [...]` 形式（检查器需要同步更新）")
+    suppressed = set(re.findall(r'"([0-9]+(?:\.[0-9]+)+)"', suppressed_match.group(1))) \
+        if suppressed_match else set()
+    known_versions = {version for version, _ in pairs}
+    leaked = sorted(suppressed & known_versions)
+    if leaked:
+        fail("WeChatVersionSupport.snsWriteSuppressedVersions 仍包含已支持版本 %s："
+             "已适配版本必须完成朋友圈发布/评论/回复真机验证后再移出只读名单"
+             % ", ".join(leaked))
+    if manage_version in suppressed:
+        fail("默认微信版本 %s 在 snsWriteSuppressedVersions 中（App 会强制只读朋友圈写）"
+             % manage_version)
 
 
 def find_node():

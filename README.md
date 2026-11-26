@@ -36,7 +36,7 @@ memory, voice and image understanding.
 
 | 微信版本 | 支持 |
 | --- | --- |
-| 4.2.1.5 (270597) | ✅ 入站文本、R3 文本发送、通讯录；朋友圈写链路待复测（App 强制只读） |
+| 4.2.1.5 (270597) | ✅ 入站文本、R3 文本发送、通讯录；朋友圈发布/评论/回复/同步（2026-11-26） |
 | 4.2.1.3 (270595) | ✅ R3 文本发送、入站、通讯录、朋友圈读取 / 发布 / 评论 / 回复 / 同步、AI 自动互动 |
 | 4.2.0.17 (270353) | ✅ 注入 / 重签、入站、通讯录、R3 文本发送；部分媒体能力未复测 |
 | 4.2.0.12 (270348) | ✅ 文本收发、通讯录、图片 / 语音 / 群聊入站、R3 文本发送 |
@@ -50,7 +50,7 @@ memory, voice and image understanding.
 ### 快速开始
 
 1. 从 [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest) 下载
-   `WeChat-AI-4.2.3.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
+   `WeChat-AI-4.2.4.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
 2. App 未公证，首次启动被 Gatekeeper 拦截时，在「系统设置 → 隐私与安全性」点「仍要打开」，或执行：
 
    ```bash
@@ -166,7 +166,7 @@ Hook installation needs Xcode Command Line Tools; source builds need Xcode 27.
 
 ### Quick Start
 
-1. Download `WeChat-AI-4.2.3.zip` and `.sha256` from
+1. Download `WeChat-AI-4.2.4.zip` and `.sha256` from
    [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest), unzip and move
    `WeChat AI.app` to `~/Applications` or `/Applications`.
 2. If Gatekeeper blocks the first launch, choose "Open Anyway" under System Settings → Privacy &

@@ -7,6 +7,13 @@
 它不替代真机验证：任何版本在真机确认文本收发前，版本表必须保持
 `hookVerified="false"`。
 
+**朋友圈（SNS）是适配的一等项，不是可选项。** 基线表只要含 SNS 锚点，候选表就必须
+保留五组任务锚点（timeline / sync / post / userpage / comment）和请求体返回点
+（`*BodyReturn`）；`adapt`/`verify`/`promote` 会以此拒绝不完整候选表。候选表齐全后
+仍必须按 [`docs/hook-porting.md`](../../docs/hook-porting.md) §5.1 做真机读写验证
+（timeline 主动刷新 + sync + 发布 + 评论 + 回复），通过后才能切默认、把版本移出
+`snsWriteSuppressedVersions`。禁止「聊天能用、朋友圈先只读」就发布新版本。
+
 ## 快速开始
 
 从上一版版本表和新版微信生成候选与报告。
@@ -57,10 +64,20 @@ open "$PORT_HOME/work/4.2.1.5/REPORT.md"
 | `diff old.json new.json` | 版本表差异 |
 | `render table.json` | 渲染 `hook/script.js` 并跑 `node --check` |
 | `verify --baseline ... --candidate ... --binary ...` | 校验已有候选表的 schema/模板/地址落点 |
-| `promote --workdir ... --out ...` | 仅当没有 medium/review/unresolved 时，把候选表安全写入 `hook/versions/`（强制 `hookVerified=false`） |
-| `registration --version X --build Y` | 检查新版本需要更新的所有仓库位置 |
+| `promote --workdir ... --out ...` | 仅当没有 medium/review/unresolved、且 SNS 读写锚点相对基线无缺失时，把候选表安全写入 `hook/versions/`（强制 `hookVerified=false`） |
+| `registration --version X --build Y` | 检查新版本需要更新的所有仓库位置（含朋友圈读写锚点是否齐全、是否仍在 App 只读名单） |
 | `explain --workdir ... --key ... --disasm` | 查看某个键的新旧证据与反汇编 |
 | `doctor` | 检查 Python/numpy/node/llvm-objdump/仓库路径 |
+
+## 朋友圈读写检查
+
+- `adapt` / `verify` / `promote`：基线含 SNS 时，候选表缺任何基线 SNS 键（五组锚点或
+  `snsTimelineBodyReturn` / `snsSyncBodyReturn` / `snsPostBodyReturn` / `snsCommentBodyReturn`）
+  直接按 schema 失败处理。报告第 5 节会列出每个 op 的锚点状态与真机验证步骤。
+- `REPORT.md` 第 5 节同时给出真机清单；未完成时不要切默认、不要发布。
+- `scripts/check_hook_template.py`（`bash scripts/check.sh --docs`）会检查：
+  默认版本 JSON 的 SNS 五组锚点 + 四个返回点齐全、`snsWriteSuppressedVersions`
+  不含任何已支持版本（新版本不允许长期只读）。
 
 ## 状态定义
 

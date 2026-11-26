@@ -28,7 +28,7 @@ WeChat.app (Frida Gadget) ⇄ bridge/onebot ⇄ WeChatAI.app
   [`hook-porting.md`](hook-porting.md)。
 
 > **发布状态（2026-11-25）**：本文描述 **4.2.1**，包含朋友圈 `/sns/*` 与 4.2.1.5 / 4.2.1.3 适配
-> （4.2.1.5 的朋友圈写链路强制只读）；下载用户见 [`install.md`](install.md)、
+> （4.2.1.5 的朋友圈读写已验证）；下载用户见 [`install.md`](install.md)、
 > [`releases/4.2.1.md`](releases/4.2.1.md) 与 [`releases/4.2.1.5.md`](releases/4.2.1.5.md)。
 
 ---

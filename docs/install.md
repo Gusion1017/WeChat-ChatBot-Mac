@@ -2,7 +2,7 @@
 
 > 本项目是 **macOS 原生 App + 微信 Hook**，不是双击即用的普通应用：GitHub 的「Download ZIP」默认只给
 > **源码**，不含已编译的 App、bridge 二进制和 Frida Gadget；非开发者请用 Releases 里的 App 压缩包，
-> 只有源码时按「源码构建」操作。当前发布版本：**4.2.3（build 41，2026-11-25）**，压缩包约 70 MB（66 MiB）。
+> 只有源码时按「源码构建」操作。当前发布版本：**4.2.4（build 42，2026-11-26）**，压缩包约 70 MB（66 MiB）。
 
 ## 1. 先确认环境
 
@@ -20,7 +20,7 @@
 > 微信版本必须**精确匹配列表**；不在列表时向导会提示不匹配，不要强行安装 Hook。
 > 安装脚本默认以 **4.2.1.5 (270597)** 为目标，4.2.1.3 (270595) 与四个 4.2.0.x 为保留版本；4.1.x 的版本表与门禁已移除。
 > 4.2.1.5 已真机验证：入站文本、R3 文本发送、通讯录（`hookVerified=true`，58/58 地址键 `verified`）；
-> **朋友圈写链路尚未复测**，App 对 4.2.1.5 强制只读（读取与时间线可用），详见
+> **朋友圈读写均已真机验证**（4.2.1.5，2026-11-26：发布/评论/回复/同步、时间线主动刷新），详见
 > [`releases/4.2.1.5.md`](releases/4.2.1.5.md)。
 > 4.2.1.3 保留完整验证结论：入站、R3 文本发送、通讯录、图片下载 hook、朋友圈 timeline / 发布 / 评论 /
 > 回复 / 主动同步与 AI 自动互动；赞 / 取消赞 / objectop 未打通，userpage 主动发送保持 passive。
@@ -33,12 +33,12 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.3（约 70 MB / 66 MiB）**。
+发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.4（约 70 MB / 66 MiB）**。
 
-1. 下载 `WeChat-AI-4.2.3.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
+1. 下载 `WeChat-AI-4.2.4.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-4.2.3.zip.sha256
+   shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）；下文分别示例。
@@ -90,7 +90,7 @@
 
 6. **首次发送需捕获句柄**：4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 使用 R3 原生发送。
    首次启用或每次微信重启后，
-   需要在本机微信**手动发一条消息**捕获发送句柄（语音回复还需再发一条语音；朋友圈已开启还需手动打开一次朋友圈，朋友圈 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 有 SNS 锚点，其中 4.2.1.5 写链路强制只读）；
+   需要在本机微信**手动发一条消息**捕获发送句柄（语音回复还需再发一条语音；朋友圈已开启还需手动打开一次朋友圈，朋友圈 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 有 SNS 锚点，四个版本均已具备读写能力）；
    句柄未就绪时回复会排队（不会丢失），bridge 重启会从 `r3-seed.json` 自动恢复。App 会在开启语音/朋友圈/自动互动或
    机器人**每次启动后**弹出统一的「捕获发送句柄」弹窗，条目按已开启功能显示：文字常驻；语音 / 朋友圈 /
    评论句柄在对应开关开启时出现（「评论或点赞一次」要求「自动互动（评论/回复）」已开启、有互动对象且非演练；
@@ -166,7 +166,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
 
 ## 4. 发布者：如何制作可下载的 App 压缩包
 
-当前源码版本 **4.2.3（build 41）**（Releases 最新为 4.2.3），zip 约 **70 MB（66 MiB）**；版本与 build 由
+当前源码版本 **4.2.4（build 42）**（Releases 最新为 4.2.4），zip 约 **70 MB（66 MiB）**；版本与 build 由
 `app/Packaging/Info.plist` 决定（`package_release.sh` 不再写死版本号）。在具备 Xcode 27 / CLT 的机器上按顺序构建：
 
 ```bash
@@ -183,13 +183,13 @@ bash scripts/package_release.sh      # 或 make release
 > 个人 `.codesign-identity`，避免公开证书姓名 / Team ID；确需稳定签名时显式设置中性的
 > `RELEASE_CODESIGN_IDENTITY`。原理见 [`updates.md`](updates.md) §5.2.1。
 
-脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.3.zip` + `.sha256`）；
+脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.4.zip` + `.sha256`）；
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包，也可手动执行（版本号请按 Info.plist 替换）：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.3.zip"
-( cd dist && shasum -a 256 "WeChat-AI-4.2.3.zip" > "WeChat-AI-4.2.3.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.4.zip"
+( cd dist && shasum -a 256 "WeChat-AI-4.2.4.zip" > "WeChat-AI-4.2.4.zip.sha256" )
 ```
 
 签名与公证的预期：
@@ -209,11 +209,11 @@ bash scripts/build_app.sh
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-4.2.3.zip.sha256
+shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
 ```
 
-把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.3`，当前源码为
-`4.2.3 (build 41)`，发布前请确认 Info.plist 版本号），在说明里写清：
+把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.4`，当前源码为
+`4.2.4 (build 42)`，发布前请确认 Info.plist 版本号），在说明里写清：
 
 - 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5；4.1.x 已移除；
 - **安装 Hook 需要 Xcode Command Line Tools**（`xcode-select --install`，无需开发者账号），首启向导会检测并引导安装；
@@ -235,7 +235,7 @@ shasum -a 256 -c WeChat-AI-4.2.3.zip.sha256
 | 微信从 App Store 安装，或 `/Applications/WeChat.app` 属主是 root | Hook 需要当前用户可写 `/Applications/WeChat.app`。App Store 版路径/签名不同，建议换官网 arm64 版；属主异常时重装微信，或在明确风险后 `sudo chown -R "$USER":staff /Applications/WeChat.app`。可用 `ls -ld /Applications/WeChat.app` 检查 |
 | 打开后没有窗口 | 这是菜单栏 App：启动时显示主窗口；关闭窗口后 Dock 图标消失，仅保留菜单栏。**左键**单击顶部菜单栏图标开合状态面板，面板内提供「打开主窗口」、启停、设置与退出；右键 / Control-左键不执行操作 |
 | 换微信账号后聊天记录、记忆、会话设置会切换吗 | **会，且旧账号数据不会被删除。** App 以当前登录的微信账号为边界：聊天记录/记忆卡（角色目录）/会话设置/机器人配置/人格/定时任务/新媒体自动切到该账号自己的档案（`~/Library/Application Support/WeChatAI/accounts/<wxid>/`）；AI 通道/Keychain/Hook/OneBot/本地 TTS 安装与音色/崩溃与 bridge 日志仍全局共享。升级旧版时会把旧单库复制到旧 `settings.onebot.self_id` 所属账号（只 copy 不删，旧媒体保留），因此升级后需要**切回原微信账号**才能看到旧聊天。运行中换号会停止机器人、提示后需手动重新启动；App 不提供手动选库。未登录时数据先写 `_unassigned`，登录后自动认领。详见 [`accounts.md`](accounts.md) |
-| 启动机器人提示「Hook 地址表尚未真机验证」 | 只有 `hookVerified=false` 的版本会被启动门禁拦住。4.2.1.5 已真机验证入站文本/R3 文本发送/通讯录（朋友圈写链路未复测，App 强制只读）；4.2.1.3 已真机验证入站/R3/通讯录/timeline 主动刷新/发布/评论/回复/同步；hook 的 `task_layout_mismatch` 安全闸只会在捕获 vtable 与版本表不一致时拒绝，属于防漂移机制。若自定义 `versionConfigPath` 指向 `hookVerified=false` 的 JSON，也会被阻止。 |
+| 启动机器人提示「Hook 地址表尚未真机验证」 | 只有 `hookVerified=false` 的版本会被启动门禁拦住。4.2.1.5 已真机验证入站文本/R3 文本发送/通讯录/朋友圈读写（2026-11-26）；4.2.1.3 已真机验证入站/R3/通讯录/timeline 主动刷新/发布/评论/回复/同步；hook 的 `task_layout_mismatch` 安全闸只会在捕获 vtable 与版本表不一致时拒绝，属于防漂移机制。若自定义 `versionConfigPath` 指向 `hookVerified=false` 的 JSON，也会被阻止。 |
 | 安装 Hook 失败：`Operation not permitted` / `ditto: ... Operation not permitted` | macOS 的**App 管理**权限拒绝写入 `/Applications/WeChat.app`。到 系统设置 → 隐私与安全性 → App 管理，打开 **WeChat AI**（若在终端/DSH 里执行脚本，也打开对应终端/DSH）；完全退出并重新打开 App 后重试。设置 → Hook 与首次向导会给出同样提示和「打开 App 管理设置」按钮 |
 | 微信版本不匹配 | 支持 4.2.1.5 (270597) / 4.2.1.3 (270595) / 4.2.0.17 (270353) / 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341)；4.1.x 已移除支持，**4.2.1.9 (270601) 未适配**。App 会在总览/设置 → Hook 显示版本+build 与实际检测路径，版本不在列表时标「未适配」并禁用安装。用 `/usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' /Applications/WeChat.app/Contents/Info.plist` 与 `:CFBundleVersion` 核对（微信 4.x 优先写 `WeChatBundleVersion`；缺失时才回退 `CFBundleShortVersionString`，4.2.1.5 / 4.2.1.3 机器上后者是 `4.2.1`，按它会误判为不在支持列表）。其他版本需自行适配、用 `WECHAT_SUPPORTED_VERSION`/`WECHAT_SUPPORTED_BUILD` 覆盖或还原，**不要强装** |
 | 微信装在 `~/Applications` 或状态卡显示「非设置路径」 | App 会自动从运行中的微信/LaunchServices 发现路径并按它检测；到「设置 → Hook」点「使用检测路径」把设置同步过去即可（安装/还原也会使用实际检测路径） |
