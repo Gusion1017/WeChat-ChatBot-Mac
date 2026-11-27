@@ -17,8 +17,8 @@ BUNDLE="$DIST_DIR/$APP_NAME.app"
 SCRATCH="${BUILD_SCRATCH:-$ROOT_DIR/app/.build-release}"
 # 默认目标微信版本。仓库里必须带对应的 Hook 版本 JSON，否则 App 对当前微信
 # 会显示「Hook 版本文件未就绪」，无法安装/启动 Hook（发布包尤其不能缺）。
-DEFAULT_HOOK_VERSION="4.2.1.5"
-DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_5_mac.json"
+DEFAULT_HOOK_VERSION="4.2.1.9"
+DEFAULT_HOOK_JSON="$ROOT_DIR/hook/versions/4_2_1_9_mac.json"
 # 本机反复重建/发布时用固定签名身份，避免 ad-hoc 重签导致 TCC（完全磁盘访问/App 数据）
 # 与 Keychain 授权每次失效。身份来自 CODESIGN_IDENTITY，或
 # scripts/configure_codesign_identity.sh 写入的 .codesign-identity（gitignored）；
@@ -98,7 +98,7 @@ elif [ -f "$ROOT_DIR/bridge/script.js" ]; then
   cp "$ROOT_DIR/bridge/script.js" "$RES/bridge/script.js"
 fi
 if [ ! -f "$DEFAULT_HOOK_JSON" ]; then
-  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_1_5_mac.json"
+  say "WARNING: 缺少默认微信 ${DEFAULT_HOOK_VERSION} 的 Hook 版本 JSON：hook/versions/4_2_1_9_mac.json"
   say "WARNING: 该 App 会对 ${DEFAULT_HOOK_VERSION} 显示「Hook 版本文件未就绪」，无法安装/启动 Hook；发布前必须补齐（package_release.sh 会直接失败）。"
 fi
 if compgen -G "$ROOT_DIR/hook/versions/*.json" >/dev/null; then

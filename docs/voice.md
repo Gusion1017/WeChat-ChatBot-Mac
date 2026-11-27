@@ -274,7 +274,7 @@ bash scripts/check.sh --with-go        # 静态 + Swift 全量 + Go
 cd app && SWIFT_DISABLE_SANDBOX=1 swift test --scratch-path .build-lead
 ```
 
-当前：Swift **1036 项**执行（1034 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，61 个测试文件；覆盖 Qwen3 GPU/CPU、参考音
+当前：Swift **1037 项**执行（1035 通过 / 2 项按环境跳过：真实本地 TTS 服务 E2E；0 失败，61 个测试文件；覆盖 Qwen3 GPU/CPU、参考音
 导入、语音合成/发送回归、记忆 v2、捕获句柄判定）；Go **373 项**用例（221 顶层 + 152 子测试，0 失败；`bridge/*_test.go` 25 个文件）；App 约 175MB（本机 `dist/` 实测；二进制约 21MB，
 不再静态链接 sherpa-onnx）。语音实现细节见 `bridge/voice.go`、`bridge/voice_test.go`；
 契约与限制见本文件与 [`bridge.md`](bridge.md)。

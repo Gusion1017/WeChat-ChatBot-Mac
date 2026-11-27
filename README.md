@@ -36,13 +36,13 @@ memory, voice and image understanding.
 
 | 微信版本 | 支持 |
 | --- | --- |
-| 4.2.1.5 (270597) | ✅ 入站文本、R3 文本发送、通讯录；朋友圈发布/评论/回复/同步（2026-11-26） |
+| 4.2.1.9 (270601) | ✅ 入站文本、R3 文本发送、通讯录、朋友圈读取 / 发布 / 评论（2026-11-27）；默认目标 |
+| 4.2.1.5 (270597) | ✅ 入站文本、R3 文本发送、通讯录、朋友圈读取 / 发布 / 评论 / 回复 / 同步（2026-11-26） |
 | 4.2.1.3 (270595) | ✅ R3 文本发送、入站、通讯录、朋友圈读取 / 发布 / 评论 / 回复 / 同步、AI 自动互动 |
 | 4.2.0.17 (270353) | ✅ 注入 / 重签、入站、通讯录、R3 文本发送；部分媒体能力未复测 |
 | 4.2.0.12 (270348) | ✅ 文本收发、通讯录、图片 / 语音 / 群聊入站、R3 文本发送 |
 | 4.2.0.9 / 4.2.0.5 | ✅ 文本收发与主要入站能力 |
 | 4.1.x | ❌ 自 2026-11-20 起不再支持 |
-| 4.2.1.9 (270601) | ⚠️ 未适配；微信自动更新可能装入，App 会阻止 Hook 启动 |
 
 环境：Apple Silicon、macOS 26+；微信默认位于 `/Applications/WeChat.app` 且当前用户可写。
 安装 Hook 需 Xcode Command Line Tools；从源码构建需 Xcode 27。
@@ -50,7 +50,7 @@ memory, voice and image understanding.
 ### 快速开始
 
 1. 从 [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest) 下载
-   `WeChat-AI-4.2.4.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
+   `WeChat-AI-4.2.5.zip` 与 `.sha256`，解压后把 `WeChat AI.app` 拖入 `~/Applications` 或 `/Applications`。
 2. App 未公证，首次启动被 Gatekeeper 拦截时，在「系统设置 → 隐私与安全性」点「仍要打开」，或执行：
 
    ```bash
@@ -95,7 +95,7 @@ bash scripts/build_bridge.sh        # Go 构建 + 测试
 make release                        # 构建、打包、签名校验与 SHA256
 ```
 
-当前基线：Swift 1036 项执行（1034 通过 / 2 项环境跳过），Go 373 项用例。
+当前基线：Swift 1037 项执行（1035 通过 / 2 项环境跳过），Go 373 项用例。
 本机反复重建/发布 App 时先运行 `bash scripts/configure_codesign_identity.sh` 固定签名身份，避免 TCC / Keychain
 授权每次失效；公开 Release 默认 ad-hoc，避免把个人证书姓名/Team ID 打进包；需要稳定签名时显式设置
 中性 `RELEASE_CODESIGN_IDENTITY`（ad-hoc 的代码要求是 cdhash，更新后可能需重新授权）。
@@ -153,20 +153,20 @@ OneBot 桥接为上游项目的 GPL-3.0 衍生，改动见 [`bridge/NOTICE`](bri
 
 | WeChat version | Support |
 | --- | --- |
-| 4.2.1.5 (270597) | ✅ inbound text, R3 text send, contacts; Moments write path not retested (app forces read-only) |
+| 4.2.1.9 (270601) | ✅ inbound text, R3 text send, contacts, Moments read/post/comment (2026-11-27); default target |
+| 4.2.1.5 (270597) | ✅ inbound text, R3 text send, contacts, Moments read/post/comment/reply/sync (2026-11-26) |
 | 4.2.1.3 (270595) | ✅ R3 text send, inbound, contacts, Moments read/post/comment/reply/sync, AI auto-engagement |
 | 4.2.0.17 (270353) | ✅ injection/re-sign, inbound, contacts, R3 text send; some media not retested |
 | 4.2.0.12 (270348) | ✅ text, contacts, image/voice/group inbound, R3 text send |
 | 4.2.0.9 / 4.2.0.5 | ✅ text and main inbound features |
 | 4.1.x | ❌ unsupported since 2026-11-20 |
-| 4.2.1.9 (270601) | ⚠️ unsupported; Sparkle auto-update may install it and the app blocks the hook |
 
 Requirements: Apple Silicon, macOS 26+; WeChat at `/Applications/WeChat.app` and writable.
 Hook installation needs Xcode Command Line Tools; source builds need Xcode 27.
 
 ### Quick Start
 
-1. Download `WeChat-AI-4.2.4.zip` and `.sha256` from
+1. Download `WeChat-AI-4.2.5.zip` and `.sha256` from
    [Releases](https://github.com/Gusion1017/WeChat-ChatBot-Mac/releases/latest), unzip and move
    `WeChat AI.app` to `~/Applications` or `/Applications`.
 2. If Gatekeeper blocks the first launch, choose "Open Anyway" under System Settings → Privacy &
@@ -215,7 +215,7 @@ bash scripts/build_bridge.sh        # Go build + tests
 make release                        # build, package, signature check, SHA256
 ```
 
-Current baseline: 1036 Swift tests (1034 passed / 2 environment-gated skips) and 373 Go test cases.
+Current baseline: 1037 Swift tests (1035 passed / 2 environment-gated skips) and 373 Go test cases.
 After editing `hook/script.js`, run `bash scripts/sync_hook_script.sh`; change `docs/` before code
 for interface or behaviour changes.
 

@@ -7,7 +7,7 @@
 #   Authorization: Bearer <TOKEN>
 #
 # 可用环境变量（命令行参数优先）：
-#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_1_5_mac.json
+#   WECHAT_CONF  Hook 版本 JSON，默认 <repo>/hook/versions/4_2_1_9_mac.json
 #   PORT         监听端口，默认 58080
 #   TOKEN        OneBot token；为空时随机生成 32 字节 hex 并打印
 #   IMAGE_PATH   微信图片临时目录（必填，且必须已存在）
@@ -22,7 +22,7 @@
 #     scripts/run_bridge.sh
 #
 #   scripts/run_bridge.sh --port 58081 --token "$(openssl rand -hex 32)" \
-#     --wechat-conf hook/versions/4_2_1_5_mac.json \
+#     --wechat-conf hook/versions/4_2_1_9_mac.json \
 #     --image-path "/path/to/xwechat_files/wxid_xxx/temp/2026-10/Img/"
 #
 set -euo pipefail
@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_DIR="${ROOT_DIR}/bridge"
 
-WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_1_5_mac.json}"
+WECHAT_CONF="${WECHAT_CONF:-${ROOT_DIR}/hook/versions/4_2_1_9_mac.json}"
 PORT="${PORT:-58080}"
 TOKEN="${TOKEN:-}"
 IMAGE_PATH="${IMAGE_PATH:-}"
@@ -53,7 +53,7 @@ usage() {
 用法：scripts/run_bridge.sh [选项]
 
 选项：
-  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_1_5_mac.json）
+  --wechat-conf <path>  Hook 版本 JSON（默认 hook/versions/4_2_1_9_mac.json）
   --port <port>         监听端口（默认 58080，仅绑定 127.0.0.1）
   --token <token>       OneBot token（默认随机生成 64 字符 hex）
   --image-path <dir>    微信图片临时目录（必填，必须已存在）
@@ -142,7 +142,7 @@ if [[ -f "${ROOT_DIR}/scripts/sync_hook_script.sh" ]]; then
   bash "${ROOT_DIR}/scripts/sync_hook_script.sh" --quiet \
     || fail "无法同步 hook/script.js 到 ${BRIDGE_DIR}/script.js"
 fi
-[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_1_5_mac.json。"
+[[ -f "${WECHAT_CONF}" ]] || fail "Hook 版本配置不存在：${WECHAT_CONF}\n  该文件由 hook 成员/App 生成；默认期望 hook/versions/4_2_1_9_mac.json。"
 
 # HOOK_SEND_DISABLED 是 bridge 进程的环境变量，但 hook/script.js 运行在**微信进程**，
 # 它读到的 Process.env 是微信自己的环境，export 不会跨进程传过去。因此这里不能只

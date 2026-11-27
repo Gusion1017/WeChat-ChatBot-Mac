@@ -3,12 +3,12 @@ import XCTest
 
 /// App 侧朋友圈写门禁（SnsWriteGate）单点开关测试。
 ///
-/// 2026-11-26：4.2.1.5 完成朋友圈发布/评论/回复/同步真机验证，`snsWriteSuppressedVersions`
-/// 清空；4.2.1.3 / 4.2.0.x 同样可写。安全闸保留：通过注入 suppressed 集合覆盖
+/// 2026-11-27：4.2.1.9 完成朋友圈读取/发布/评论/同步/回复真机验证；4.2.1.5（2026-11-26 完成）
+/// 与 4.2.1.3 / 4.2.0.x 同样可写，`snsWriteSuppressedVersions` 保持为空。安全闸保留：通过注入 suppressed 集合覆盖
 /// 「未来新版本未完成朋友圈读写验证」的回退路径（适配要求见 docs/hook-porting.md）。
 final class SnsWriteGateTests: XCTestCase {
-    private let verifiedVersion = "4.2.1.3"
-    private let currentVerifiedVersion = "4.2.1.5"
+    private let verifiedVersion = "4.2.1.5"
+    private let currentVerifiedVersion = "4.2.1.9"
     private let olderVerifiedVersion = "4.2.0.17"
     private let simulatedSuppressedVersion = "9.9.9"
 

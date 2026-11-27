@@ -4,6 +4,30 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。日期格式：YYYY-MM-DD。
 Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 
+## [4.2.5] — 2026-11-27
+
+### 新增
+
+- **微信 4.2.1.9 (270601) 适配（2026-11-27，含朋友圈读写真机验证）**：新增
+  `hook/versions/4_2_1_9_mac.json`，由 4.2.1.5 静态重定位生成，58/58 个地址键全部
+  `verified` / `high`（0 个 `medium` / `review` / `unresolved`）；朋友圈五组任务锚点与四个
+  请求体返回点齐全。`hookVerified=true`，默认目标切到 4.2.1.9，`KNOWN_VERSION_PAIRS`、
+  Swift `knownPairs`、安装 / 打包 / `run_bridge.sh` 默认值与中英文版本文案同步更新；
+  4.2.1.5 / 4.2.1.3 / 4.2.0.x 版本表保留。
+- **真机验证（2026-11-27）**：注入 / 启动、入站消息（正文 / 时间 / 类型解析正确，含跨账号私聊）、
+  R3 文本发送（接收方确认实际收到）、通讯录、历史回放与 bridge 重启恢复均通过；
+  朋友圈时间线主动刷新（`source=native`）、发布（`post_id` 回包且时间线可见）、评论、
+  增量同步（`commands` / 游标 / 事件）与回复他人评论（`reply_to` 正确）全部验证，微信无崩溃。
+- 新增 [`docs/releases/4.2.1.9.md`](docs/releases/4.2.1.9.md)，记录静态结果、验证矩阵、
+  升级 / 回退与未复测范围。
+
+### 变更
+
+- 默认目标微信版本切到 **4.2.1.9 (270601)**：`tools/manage_wechat.sh`、
+  `tools/install_gadget.sh`、`scripts/build_app.sh`、`scripts/run_bridge.sh`、
+  `scripts/package_release.sh` 与 App 的 `WeChatVersionSupport.knownPairs` 同步；
+  `unverifiedHookVersions` / `snsWriteSuppressedVersions` 保持为空。
+
 ## [4.2.4] — 2026-11-26
 
 ### 修复
@@ -1756,6 +1780,7 @@ Hook / 微信版本相关的变更会注明目标微信版本与验证方式。
 - 仅支持微信 4.1.12.53 / 4.1.15.55 与 Apple Silicon + macOS 26+。
 
 [Unreleased]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.0...HEAD
+[4.2.5]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.4...v4.2.5
 [4.2.4]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.3...v4.2.4
 [4.2.3]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/Gusion1017/WeChat-ChatBot-Mac/compare/v4.2.1...v4.2.2

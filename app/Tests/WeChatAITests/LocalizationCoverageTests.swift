@@ -79,7 +79,7 @@ final class LocalizationCoverageTests: XCTestCase {
         }
     }
 
-    /// 版本支持文案不得再出现已移除的 4.1.x，且必须包含当前默认目标 4.2.1.5。
+    /// 版本支持文案不得再出现已移除的 4.1.x，且必须包含当前默认目标 4.2.1.9。
     func testUserFacingVersionListsExcludeRemovedVersions() throws {
         for language in ["en", "zh-Hans"] {
             let url = Self.appRoot.appendingPathComponent(
@@ -93,8 +93,12 @@ final class LocalizationCoverageTests: XCTestCase {
                 )
             }
             XCTAssertTrue(
+                text.contains("4.2.1.9"),
+                "\(language) 文案缺少当前默认目标微信 4.2.1.9"
+            )
+            XCTAssertTrue(
                 text.contains("4.2.1.5"),
-                "\(language) 文案缺少当前默认目标微信 4.2.1.5"
+                "\(language) 文案缺少上一版微信 4.2.1.5"
             )
         }
     }

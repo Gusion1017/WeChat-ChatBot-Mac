@@ -40,9 +40,14 @@ final class WeChatDetectionTests: XCTestCase {
     // MARK: Version support
 
     func testKnownVersionPairsMatchInstallScripts() {
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 6)
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.1.5")
-        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270597")
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.count, 7)
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.version, "4.2.1.9")
+        XCTAssertEqual(WeChatVersionSupport.knownPairs.first?.build, "270601")
+        XCTAssertTrue(WeChatVersionSupport.versions.contains("4.2.1.9"))
+        XCTAssertTrue(WeChatVersionSupport.builds.contains("270601"))
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.9", build: "270601"),
+                      "4.2.1.9 必须与安装脚本的 KNOWN_VERSION_PAIRS 一致")
+        XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.1.9 (270601)"))
         XCTAssertTrue(WeChatVersionSupport.versions.contains("4.2.0.5"))
         XCTAssertTrue(WeChatVersionSupport.builds.contains("270341"))
         XCTAssertTrue(WeChatVersionSupport.displayList.contains("4.2.1.5 (270597)"))
@@ -51,6 +56,7 @@ final class WeChatDetectionTests: XCTestCase {
     }
 
     func testVersionSupportRequiresKnownVersionOrBuild() {
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.9", build: "270601"))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.5", build: "270597"))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: "270595"))
         XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.3", build: ""))
@@ -276,8 +282,10 @@ final class WeChatDetectionTests: XCTestCase {
     }
 
     func testCompactVersionListIsLanguageAware() {
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 6 个版本"))
-        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("6 versions"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("等 7 个版本"))
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "en").contains("7 versions"))
+        // 紧凑列表取前两个版本：默认目标 4.2.1.9 + 上一版 4.2.1.5。
+        XCTAssertTrue(WeChatVersionSupport.compactList(language: "zh-Hans").contains("4.2.1.9 / 4.2.1.5"))
     }
 
     // MARK: Quit confirmation

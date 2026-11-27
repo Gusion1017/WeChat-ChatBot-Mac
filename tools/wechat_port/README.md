@@ -27,20 +27,20 @@ bash tools/manage_wechat.sh backup
 
 # 2. 从上一版官方备份 zip 提取 arm64 主库切片
 python3 tools/wechat_port/cli.py slice \
-  --source ~/Library/Application\ Support/WeChatAI/backups/WeChat-4.2.1.3-270595-official.zip \
-  --out "$PORT_HOME/old/wechat-4.2.1.3-arm64.dylib"
+  --source ~/Library/Application\ Support/WeChatAI/backups/WeChat-4.2.1.5-270597-official.zip \
+  --out "$PORT_HOME/old/wechat-4.2.1.5-arm64.dylib"
 
 # 3. 一条命令完成映射 + 结构验证 + 模板渲染 + 报告
 python3 tools/wechat_port/cli.py adapt \
   --app /Applications/WeChat.app \
-  --old-binary "$PORT_HOME/old/wechat-4.2.1.3-arm64.dylib" \
-  --baseline hook/versions/4_2_1_3_mac.json \
-  --workdir "$PORT_HOME/work/4.2.1.5" \
-  --version 4.2.1.5 \
+  --old-binary "$PORT_HOME/old/wechat-4.2.1.5-arm64.dylib" \
+  --baseline hook/versions/4_2_1_5_mac.json \
+  --workdir "$PORT_HOME/work/4.2.1.9" \
+  --version 4.2.1.9 \
   --force
 
 # 4. 看报告
-open "$PORT_HOME/work/4.2.1.5/REPORT.md"
+open "$PORT_HOME/work/4.2.1.9/REPORT.md"
 ```
 
 `adapt` 退出码：

@@ -2,7 +2,7 @@
 
 > 本项目是 **macOS 原生 App + 微信 Hook**，不是双击即用的普通应用：GitHub 的「Download ZIP」默认只给
 > **源码**，不含已编译的 App、bridge 二进制和 Frida Gadget；非开发者请用 Releases 里的 App 压缩包，
-> 只有源码时按「源码构建」操作。当前发布版本：**4.2.4（build 42，2026-11-26）**，压缩包约 70 MB（66 MiB）。
+> 只有源码时按「源码构建」操作。当前发布版本：**4.2.5（build 43，2026-11-27）**，压缩包约 70 MB（66 MiB）。
 
 ## 1. 先确认环境
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 硬件 | Apple Silicon（arm64） |
 | 系统 | macOS 26 或更高 |
-| 微信 | 4.2.1.5 (270597)、4.2.1.3 (270595)、4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345) 或 4.2.0.5 (270341) 之一；4.2.1.9 (270601) 未适配，勿强装；已安装并登录；默认位于 `/Applications/WeChat.app`，当前用户需对该 App 有写权限。4.1.x 自 2026-11-20 起不再支持 |
+| 微信 | 4.2.1.9 (270601)、4.2.1.5 (270597)、4.2.1.3 (270595)、4.2.0.17 (270353)、4.2.0.12 (270348)、4.2.0.9 (270345) 或 4.2.0.5 (270341) 之一；已安装并登录；默认位于 `/Applications/WeChat.app`，当前用户需对该 App 有写权限。4.1.x 自 2026-11-20 起不再支持 |
 | 命令行工具 | **安装 Hook 必需**：Xcode Command Line Tools（或完整 Xcode），提供 `/usr/bin/python3` 与 `/usr/bin/otool`。安装命令 `xcode-select --install`；不需要 Apple 开发者账号 |
 | 权限 | 安装到 `/Applications`、修改微信或移除 quarantine 时可能需要管理员密码 / Touch ID |
 | 磁盘 | 安装 Hook 会完整备份微信（约 670MB，随微信版本略有差异），建议预留 ≥2.5GB |
@@ -18,9 +18,11 @@
 | 本地 TTS（语音引擎） | **Qwen3-TTS-1.7B**（唯一模型，Apple MLX）：额外需要 `uv`、`python3.10` 或 conda 之一（安装脚本按此顺序探测）；首次安装约 4.7GB 磁盘（MLX 模型 ~4.2GB + 依赖 ~0.5GB，运行时内存约 10GB）；默认 GPU，可选 CPU（极慢，实验性）；App 不内置音色，需自行导入参考音；模型未安装/服务未启动/合成失败或超时时语音回复自动改发文字 |
 
 > 微信版本必须**精确匹配列表**；不在列表时向导会提示不匹配，不要强行安装 Hook。
-> 安装脚本默认以 **4.2.1.5 (270597)** 为目标，4.2.1.3 (270595) 与四个 4.2.0.x 为保留版本；4.1.x 的版本表与门禁已移除。
-> 4.2.1.5 已真机验证：入站文本、R3 文本发送、通讯录（`hookVerified=true`，58/58 地址键 `verified`）；
-> **朋友圈读写均已真机验证**（4.2.1.5，2026-11-26：发布/评论/回复/同步、时间线主动刷新），详见
+> 安装脚本默认以 **4.2.1.9 (270601)** 为目标，4.2.1.5 (270597)、4.2.1.3 (270595) 与四个 4.2.0.x 为保留版本；4.1.x 的版本表与门禁已移除。
+> 4.2.1.9 已真机验证：注入/启动、入站消息（正文/时间）、R3 文本发送（接收方确认）、通讯录、
+> 朋友圈读取 / 发布 / 评论（`hookVerified=true`，58/58 地址键 `verified`），详见
+> [`releases/4.2.1.9.md`](releases/4.2.1.9.md)。
+> 4.2.1.5 保留完整验证结论：入站文本、R3 文本发送、通讯录、朋友圈发布/评论/回复/同步（2026-11-26），详见
 > [`releases/4.2.1.5.md`](releases/4.2.1.5.md)。
 > 4.2.1.3 保留完整验证结论：入站、R3 文本发送、通讯录、图片下载 hook、朋友圈 timeline / 发布 / 评论 /
 > 回复 / 主动同步与 AI 自动互动；赞 / 取消赞 / objectop 未打通，userpage 主动发送保持 passive。
@@ -33,12 +35,12 @@
 
 ## 2. 方式 A：Releases 里的 App 压缩包（推荐给普通用户）
 
-发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.4（约 70 MB / 66 MiB）**。
+发布者在本地构建后把 `WeChat AI.app` 压缩上传到 GitHub Releases，当前版本 **4.2.5（约 70 MB / 66 MiB）**。
 
-1. 下载 `WeChat-AI-4.2.4.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
+1. 下载 `WeChat-AI-4.2.5.zip`（建议同时下载 `.sha256`），解压 zip，得到 `WeChat AI.app`。可选校验（在下载目录执行）：
 
    ```bash
-   shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
+   shasum -a 256 -c WeChat-AI-4.2.5.zip.sha256
    ```
 
 2. 把 `WeChat AI.app` 拖到 `~/Applications`（当前用户，无需管理员）或 `/Applications`（所有用户）；下文分别示例。
@@ -88,9 +90,9 @@
    - **启动**：完成并启动机器人；本步骤同时显示「数据与备份」卡（数据目录、导出数据备份、打开数据目录），
      换机或重装前可先导出完整数据备份。
 
-6. **首次发送需捕获句柄**：4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 使用 R3 原生发送。
+6. **首次发送需捕获句柄**：4.2.1.9 / 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5 使用 R3 原生发送。
    首次启用或每次微信重启后，
-   需要在本机微信**手动发一条消息**捕获发送句柄（语音回复还需再发一条语音；朋友圈已开启还需手动打开一次朋友圈，朋友圈 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 有 SNS 锚点，四个版本均已具备读写能力）；
+   需要在本机微信**手动发一条消息**捕获发送句柄（语音回复还需再发一条语音；朋友圈已开启还需手动打开一次朋友圈，朋友圈 4.2.1.9 / 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 有 SNS 锚点，均具备读写能力）；
    句柄未就绪时回复会排队（不会丢失），bridge 重启会从 `r3-seed.json` 自动恢复。App 会在开启语音/朋友圈/自动互动或
    机器人**每次启动后**弹出统一的「捕获发送句柄」弹窗，条目按已开启功能显示：文字常驻；语音 / 朋友圈 /
    评论句柄在对应开关开启时出现（「评论或点赞一次」要求「自动互动（评论/回复）」已开启、有互动对象且非演练；
@@ -101,14 +103,15 @@
 
    ```bash
    bash tools/manage_wechat.sh restore
-   # 当前版本没有备份（例如微信已被自动升级）时，可用旧版本官方备份显式回退：
+   # 当前版本没有备份（例如微信已被自动升级到未适配版本）时，可用旧版本官方备份显式回退：
    bash tools/manage_wechat.sh restore --backup-zip "$HOME/Library/Application Support/WeChatAI/backups/WeChat-4.2.1.5-270597-official.zip"
    ```
 
-   > **微信会自动升级**：微信自带 Sparkle 更新（本次实测被自动升到 4.2.1.9 / 270601，**尚未适配**（4.2.1.5 已适配））；
-   > 升级会用官方签名覆盖 App，Frida Gadget 注入消失、Hook 失效。安装/还原脚本会尝试关闭 Sparkle 自动检查
-   > 并清理已下载的更新缓存；若当前终端/App 没有微信容器访问权限，脚本会明确警告，请再到微信
-   > 「设置 → 通用」里关闭自动更新。回退后需重新安装 Hook（`bash tools/manage_wechat.sh install`）。
+   > **微信会自动升级**：微信自带 Sparkle 更新（实测 4.2.1.5 → 4.2.1.9 在退出微信时被直接替换）；
+   > 升级会用官方签名覆盖 App，Frida Gadget 注入消失、Hook 失效。升级到已适配版本（如 4.2.1.9）后
+   重新 `install` 即可；
+   > 安装/还原脚本会尝试关闭 Sparkle 自动检查并清理已下载的更新缓存；若当前终端/App 没有微信容器访问权限，
+   脚本会明确警告，请再到微信「设置 → 通用」里关闭自动更新。
    > 未适配版本上 App 会显示「未适配」并阻止启动 Hook，**不要强装**。
 
 ### 2.1 应用内更新（设置 → 更新）
@@ -166,7 +169,7 @@ Xcode 自带 Command Line Tools，满足 Hook 的 `python3` / `otool` 依赖。
 
 ## 4. 发布者：如何制作可下载的 App 压缩包
 
-当前源码版本 **4.2.4（build 42）**（Releases 最新为 4.2.4），zip 约 **70 MB（66 MiB）**；版本与 build 由
+当前源码版本 **4.2.5（build 43）**（Releases 最新为 4.2.5），zip 约 **70 MB（66 MiB）**；版本与 build 由
 `app/Packaging/Info.plist` 决定（`package_release.sh` 不再写死版本号）。在具备 Xcode 27 / CLT 的机器上按顺序构建：
 
 ```bash
@@ -183,13 +186,13 @@ bash scripts/package_release.sh      # 或 make release
 > 个人 `.codesign-identity`，避免公开证书姓名 / Team ID；确需稳定签名时显式设置中性的
 > `RELEASE_CODESIGN_IDENTITY`。原理见 [`updates.md`](updates.md) §5.2.1。
 
-脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.4.zip` + `.sha256`）；
+脚本会校验必需资源、检查签名、打包并生成 SHA256（`dist/WeChat-AI-4.2.5.zip` + `.sha256`）；
 `package_release.sh --skip-build` 可复用 `dist/WeChat AI.app` 重新打包，也可手动执行（版本号请按 Info.plist 替换）：
 
 ```bash
 bash scripts/build_app.sh
-/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.4.zip"
-( cd dist && shasum -a 256 "WeChat-AI-4.2.4.zip" > "WeChat-AI-4.2.4.zip.sha256" )
+/usr/bin/ditto -c -k --norsrc --keepParent "dist/WeChat AI.app" "dist/WeChat-AI-4.2.5.zip"
+( cd dist && shasum -a 256 "WeChat-AI-4.2.5.zip" > "WeChat-AI-4.2.5.zip.sha256" )
 ```
 
 签名与公证的预期：
@@ -209,13 +212,13 @@ bash scripts/build_app.sh
 
 ```bash
 cd dist
-shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
+shasum -a 256 -c WeChat-AI-4.2.5.zip.sha256
 ```
 
-把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.4`，当前源码为
-`4.2.4 (build 42)`，发布前请确认 Info.plist 版本号），在说明里写清：
+把 zip 与 `.sha256` 上传到 GitHub **Releases**（tag 与实际版本号一致；已发布 tag 为 `v4.2.5`，当前源码为
+`4.2.5 (build 43)`，发布前请确认 Info.plist 版本号），在说明里写清：
 
-- 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5；4.1.x 已移除；
+- 支持 Apple Silicon / macOS 26+ / 微信 4.2.1.9 / 4.2.1.5 / 4.2.1.3 / 4.2.0.17 / 4.2.0.12 / 4.2.0.9 / 4.2.0.5；4.1.x 已移除；
 - **安装 Hook 需要 Xcode Command Line Tools**（`xcode-select --install`，无需开发者账号），首启向导会检测并引导安装；
 - App 未公证（默认固定签名身份，未配置时为 ad-hoc）；macOS 15+ 已无「右键 → 打开」，
   首次需在 系统设置 → 隐私与安全性 → 仍要打开，或用 `xattr -dr com.apple.quarantine`；
@@ -235,9 +238,9 @@ shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
 | 微信从 App Store 安装，或 `/Applications/WeChat.app` 属主是 root | Hook 需要当前用户可写 `/Applications/WeChat.app`。App Store 版路径/签名不同，建议换官网 arm64 版；属主异常时重装微信，或在明确风险后 `sudo chown -R "$USER":staff /Applications/WeChat.app`。可用 `ls -ld /Applications/WeChat.app` 检查 |
 | 打开后没有窗口 | 这是菜单栏 App：启动时显示主窗口；关闭窗口后 Dock 图标消失，仅保留菜单栏。**左键**单击顶部菜单栏图标开合状态面板，面板内提供「打开主窗口」、启停、设置与退出；右键 / Control-左键不执行操作 |
 | 换微信账号后聊天记录、记忆、会话设置会切换吗 | **会，且旧账号数据不会被删除。** App 以当前登录的微信账号为边界：聊天记录/记忆卡（角色目录）/会话设置/机器人配置/人格/定时任务/新媒体自动切到该账号自己的档案（`~/Library/Application Support/WeChatAI/accounts/<wxid>/`）；AI 通道/Keychain/Hook/OneBot/本地 TTS 安装与音色/崩溃与 bridge 日志仍全局共享。升级旧版时会把旧单库复制到旧 `settings.onebot.self_id` 所属账号（只 copy 不删，旧媒体保留），因此升级后需要**切回原微信账号**才能看到旧聊天。运行中换号会停止机器人、提示后需手动重新启动；App 不提供手动选库。未登录时数据先写 `_unassigned`，登录后自动认领。详见 [`accounts.md`](accounts.md) |
-| 启动机器人提示「Hook 地址表尚未真机验证」 | 只有 `hookVerified=false` 的版本会被启动门禁拦住。4.2.1.5 已真机验证入站文本/R3 文本发送/通讯录/朋友圈读写（2026-11-26）；4.2.1.3 已真机验证入站/R3/通讯录/timeline 主动刷新/发布/评论/回复/同步；hook 的 `task_layout_mismatch` 安全闸只会在捕获 vtable 与版本表不一致时拒绝，属于防漂移机制。若自定义 `versionConfigPath` 指向 `hookVerified=false` 的 JSON，也会被阻止。 |
+| 启动机器人提示「Hook 地址表尚未真机验证」 | 只有 `hookVerified=false` 的版本会被启动门禁拦住。4.2.1.9 已真机验证注入/启动、入站消息、R3 文本发送（接收方确认）、通讯录、朋友圈读取/发布/评论（2026-11-27）；4.2.1.5 已真机验证入站文本/R3 文本发送/通讯录/朋友圈读写（2026-11-26）；4.2.1.3 已真机验证入站/R3/通讯录/timeline 主动刷新/发布/评论/回复/同步；hook 的 `task_layout_mismatch` 安全闸只会在捕获 vtable 与版本表不一致时拒绝，属于防漂移机制。若自定义 `versionConfigPath` 指向 `hookVerified=false` 的 JSON，也会被阻止。 |
 | 安装 Hook 失败：`Operation not permitted` / `ditto: ... Operation not permitted` | macOS 的**App 管理**权限拒绝写入 `/Applications/WeChat.app`。到 系统设置 → 隐私与安全性 → App 管理，打开 **WeChat AI**（若在终端/DSH 里执行脚本，也打开对应终端/DSH）；完全退出并重新打开 App 后重试。设置 → Hook 与首次向导会给出同样提示和「打开 App 管理设置」按钮 |
-| 微信版本不匹配 | 支持 4.2.1.5 (270597) / 4.2.1.3 (270595) / 4.2.0.17 (270353) / 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341)；4.1.x 已移除支持，**4.2.1.9 (270601) 未适配**。App 会在总览/设置 → Hook 显示版本+build 与实际检测路径，版本不在列表时标「未适配」并禁用安装。用 `/usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' /Applications/WeChat.app/Contents/Info.plist` 与 `:CFBundleVersion` 核对（微信 4.x 优先写 `WeChatBundleVersion`；缺失时才回退 `CFBundleShortVersionString`，4.2.1.5 / 4.2.1.3 机器上后者是 `4.2.1`，按它会误判为不在支持列表）。其他版本需自行适配、用 `WECHAT_SUPPORTED_VERSION`/`WECHAT_SUPPORTED_BUILD` 覆盖或还原，**不要强装** |
+| 微信版本不匹配 | 支持 4.2.1.9 (270601) / 4.2.1.5 (270597) / 4.2.1.3 (270595) / 4.2.0.17 (270353) / 4.2.0.12 (270348) / 4.2.0.9 (270345) / 4.2.0.5 (270341)；4.1.x 已移除支持。App 会在总览/设置 → Hook 显示版本+build 与实际检测路径，版本不在列表时标「未适配」并禁用安装。用 `/usr/libexec/PlistBuddy -c 'Print :WeChatBundleVersion' /Applications/WeChat.app/Contents/Info.plist` 与 `:CFBundleVersion` 核对（微信 4.x 优先写 `WeChatBundleVersion`；缺失时才回退 `CFBundleShortVersionString`，4.2.1.5 / 4.2.1.3 机器上后者是 `4.2.1`，按它会误判为不在支持列表）。其他版本需自行适配、用 `WECHAT_SUPPORTED_VERSION`/`WECHAT_SUPPORTED_BUILD` 覆盖或还原，**不要强装** |
 | 微信装在 `~/Applications` 或状态卡显示「非设置路径」 | App 会自动从运行中的微信/LaunchServices 发现路径并按它检测；到「设置 → Hook」点「使用检测路径」把设置同步过去即可（安装/还原也会使用实际检测路径） |
 | 微信启动/退出后状态不更新 | 正常情况下 `NSWorkspace` 通知会实时同步；若仍过期，点总览/设置 → Hook 的「刷新状态」，或切回 App 触发一次轻量核对。持续异常时看运行日志中 `Hook` 来源的错误 |
 | 「登录时启动」打不开或系统没反应 | 该开关写入 `~/Library/LaunchAgents/com.gusionw.wechatai.loginitem.plist`；首次可能被 macOS 拦在 系统设置 → 通用 → 登录项，需要允许 WeChat AI 在后台运行。源码 `swift run` 不是 `.app`，开关会禁用；App 移动位置后重新开启即可写回新路径 |
@@ -250,8 +253,8 @@ shasum -a 256 -c WeChat-AI-4.2.4.zip.sha256
 | 回复自己的评论失败（ret=-2） | 微信服务端语义：回复自己的评论会被拒绝，不是协议/配置错误；**请回复他人评论**（回包 `comment_id`、`reply_to`/`reply_to_user_id`/`reply_to_name` 正确） |
 | 刷新时间线显示「最近动态 + 旧一页」 | 时间线以最近一次捕获的首屏请求为准；在微信朋友圈滚动较深后重新打开可能捕获到带旧游标的「首屏」。回到朋友圈顶部再刷新/重新打开一次即可重捕 |
 | 回复后普通评论失败 / 提示评论模板未就绪 | 回复请求使用独立 `sns_reply:` 标记，不会覆盖评论模板。bridge 只复用干净评论模板（`SnsAction` field 5 Type==2 且无回复字段 9/12）；点赞形态或被回复污染的模板会忽略并退回自拼（普通评论 4.2.1.3 已验证；自拼回复未真机验证），下一次干净评论后自动重建。持续失败时重启机器人并手动评论一次重新捕获 |
-| 微信被自动升级（如 4.2.1.9 / 270601）后 Hook 失效、App 显示未适配 | 微信 Sparkle 更新会用官方签名覆盖 App，Gadget 注入消失；**未适配版本不要强装**。先完全退出微信，用适配版本的官方备份回退：`bash tools/manage_wechat.sh restore --backup-zip "$HOME/Library/Application Support/WeChatAI/backups/WeChat-4.2.1.5-270597-official.zip"`，再重新 `bash tools/manage_wechat.sh install`；并在微信设置里关闭自动更新 |
-| 还原时提示 no backup found / 当前版本没有备份 | 微信自动升级后当前版本通常没有备份，但 `backups/` 里仍保留旧版本官方 zip。脚本会列出最近 6 个候选并提示用 `--backup-zip <path>` 指定；选与适配列表一致的版本（如 `WeChat-4.2.1.5-270597-official.zip`）回退即可 |
+| 微信被自动升级后 Hook 失效、App 显示未适配 | 微信 Sparkle 更新会用官方签名覆盖 App，Gadget 注入消失；**未适配版本不要强装**。升级到已适配版本（4.2.1.9 / 4.2.1.5 / 4.2.1.3 / 4.2.0.x）时重新 `bash tools/manage_wechat.sh install` 即可；被升级到未适配版本时先完全退出微信，用适配版本的官方备份回退：`bash tools/manage_wechat.sh restore --backup-zip "$HOME/Library/Application Support/WeChatAI/backups/WeChat-4.2.1.9-270601-official.zip"`，再重新安装；并在微信设置里关闭自动更新 |
+| 还原时提示 no backup found / 当前版本没有备份 | 微信自动升级后当前版本通常没有备份，但 `backups/` 里仍保留旧版本官方 zip。脚本会列出最近 6 个候选并提示用 `--backup-zip <path>` 指定；选与适配列表一致的版本（如 `WeChat-4.2.1.9-270601-official.zip` 或 `WeChat-4.2.1.5-270597-official.zip`）回退即可 |
 | 发送不出去 / 一直排队 | 确认「R3 原生发送」开关已开；首次或微信重启后在本机微信手动发一条消息（语音再发一条语音）捕获句柄；`bridge` 刚启动的 60 秒内登录尚未稳定，可等「捕获发送句柄」弹窗/语音面板状态行的倒计时结束后点「重新检测」 |
 | 端口被占用（58080 / 27042） | `lsof -nP -iTCP:58080 -sTCP:LISTEN` 与 `lsof -nP -iTCP:27042 -sTCP:LISTEN` 查看占用进程；退出冲突 App，或在「设置 → OneBot」改端口后重启 bridge。27042 是 Gadget 注入端口，只允许一个微信实例 |
 | 语音回复没有声音 / 只收到文字 | 先在「机器人 → 语音 → 语音引擎与音色」确认 Qwen3-TTS-1.7B 的「运行环境与模型」已安装、本地服务已启动、已选择音色、运行设备为 GPU（CPU 极慢通常会超时）；未安装/服务未启动/旧版服务仍在/合成失败或超时时该条会自动改发文字。系统中文语音资源缺失时可在 系统设置 → 辅助功能 → 朗读内容 下载，或点「机器人 → 语音」的「下载中文语音资源」 |

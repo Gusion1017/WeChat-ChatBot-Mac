@@ -31,13 +31,14 @@ final class HookVerificationTests: XCTestCase {
         XCTAssertTrue(AppResources.versionConfigVerified(version: "4.2.1.3", explicitPath: missingURL.path))
     }
 
-    /// 4.2.1.3 / 4.2.1.5 写链路均已真机验证：启动门禁通过且不强制关闭朋友圈写。
+    /// 4.2.1.9 / 4.2.1.5 / 4.2.1.3 写链路均已真机验证：启动门禁通过且不强制关闭朋友圈写。
     func testVerifiedVersionAllowsStartupAndSNSWrite() {
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.3", configVerified: true))
         XCTAssertFalse(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.3", configVerified: false))
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.0.17", configVerified: true))
         XCTAssertFalse(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.0.17", configVerified: false))
         XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.5", configVerified: true))
+        XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.9", configVerified: true))
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.5"),
                        "4.2.1.5 朋友圈读写已验证，不再强制只读")
         XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.3"),
@@ -47,19 +48,31 @@ final class HookVerificationTests: XCTestCase {
                       "已适配版本不得把朋友圈写链路长期留在只读名单")
     }
 
-    /// 微信自动升级到未适配版本（如 4.2.1.9）时，即使残留/自定义版本表存在也不能启动 bridge。
+    /// 微信自动升级到完全未知的版本时，即使残留/自定义版本表存在也不能启动 bridge。
     func testUnknownWeChatVersionIsRejectedAtStartup() {
-        XCTAssertFalse(WeChatVersionSupport.isKnown(version: "4.2.1.9", build: "270601"))
-        let error = HookError.weChatVersionUnsupported("4.2.1.9 (270601)")
-        XCTAssertTrue(error.localizedDescription.contains("4.2.1.9"))
+        XCTAssertFalse(WeChatVersionSupport.isKnown(version: "4.2.2.0", build: "270999"))
+        let error = HookError.weChatVersionUnsupported("4.2.2.0 (270999)")
+        XCTAssertTrue(error.localizedDescription.contains("4.2.2.0"))
         XCTAssertTrue(error.localizedDescription.contains("已阻止启动"))
+    }
+
+    /// 4.2.1.9 于 2026-11-27 完成真机验证（含朋友圈读写）后移出 `unverifiedHookVersions`：
+    /// 版本表 `hookVerified=true` 时允许启动，配置未验证时仍阻止。
+    func testVerified4219AllowsStartup() {
+        XCTAssertTrue(WeChatVersionSupport.isKnown(version: "4.2.1.9", build: "270601"))
+        XCTAssertTrue(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.9", configVerified: true))
+        XCTAssertFalse(WeChatVersionSupport.isHookAdaptationVerified(version: "4.2.1.9", configVerified: false))
+        XCTAssertFalse(WeChatVersionSupport.suppressesSNSWrite(version: "4.2.1.9"),
+                       "4.2.1.9 朋友圈读写已验证，不再强制只读")
+        XCTAssertTrue(WeChatVersionSupport.unverifiedHookVersions.isEmpty,
+                      "已完成适配的版本不得留在未验证门禁名单")
     }
 
     func testUnverifiedRuntimeErrorIsActionable() {
         let error = RuntimeError.hookAdaptationUnverified("4.2.1.3 (270595)", "/tmp/4_2_1_3_mac.json")
         XCTAssertTrue(error.localizedDescription.contains("4.2.1.3"))
         XCTAssertTrue(error.localizedDescription.contains("已阻止启动"))
-        // 4.2.1.5 是当前已验证目标：引导语应指向已验证版本，而不是旧的 4.2.0.x。
+        // 引导语应指向已验证版本，而不是旧的 4.2.0.x。
         XCTAssertTrue(error.localizedDescription.contains("已验证的微信版本"))
         XCTAssertTrue(error.localizedDescription.contains("4.2.1.3"))
         XCTAssertTrue(error.localizedDescription.contains("4.2.1.5"))

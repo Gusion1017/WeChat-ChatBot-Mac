@@ -5,7 +5,7 @@
 > [`core-services.md`](core-services.md) §5.12，页面交互见 [`ui-design.md`](ui-design.md) §5.10；
 > 手动下载/覆盖安装的关系见 [`install.md`](install.md) §2.1。
 >
-> 发布状态：应用内更新自 **3.1.0** 起提供；Releases **4.2.4 (build 42)** 已包含；
+> 发布状态：应用内更新自 **3.1.0** 起提供；Releases **4.2.5 (build 43)** 已包含；
 > 更早版本仍按 [`install.md`](install.md) §2 手动下载覆盖安装。
 > 签名保留修复（更新助手不再 ad-hoc 重签）需重新打包含该提交的发布包才生效，见 §5.2.1。
 

@@ -17,10 +17,12 @@ enum WeChatVersionSupport {
 
     /// 顺序即 UI 展示顺序：默认目标在前，其后为历史版本。
     ///
-    /// 2026-11-26：4.2.1.5 (270597) 已完成朋友圈完整读写真机验证（时间线/同步/
-    /// 发布/评论/回复），版本表 `hookVerified=true`、`snsWriteSuppressedVersions` 为空。
-    /// 4.2.1.3 及 4.2.0.x 保留。
+    /// 2026-11-27：4.2.1.9 (270601) 完成真机验证（注入/启动、入站消息、R3 文本发送、
+    /// 通讯录、朋友圈读取 / 发布 / 评论 / 同步 / 回复），版本表 `hookVerified=true`，
+    /// 切为默认目标；4.2.1.5 已完成朋友圈完整读写真机验证（时间线/同步/发布/评论/回复），
+    /// 与 4.2.1.3 及 4.2.0.x 一起保留。
     static let knownPairs: [Pair] = [
+        Pair(version: "4.2.1.9", build: "270601"),
         Pair(version: "4.2.1.5", build: "270597"),
         Pair(version: "4.2.1.3", build: "270595"),
         Pair(version: "4.2.0.17", build: "270353"),
@@ -36,9 +38,11 @@ enum WeChatVersionSupport {
     ///
     /// 即使自定义 `versionConfigPath` 指向别的 JSON，这些版本也不允许启动 bridge：
     /// 错误地址在 `Interceptor.attach` 或回调里是 SIGILL，无法靠 App 捕获。
-    /// 4.2.1.5 已于 2026-11-25 真机验证入站文本、R3 文本发送与通讯录，2026-11-26
-    /// 补齐朋友圈发布/评论/回复/同步（读写）验证；4.2.1.3 的入站/R3/朋友圈读写同样
-    /// 已真机验证。写链路的独立安全闸仍保留，见 `snsWriteSuppressedVersions`（当前为空）。
+    /// 4.2.1.9 于 2026-11-27 真机验证注入/启动、入站消息、R3 文本发送、通讯录与朋友圈
+    /// 读取 / 发布 / 评论 / 同步 / 回复；4.2.1.5 于 2026-11-25 真机验证入站文本、R3 文本
+    /// 发送与通讯录，2026-11-26 补齐朋友圈发布/评论/回复/同步（读写）验证；4.2.1.3 的
+    /// 入站/R3/朋友圈读写同样已真机验证。写链路的独立安全闸仍保留，见
+    /// `snsWriteSuppressedVersions`（当前为空）。
     static let unverifiedHookVersions: Set<String> = []
 
     /// 版本 JSON 的 `hookVerified` 与版本黑名单共同决定能否启动 bridge。
